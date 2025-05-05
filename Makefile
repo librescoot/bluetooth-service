@@ -1,6 +1,6 @@
 .PHONY: build clean build-arm build-amd64 lint test
 
-BINARY_NAME=mdb-bluetooth
+BINARY_NAME=bluetooth-service
 BUILD_DIR=bin
 LDFLAGS=-ldflags "-w -s -extldflags '-static'"
 
