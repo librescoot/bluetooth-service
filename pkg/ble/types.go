@@ -39,10 +39,10 @@ const (
 
 	// Battery sub-types (Slot 1)
 	TypeBatterySlot1Base           SubType = 0x00E0 // Base for slot 1
-	TypeBatterySlot1State          SubType = 0x00E2 // Relative subtype 2
-	TypeBatterySlot1Presence       SubType = 0x00E3 // Relative subtype 3
-	TypeBatterySlot1CycleCount     SubType = 0x00E6 // Relative subtype 6
-	TypeBatterySlot1Charge         SubType = 0x00E9 // Relative subtype 9
+	TypeBatterySlot1State          SubType = 2      // Relative subtype 2 from TypeBattery (0x00E0), absolute 0x00E2
+	TypeBatterySlot1Presence       SubType = 3      // Relative subtype 3 from TypeBattery (0x00E0), absolute 0x00E3
+	TypeBatterySlot1CycleCount     SubType = 6      // Relative subtype 6 from TypeBattery (0x00E0), absolute 0x00E6
+	TypeBatterySlot1Charge         SubType = 9      // Relative subtype 9 from TypeBattery (0x00E0), absolute 0x00E9
 	// Add other slot 1 metrics if needed
 	// TypeBatterySlot1Voltage       SubType = 7
 	// TypeBatterySlot1Current       SubType = 8
@@ -55,10 +55,10 @@ const (
 
 	// Battery sub-types (Slot 2)
 	TypeBatterySlot2Base           SubType = 0x00EC // Base for slot 2
-	TypeBatterySlot2State          SubType = 0x00EE // Relative subtype 14 (0xEC + 2)
-	TypeBatterySlot2Presence       SubType = 0x00EF // Relative subtype 15 (0xEC + 3)
-	TypeBatterySlot2CycleCount     SubType = 0x00F2 // Relative subtype 18 (0xEC + 6)
-	TypeBatterySlot2Charge         SubType = 0x00F5 // Relative subtype 21 (0xEC + 9)
+	TypeBatterySlot2State          SubType = 14     // Relative subtype 14 from TypeBattery (0x00E0), absolute 0x00EE
+	TypeBatterySlot2Presence       SubType = 15     // Relative subtype 15 from TypeBattery (0x00E0), absolute 0x00EF
+	TypeBatterySlot2CycleCount     SubType = 18     // Relative subtype 18 from TypeBattery (0x00E0), absolute 0x00F2
+	TypeBatterySlot2Charge         SubType = 21     // Relative subtype 21 from TypeBattery (0x00E0), absolute 0x00F5
 	// Add other slot 2 metrics if needed
 	// TypeBatterySlot2Voltage       SubType = 19
 	// TypeBatterySlot2Current       SubType = 20
