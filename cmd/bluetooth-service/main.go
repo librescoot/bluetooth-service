@@ -75,6 +75,9 @@ func main() {
 	// Start the command watcher goroutine
 	go svc.WatchRedisCommands()
 
+	// Subscribe to Redis Pub/Sub channels for state updates
+	svc.SubscribeToRedisChannels()
+
 	log.Printf("Subscribed to Redis channels")
 
 	log.Printf("Initializing communication with nRF52...")
