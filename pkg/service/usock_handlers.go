@@ -5,9 +5,9 @@ import (
 	"log"
 
 	"github.com/fxamacker/cbor/v2"
-	"github.com/redis/go-redis/v9"
 	"github.com/librescoot/bluetooth-service/pkg/ble"
 	"github.com/librescoot/bluetooth-service/pkg/usock"
+	"github.com/redis/go-redis/v9"
 )
 
 // HandleUSockMessage handles incoming USOCK messages
@@ -99,17 +99,16 @@ func (s *Service) HandleUSockMessage(frameID byte, payload *usock.Payload) {
 				log.Printf("Warning: Absolute subtype key 0x%04x is less than message type 0x%04x", absSubTypeKey, msgType)
 			}
 
-
 			switch msgType { // Route based on outer message type
 			case ble.TypeBattery:
 				// Battery handler needs to determine slot from absolute subtype key
 				slot := 0
 				// Determine slot based on ABSOLUTE key range from ble/types.go definitions
-				if absSubTypeKey >= (uint16(ble.TypeBattery) + uint16(ble.TypeBatterySlot1State)) &&
-					absSubTypeKey <= (uint16(ble.TypeBattery) + uint16(ble.TypeBatterySlot1Charge)) { // Simplified range check
+				if absSubTypeKey >= (uint16(ble.TypeBattery)+uint16(ble.TypeBatterySlot1State)) &&
+					absSubTypeKey <= (uint16(ble.TypeBattery)+uint16(ble.TypeBatterySlot1Charge)) { // Simplified range check
 					slot = 1
-				} else if absSubTypeKey >= (uint16(ble.TypeBattery) + uint16(ble.TypeBatterySlot2State)) &&
-					absSubTypeKey <= (uint16(ble.TypeBattery) + uint16(ble.TypeBatterySlot2Charge)) { // Simplified range check
+				} else if absSubTypeKey >= (uint16(ble.TypeBattery)+uint16(ble.TypeBatterySlot2State)) &&
+					absSubTypeKey <= (uint16(ble.TypeBattery)+uint16(ble.TypeBatterySlot2Charge)) { // Simplified range check
 					slot = 2
 				}
 				if slot != 0 {
@@ -185,18 +184,18 @@ func (s *Service) handleBLECommandMessage(msgType ble.MessageType, absSubTypeKey
 // handleBatteryMessage handles battery-related messages
 func (s *Service) handleBatteryMessage(subType ble.SubType, value interface{}, slot int) {
 	log.Printf("Handling battery message with subtype: %v for slot: %d", subType, slot)
-	redisKey := KeyBatterySlot1
+	/*redisKey := KeyBatterySlot1
 	if slot == 2 {
 		redisKey = KeyBatterySlot2
-	}
+	}*/
 
 	switch subType {
 	case ble.TypeBatterySlot1State, ble.TypeBatterySlot2State:
 		if state, ok := convertToInt(value); ok {
 			log.Printf("Received battery state for slot %d: %d (%s)", slot, state, batteryStateToString(state))
-			if err := s.redis.WriteInt(redisKey, "state", state); err != nil {
+			/*if err := s.redis.WriteInt(redisKey, "state", state); err != nil {
 				log.Printf("Failed to update battery state in Redis: %v", err)
-			}
+			}*/
 		} else {
 			log.Printf("Could not decode battery state value: %v", value)
 		}
@@ -205,13 +204,13 @@ func (s *Service) handleBatteryMessage(subType ble.SubType, value interface{}, s
 		if present, ok := convertToInt(value); ok {
 			presentBool := present != 0
 			log.Printf("Received battery presence for slot %d: %t", slot, presentBool)
-			presentStr := "false"
+			/*presentStr := "false"
 			if presentBool {
 				presentStr = "true"
 			}
 			if err := s.redis.WriteString(redisKey, "present", presentStr); err != nil {
 				log.Printf("Failed to update battery presence in Redis: %v", err)
-			}
+			}*/
 		} else {
 			log.Printf("Could not decode battery presence value: %v", value)
 		}
@@ -219,9 +218,9 @@ func (s *Service) handleBatteryMessage(subType ble.SubType, value interface{}, s
 	case ble.TypeBatterySlot1CycleCount, ble.TypeBatterySlot2CycleCount:
 		if count, ok := convertToInt(value); ok {
 			log.Printf("Received battery cycle count for slot %d: %d", slot, count)
-			if err := s.redis.WriteInt(redisKey, "cycle-count", count); err != nil {
+			/*if err := s.redis.WriteInt(redisKey, "cycle-count", count); err != nil {
 				log.Printf("Failed to update battery cycle count in Redis: %v", err)
-			}
+			}*/
 		} else {
 			log.Printf("Could not decode battery cycle count value: %v", value)
 		}
@@ -229,9 +228,9 @@ func (s *Service) handleBatteryMessage(subType ble.SubType, value interface{}, s
 	case ble.TypeBatterySlot1Charge, ble.TypeBatterySlot2Charge:
 		if charge, ok := convertToInt(value); ok {
 			log.Printf("Received battery charge for slot %d: %d %%", slot, charge)
-			if err := s.redis.WriteInt(redisKey, "charge", charge); err != nil {
+			/*if err := s.redis.WriteInt(redisKey, "charge", charge); err != nil {
 				log.Printf("Failed to update battery charge in Redis: %v", err)
-			}
+			}*/
 		} else {
 			log.Printf("Could not decode battery charge value: %v", value)
 		}
@@ -328,7 +327,7 @@ func (s *Service) handleBLEDebugMessage(msgType ble.MessageType, absSubTypeKey u
 	log.Printf("Handling BLE debug message (Type 0x%04x) with absolute subtype key: 0x%04x, value: %v", msgType, absSubTypeKey, value)
 
 	expectedResetAckSubType := uint16(ble.TypeBLEDebug) + uint16(ble.TypeBLEDebugResetAck) // 0xA023
-	expectedResetInfoSubType := uint16(ble.TypeBLEReset) // 0xA021 - Assuming TypeBLEReset is the key for reset info
+	expectedResetInfoSubType := uint16(ble.TypeBLEReset)                                   // 0xA021 - Assuming TypeBLEReset is the key for reset info
 
 	switch absSubTypeKey {
 	case expectedResetAckSubType:
@@ -469,7 +468,7 @@ func (s *Service) handleBLEParamMessage(msgType ble.MessageType, absSubTypeKey u
 		if macAddrStr, ok := convertToString(value); ok {
 			log.Printf("Received BLE MAC address: %s", macAddrStr)
 			if err := s.redis.WriteString(KeyBLEStatus, "mac-address", macAddrStr); err != nil {
-					log.Printf("Failed to update BLE MAC address in Redis: %v", err)
+				log.Printf("Failed to update BLE MAC address in Redis: %v", err)
 			}
 		} else {
 			log.Printf("Received BLE MAC Address with unexpected value type: %T", value)
@@ -646,48 +645,100 @@ func (s *Service) handleBatteryInfoMessage(subType ble.SubType, value interface{
 	switch subType {
 	case ble.TypeBatteryInfoCharge: // 1
 		redisField = "charge"
-		if isInt { redisValue = valueInt } else { processedStandard = false }
+		if isInt {
+			redisValue = valueInt
+		} else {
+			processedStandard = false
+		}
 	case ble.TypeBatteryInfoCurrent: // 2
 		redisField = "current"
-		if isInt { redisValue = valueInt } else { processedStandard = false }
+		if isInt {
+			redisValue = valueInt
+		} else {
+			processedStandard = false
+		}
 	case ble.TypeBatteryInfoRemCapacity: // 3
 		redisField = "remaining-capacity"
-		if isInt { redisValue = valueInt } else { processedStandard = false }
+		if isInt {
+			redisValue = valueInt
+		} else {
+			processedStandard = false
+		}
 	case ble.TypeBatteryInfoFullCapacity: // 4
 		redisField = "full-capacity"
-		if isInt { redisValue = valueInt } else { processedStandard = false }
+		if isInt {
+			redisValue = valueInt
+		} else {
+			processedStandard = false
+		}
 	case ble.TypeBatteryInfoCellVoltage: // 5
 		redisField = "cell-voltage"
-		if isInt { redisValue = valueInt } else { processedStandard = false }
+		if isInt {
+			redisValue = valueInt
+		} else {
+			processedStandard = false
+		}
 	case ble.TypeBatteryInfoTemp: // 6
 		redisField = "temperature"
-		if isInt { redisValue = valueInt } else { processedStandard = false }
+		if isInt {
+			redisValue = valueInt
+		} else {
+			processedStandard = false
+		}
 	case ble.TypeBatteryInfoCycleCount: // 7
 		redisField = "cycle-count"
-		if isInt { redisValue = valueInt } else { processedStandard = false }
+		if isInt {
+			redisValue = valueInt
+		} else {
+			processedStandard = false
+		}
 	case ble.TypeBatteryInfoTTE: // 9
 		redisField = "time-to-empty"
-		if isInt { redisValue = valueInt } else { processedStandard = false }
+		if isInt {
+			redisValue = valueInt
+		} else {
+			processedStandard = false
+		}
 	case ble.TypeBatteryInfoTTF: // 10
 		redisField = "time-to-full"
-		if isInt { redisValue = valueInt } else { processedStandard = false }
+		if isInt {
+			redisValue = valueInt
+		} else {
+			processedStandard = false
+		}
 	case ble.TypeBatteryInfoSOH: // 12
 		redisField = "state-of-health"
-		if isInt { redisValue = valueInt } else { processedStandard = false }
+		if isInt {
+			redisValue = valueInt
+		} else {
+			processedStandard = false
+		}
 	case ble.TypeBatteryInfoUniqueID: // 13
 		redisField = "unique-id"
-		if isString { redisValue = valueStr } else { processedStandard = false }
+		if isString {
+			redisValue = valueStr
+		} else {
+			processedStandard = false
+		}
 	case ble.TypeBatteryInfoSerialNumber: // 14
 		redisField = "serial-number"
-		if isString { redisValue = valueStr } else { processedStandard = false }
+		if isString {
+			redisValue = valueStr
+		} else {
+			processedStandard = false
+		}
 	case ble.TypeBatteryInfoPartNo: // 16
 		redisField = "part-number"
 		if isInt {
 			switch valueInt {
-			case 5: valueStr = "MAX17301"
-			case 6: valueStr = "MAX17302"
-			case 7: valueStr = "MAX17303"
-			default: valueStr = fmt.Sprintf("MAX1730X (%d)", valueInt) // Include raw value if unknown
+			case 5:
+				valueStr = "MAX17301"
+			case 6:
+				valueStr = "MAX17302"
+			case 7:
+				valueStr = "MAX17303"
+			default:
+				valueStr = fmt.Sprintf("MAX1730X (%d)", valueInt) // Include raw value if unknown
 			}
 			redisValue = valueStr
 			isString = true // Mark as string for writing
@@ -702,22 +753,29 @@ func (s *Service) handleBatteryInfoMessage(subType ble.SubType, value interface{
 			presentBool := valueInt != 0
 			log.Printf("Received CB Battery Present: %t", presentBool)
 			redisValue = presentBool // Store bool type
-			isBool = true // Mark as bool for Redis write switch
-			isInt = false // Unmark as int
-		} else { processedStandard = false }
+			isBool = true            // Mark as bool for Redis write switch
+			isInt = false            // Unmark as int
+		} else {
+			processedStandard = false
+		}
 	case ble.TypeBatteryInfoChargeStatus: // 18
 		redisField = "charge-status"
 		if isInt {
 			switch valueInt {
-			case 0: valueStr = "not-charging"
-			case 1: valueStr = "charging"
-			default: valueStr = "unknown"
+			case 0:
+				valueStr = "not-charging"
+			case 1:
+				valueStr = "charging"
+			default:
+				valueStr = "unknown"
 			}
 			redisValue = valueStr
 			isString = true // Mark as string for writing
 			isInt = false
 			log.Printf("Received CB Battery Charge Status: %s (from int %d)", valueStr, valueInt)
-		} else { processedStandard = false }
+		} else {
+			processedStandard = false
+		}
 	default:
 		log.Printf("Unknown or already handled CB Battery Info relative subtype: %d", subType)
 		processedStandard = false
