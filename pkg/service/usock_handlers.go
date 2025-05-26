@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"strings"
 
 	"github.com/fxamacker/cbor/v2"
 	"github.com/librescoot/bluetooth-service/pkg/ble"
@@ -854,6 +855,19 @@ func (s *Service) handleEventMessage(msgType ble.MessageType, absSubTypeKey uint
 		listKey = "scooter:blinker"
 		listValue = "off"
 	default:
+		// Check if it's a navigation start event
+		if strings.HasPrefix(eventStr, "navi:start ") {
+			coords := strings.TrimPrefix(eventStr, "navi:start ")
+			// Use WriteAndPublishString to atomically HSET and PUBLISH
+			err := s.redis.WriteAndPublishString("navigation", "destination", coords)
+			if err != nil {
+				log.Printf("Failed to set navigation destination: %v", err)
+			} else {
+				log.Printf("Set navigation destination: %s", coords)
+			}
+			return
+		}
+		
 		log.Printf("Warning: Received unknown event string: %s", eventStr)
 		return // Do not push unknown events
 	}
