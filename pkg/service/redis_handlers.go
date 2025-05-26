@@ -5,21 +5,21 @@ import (
 	"log"
 	"time"
 
-	"github.com/redis/go-redis/v9"
 	"github.com/librescoot/bluetooth-service/pkg/ble"
+	"github.com/redis/go-redis/v9"
 )
 
 // SubscribeToRedisChannels subscribes to Redis channels for characteristic writes
 func (s *Service) SubscribeToRedisChannels() {
 	// Define channels based on observed subscriptions
 	channels := []string{
-		KeyVehicle,           // "vehicle"
-		KeyBatterySlot1,      // "battery:0"
-		KeyBatterySlot2,      // "battery:1"
-			KeyPowerManager,      // "power-manager"
-		KeyMileage,           // "engine-ecu"
-		KeyFirmwareVersion,   // "system"
-			KeyBLEPairingPin,     // "ble" - Keep for pin removal notification
+		KeyVehicle,         // "vehicle"
+		KeyBatterySlot1,    // "battery:0"
+		KeyBatterySlot2,    // "battery:1"
+		KeyPowerManager,    // "power-manager"
+		KeyMileage,         // "engine-ecu"
+		KeyFirmwareVersion, // "system"
+		KeyBLEPairingPin,   // "ble" - Keep for pin removal notification
 	}
 
 	// Ensure only unique keys are subscribed
@@ -136,11 +136,11 @@ func (s *Service) SubscribeToRedisChannels() {
 					} else {
 						log.Printf("Unhandled field '%s' for channel '%s'", field, chName)
 					}
-				
+
 				case KeyBLEPairingPin:
 					if field == "pin-code" {
 						pin, err := s.redis.GetString(KeyBLEPairingPin, "pin-code")
-						if (err != nil && err != redis.Nil) || pin == "" { 
+						if (err != nil && err != redis.Nil) || pin == "" {
 							log.Printf("Pin code removed notification received for channel '%s'. Sending removal command.", chName)
 							if err := writeUARTMessage(s.usock, ble.TypeBLEPairingPinRemove, 0, 1); err != nil {
 								log.Printf("Error sending pairing pin removal command: %v", err)
@@ -214,9 +214,9 @@ func (s *Service) WatchRedisCommands() {
 			case "delete-all-bonds":
 				msgType = ble.TypeBLECommand
 				subType = ble.SubType(ble.BLECommandDeleteAllBonds)
-			case "remove": 
+			case "remove":
 				msgType = ble.TypeBLEPairingPinRemove
-				subType = 0 // No specific subtype needed
+				subType = 0  // No specific subtype needed
 				valueInt = 1 // Value doesn't matter, use 1
 				log.Printf("Mapping list command 'remove' to TypeBLEPairingPinRemove")
 			default:
@@ -268,7 +268,7 @@ func (s *Service) UpdateSeatboxLock() error {
 // UpdateHandlebarLock sends the current handlebar lock state from Redis to nRF52
 func (s *Service) UpdateHandlebarLock() error {
 	stateStr, err := s.redis.GetString(KeyVehicle, "handlebar:lock-sensor") // Read as string first
-	var stateInt uint16 = 0 // Default to 0 (locked?)
+	var stateInt uint16 = 0                                                 // Default to 0 (locked?)
 
 	if err != nil {
 		log.Printf("Warning: failed to get handlebar lock state from Redis: %v. Sending default (0).", err)
@@ -300,8 +300,8 @@ func (s *Service) UpdateMileage() error {
 		log.Printf("Warning: failed to get mileage from Redis: %v. Sending 0.", err)
 		mileage = 0 // Default if not found
 	}
-	// Pass the relative subtype
-	if err := writeUARTMessage(s.usock, ble.TypeScooterInfo, ble.TypeMileage, uint16(mileage)); err != nil {
+	// Pass the relative subtype using 32-bit integer message to match nRF's int32_t
+	if err := writeUARTMessage32(s.usock, ble.TypeScooterInfo, ble.TypeMileage, int32(mileage)); err != nil {
 		return fmt.Errorf("failed to send mileage: %v", err)
 	}
 	log.Printf("Sent mileage: %d", mileage)
@@ -365,8 +365,10 @@ func (s *Service) UpdateBatteryPresentStatus(slot int) error {
 			present = 0
 		} else {
 			switch presentStr {
-			case "true", "1": present = 1
-			default: present = 0
+			case "true", "1":
+				present = 1
+			default:
+				present = 0
 			}
 		}
 	}
@@ -432,14 +434,22 @@ func (s *Service) UpdatePowerManagementState() error {
 
 	var stateInt uint16
 	switch stateStr {
-	case "running": stateInt = 1
-	case "suspending": stateInt = 0
-	case "hibernating": stateInt = 2
-	case "hibernating-l2": stateInt = 2 // Send base state
-	case "suspending-imminent": stateInt = 3
-	case "hibernating-imminent": stateInt = 4
-	case "reboot": stateInt = 5
-	case "reboot-imminent": stateInt = 1
+	case "running":
+		stateInt = 1
+	case "suspending":
+		stateInt = 0
+	case "hibernating":
+		stateInt = 2
+	case "hibernating-l2":
+		stateInt = 2 // Send base state
+	case "suspending-imminent":
+		stateInt = 3
+	case "hibernating-imminent":
+		stateInt = 4
+	case "reboot":
+		stateInt = 5
+	case "reboot-imminent":
+		stateInt = 1
 		log.Printf("Info: Reboot-imminent state detected, sending 'running' state to nRF.")
 	default:
 		log.Printf("Unknown power management state string: %s. Sending default (running).", stateStr)
@@ -464,4 +474,4 @@ func (s *Service) UpdatePowerManagementState() error {
 	}
 
 	return nil
-} 
+}

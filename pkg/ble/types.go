@@ -5,22 +5,22 @@ type MessageType uint16
 
 const (
 	// Message types
-	TypeDataStream        MessageType = 0x00C0 // BLE_SCOOTER_SERVICE_DATA_STREAM
-	TypeBLEParam          MessageType = 0xA080 // BLE_SCOOTER_SERVICE_BLE_PARAM
-	TypeBattery           MessageType = 0x00E0 // BLE_SCOOTER_SERVICE_BATTERY
-	TypeVehicleState      MessageType = 0x0020 // BLE_SCOOTER_SERVICE_SCOOTER_STATE
-	TypeScooterInfo       MessageType = 0xA040 // BLE_SCOOTER_SERVICE_SCOOTER_INFO
-	TypePowerManagement   MessageType = 0x0800 // BLE_SCOOTER_SERVICE_POWER_MANAGEMENT
+	TypeDataStream           MessageType = 0x00C0     // BLE_SCOOTER_SERVICE_DATA_STREAM
+	TypeBLEParam             MessageType = 0xA080     // BLE_SCOOTER_SERVICE_BLE_PARAM
+	TypeBattery              MessageType = 0x00E0     // BLE_SCOOTER_SERVICE_BATTERY
+	TypeVehicleState         MessageType = 0x0020     // BLE_SCOOTER_SERVICE_SCOOTER_STATE
+	TypeScooterInfo          MessageType = 0xA040     // BLE_SCOOTER_SERVICE_SCOOTER_INFO
+	TypePowerManagement      MessageType = 0x0800     // BLE_SCOOTER_SERVICE_POWER_MANAGEMENT
 	TypeBLEPairingPinDisplay MessageType = 0xA080 + 2 // BLE_SCOOTER_SERVICE_BLE_PAIRING_PIN_DISPLAY
 	TypeBLEPairingPinRemove  MessageType = 0xA080 + 3 // BLE_SCOOTER_SERVICE_BLE_PAIRING_PIN_REMOVE
-	TypeBLEStatus         MessageType = 0xA080 + 4 // BLE_SCOOTER_SERVICE_BLE_STATUS
-	TypeBLECommand        MessageType = 0xAA00 // BLE_SCOOTER_SERVICE_BLE_COMMANDS
-	TypeBLEDebug          MessageType = 0xA020 // BLE_SCOOTER_SERVICE_DEBUG
-	TypeBLEReset          MessageType = 0xA020 + 1 // BLE_SCOOTER_SERVICE_DEBUG_RESET_INFO
-	TypeBLEVersion        MessageType = 0xA000 // BLE_SCOOTER_SERVICE_VERSION
-	TypeAuxBattery        MessageType = 0x0040 // BLE_SCOOTER_SERVICE_AUX_BATTERY
-	TypeBatteryInfo       MessageType = 0x0060 // BLE_SCOOTER_SERVICE_BATTERY_INFO (Assumed)
-	TypePowerMux          MessageType = 0x0100 // BLE_SCOOTER_SERVICE_POWER_MUX_STATE
+	TypeBLEStatus            MessageType = 0xA080 + 4 // BLE_SCOOTER_SERVICE_BLE_STATUS
+	TypeBLECommand           MessageType = 0xAA00     // BLE_SCOOTER_SERVICE_BLE_COMMANDS
+	TypeBLEDebug             MessageType = 0xA020     // BLE_SCOOTER_SERVICE_DEBUG
+	TypeBLEReset             MessageType = 0xA020 + 1 // BLE_SCOOTER_SERVICE_DEBUG_RESET_INFO
+	TypeBLEVersion           MessageType = 0xA000     // BLE_SCOOTER_SERVICE_VERSION
+	TypeAuxBattery           MessageType = 0x0040     // BLE_SCOOTER_SERVICE_AUX_BATTERY
+	TypeBatteryInfo          MessageType = 0x0060     // BLE_SCOOTER_SERVICE_BATTERY_INFO (Assumed)
+	TypePowerMux             MessageType = 0x0100     // BLE_SCOOTER_SERVICE_POWER_MUX_STATE
 )
 
 // SubType represents the sub-type of a message
@@ -32,17 +32,17 @@ const (
 	TypeDataStreamSync   SubType = 2 // BLE_SCOOTER_SERVICE_DATA_STREAM_SYNC
 
 	// BLE parameter sub-types
-	TypeBLEParamMACAddress SubType = 1 // BLE_SCOOTER_SERVICE_BLE_PARAM_MAC_ADDRESS
-	TypeBLEParamDeleteBonds SubType = 2 // BLE_SCOOTER_SERVICE_BLE_PARAM_DELETE_BONDS
-	TypeBLEParamAdvertising SubType = 3 // BLE_SCOOTER_SERVICE_BLE_PARAM_ADVERTISING
+	TypeBLEParamMACAddress  SubType = 1  // BLE_SCOOTER_SERVICE_BLE_PARAM_MAC_ADDRESS
+	TypeBLEParamDeleteBonds SubType = 2  // BLE_SCOOTER_SERVICE_BLE_PARAM_DELETE_BONDS
+	TypeBLEParamAdvertising SubType = 3  // BLE_SCOOTER_SERVICE_BLE_PARAM_ADVERTISING
 	TypeBLEParamData        SubType = 24 // 0x18 - Custom data parameter
 
 	// Battery sub-types (Slot 1)
-	TypeBatterySlot1Base           SubType = 0x00E0 // Base for slot 1
-	TypeBatterySlot1State          SubType = 2      // Relative subtype 2 from TypeBattery (0x00E0), absolute 0x00E2
-	TypeBatterySlot1Presence       SubType = 3      // Relative subtype 3 from TypeBattery (0x00E0), absolute 0x00E3
-	TypeBatterySlot1CycleCount     SubType = 6      // Relative subtype 6 from TypeBattery (0x00E0), absolute 0x00E6
-	TypeBatterySlot1Charge         SubType = 9      // Relative subtype 9 from TypeBattery (0x00E0), absolute 0x00E9
+	TypeBatterySlot1Base       SubType = 0x00E0 // Base for slot 1
+	TypeBatterySlot1State      SubType = 2      // Relative subtype 2 from TypeBattery (0x00E0), absolute 0x00E2
+	TypeBatterySlot1Presence   SubType = 3      // Relative subtype 3 from TypeBattery (0x00E0), absolute 0x00E3
+	TypeBatterySlot1CycleCount SubType = 6      // Relative subtype 6 from TypeBattery (0x00E0), absolute 0x00E6
+	TypeBatterySlot1Charge     SubType = 9      // Relative subtype 9 from TypeBattery (0x00E0), absolute 0x00E9
 	// Add other slot 1 metrics if needed
 	// TypeBatterySlot1Voltage       SubType = 7
 	// TypeBatterySlot1Current       SubType = 8
@@ -54,11 +54,11 @@ const (
 	// TypeBatterySlot1ManufacDate   SubType = 5
 
 	// Battery sub-types (Slot 2)
-	TypeBatterySlot2Base           SubType = 0x00EC // Base for slot 2
-	TypeBatterySlot2State          SubType = 14     // Relative subtype 14 from TypeBattery (0x00E0), absolute 0x00EE
-	TypeBatterySlot2Presence       SubType = 15     // Relative subtype 15 from TypeBattery (0x00E0), absolute 0x00EF
-	TypeBatterySlot2CycleCount     SubType = 18     // Relative subtype 18 from TypeBattery (0x00E0), absolute 0x00F2
-	TypeBatterySlot2Charge         SubType = 21     // Relative subtype 21 from TypeBattery (0x00E0), absolute 0x00F5
+	TypeBatterySlot2Base       SubType = 0x00EC // Base for slot 2
+	TypeBatterySlot2State      SubType = 14     // Relative subtype 14 from TypeBattery (0x00E0), absolute 0x00EE
+	TypeBatterySlot2Presence   SubType = 15     // Relative subtype 15 from TypeBattery (0x00E0), absolute 0x00EF
+	TypeBatterySlot2CycleCount SubType = 18     // Relative subtype 18 from TypeBattery (0x00E0), absolute 0x00F2
+	TypeBatterySlot2Charge     SubType = 21     // Relative subtype 21 from TypeBattery (0x00E0), absolute 0x00F5
 	// Add other slot 2 metrics if needed
 	// TypeBatterySlot2Voltage       SubType = 19
 	// TypeBatterySlot2Current       SubType = 20
@@ -81,38 +81,38 @@ const (
 	// Power management sub-types
 	TypePowerManagementState        SubType = 1 // BLE_SCOOTER_SERVICE_POWER_MANAGEMENT_STATE
 	TypePowerManagementPowerRequest SubType = 2 // BLE_SCOOTER_SERVICE_POWER_MANAGEMENT_POWER_REQUEST
-	
+
 	// BLE debug sub-types
 	TypeBLEDebugResetAck SubType = 3 // BLE_SCOOTER_SERVICE_DEBUG_RESET_ACK
-	
+
 	// BLE version sub-types
-	TypeBLEVersionString SubType = 1 // BLE_SCOOTER_SERVICE_VERSION_STRING
+	TypeBLEVersionString  SubType = 1 // BLE_SCOOTER_SERVICE_VERSION_STRING
 	TypeBLEVersionRequest SubType = 2 // BLE_SCOOTER_SERVICE_VERSION_REQUEST
-	
+
 	// Aux battery sub-types
 	TypeAuxBatteryVoltage       SubType = 1 // BLE_SCOOTER_SERVICE_AUX_BATTERY_VOLTAGE
 	TypeAuxBatteryCharge        SubType = 4 // BLE_SCOOTER_SERVICE_AUX_BATTERY_CHARGE
 	TypeAuxBatteryChargerStatus SubType = 3 // BLE_SCOOTER_SERVICE_AUX_BATTERY_CHARGER_STATUS
 
 	// Battery Info (CB Battery) sub-types based on ble_service_cb_battery_t
-	TypeBatteryInfoCharge            SubType = 1  // BLE_SCOOTER_SERVICE_CB_BATTERY_CHARGE
-	TypeBatteryInfoCurrent           SubType = 2  // BLE_SCOOTER_SERVICE_CB_BATTERY_CURRENT
-	TypeBatteryInfoRemCapacity       SubType = 3  // BLE_SCOOTER_SERVICE_CB_BATTERY_REMAINING_CAPACITY
-	TypeBatteryInfoFullCapacity      SubType = 4  // BLE_SCOOTER_SERVICE_CB_BATTERY_FULL_CAPACITY
-	TypeBatteryInfoCellVoltage       SubType = 5  // BLE_SCOOTER_SERVICE_CB_BATTERY_CELL_VOLTAGE
-	TypeBatteryInfoTemp              SubType = 6  // BLE_SCOOTER_SERVICE_CB_BATTERY_TEMPERATURE
-	TypeBatteryInfoCycleCount        SubType = 7  // BLE_SCOOTER_SERVICE_CB_BATTERY_CYCLE_COUNT
-	TypeBatteryInfoStatus            SubType = 8  // BLE_SCOOTER_SERVICE_CB_BATTERY_STATUS
-	TypeBatteryInfoTTE               SubType = 9  // BLE_SCOOTER_SERVICE_CB_BATTERY_TTE (Time-To-Empty)
-	TypeBatteryInfoTTF               SubType = 10 // BLE_SCOOTER_SERVICE_CB_BATTERY_TTF (Time-To-Full)
-	TypeBatteryInfoProtectionStatus  SubType = 11 // BLE_SCOOTER_SERVICE_CB_BATTERY_PROTECTION_STATUS
-	TypeBatteryInfoSOH               SubType = 12 // BLE_SCOOTER_SERVICE_CB_BATTERY_SOH (State Of Health)
-	TypeBatteryInfoUniqueID          SubType = 13 // BLE_SCOOTER_SERVICE_CB_BATTERY_UNIQUE_ID
-	TypeBatteryInfoSerialNumber      SubType = 14 // BLE_SCOOTER_SERVICE_CB_BATTERY_SERIAL_NO
-	TypeBatteryInfoBattStatus        SubType = 15 // BLE_SCOOTER_SERVICE_CB_BATTERY_BATT_STATUS
-	TypeBatteryInfoPartNo            SubType = 16 // BLE_SCOOTER_SERVICE_CB_BATTERY_PART_NO
-	TypeBatteryInfoPresent           SubType = 17 // BLE_SCOOTER_SERVICE_CB_BATTERY_PRESENT
-	TypeBatteryInfoChargeStatus      SubType = 18 // BLE_SCOOTER_SERVICE_CB_BATTERY_CHARGE_STATUS
+	TypeBatteryInfoCharge           SubType = 1  // BLE_SCOOTER_SERVICE_CB_BATTERY_CHARGE
+	TypeBatteryInfoCurrent          SubType = 2  // BLE_SCOOTER_SERVICE_CB_BATTERY_CURRENT
+	TypeBatteryInfoRemCapacity      SubType = 3  // BLE_SCOOTER_SERVICE_CB_BATTERY_REMAINING_CAPACITY
+	TypeBatteryInfoFullCapacity     SubType = 4  // BLE_SCOOTER_SERVICE_CB_BATTERY_FULL_CAPACITY
+	TypeBatteryInfoCellVoltage      SubType = 5  // BLE_SCOOTER_SERVICE_CB_BATTERY_CELL_VOLTAGE
+	TypeBatteryInfoTemp             SubType = 6  // BLE_SCOOTER_SERVICE_CB_BATTERY_TEMPERATURE
+	TypeBatteryInfoCycleCount       SubType = 7  // BLE_SCOOTER_SERVICE_CB_BATTERY_CYCLE_COUNT
+	TypeBatteryInfoStatus           SubType = 8  // BLE_SCOOTER_SERVICE_CB_BATTERY_STATUS
+	TypeBatteryInfoTTE              SubType = 9  // BLE_SCOOTER_SERVICE_CB_BATTERY_TTE (Time-To-Empty)
+	TypeBatteryInfoTTF              SubType = 10 // BLE_SCOOTER_SERVICE_CB_BATTERY_TTF (Time-To-Full)
+	TypeBatteryInfoProtectionStatus SubType = 11 // BLE_SCOOTER_SERVICE_CB_BATTERY_PROTECTION_STATUS
+	TypeBatteryInfoSOH              SubType = 12 // BLE_SCOOTER_SERVICE_CB_BATTERY_SOH (State Of Health)
+	TypeBatteryInfoUniqueID         SubType = 13 // BLE_SCOOTER_SERVICE_CB_BATTERY_UNIQUE_ID
+	TypeBatteryInfoSerialNumber     SubType = 14 // BLE_SCOOTER_SERVICE_CB_BATTERY_SERIAL_NO
+	TypeBatteryInfoBattStatus       SubType = 15 // BLE_SCOOTER_SERVICE_CB_BATTERY_BATT_STATUS
+	TypeBatteryInfoPartNo           SubType = 16 // BLE_SCOOTER_SERVICE_CB_BATTERY_PART_NO
+	TypeBatteryInfoPresent          SubType = 17 // BLE_SCOOTER_SERVICE_CB_BATTERY_PRESENT
+	TypeBatteryInfoChargeStatus     SubType = 18 // BLE_SCOOTER_SERVICE_CB_BATTERY_CHARGE_STATUS
 	// Note: Subtypes used here are relative to TypeBatteryInfo (0x0060)
 )
 
@@ -120,19 +120,19 @@ const (
 type BLECommand uint8
 
 const (
-	BLECommandAdvStartWithWhitelist BLECommand = 1  // BLE_SCOOTER_SERVICE_BLE_COMMANDS_ADV_START_WITH_WHITELISTING
-	BLECommandAdvRestartNoWhitelist BLECommand = 2  // BLE_SCOOTER_SERVICE_BLE_COMMANDS_ADV_RESTART_NO_WHITELISTING
-	BLECommandAdvStop               BLECommand = 3  // BLE_SCOOTER_SERVICE_BLE_COMMANDS_ADV_STOP
-	BLECommandDeleteBond            BLECommand = 4  // BLE_SCOOTER_SERVICE_BLE_COMMANDS_DELETE_BOND
-	BLECommandDeleteAllBonds        BLECommand = 5  // BLE_SCOOTER_SERVICE_BLE_COMMANDS_DELETE_ALL_BONDS
+	BLECommandAdvStartWithWhitelist BLECommand = 1 // BLE_SCOOTER_SERVICE_BLE_COMMANDS_ADV_START_WITH_WHITELISTING
+	BLECommandAdvRestartNoWhitelist BLECommand = 2 // BLE_SCOOTER_SERVICE_BLE_COMMANDS_ADV_RESTART_NO_WHITELISTING
+	BLECommandAdvStop               BLECommand = 3 // BLE_SCOOTER_SERVICE_BLE_COMMANDS_ADV_STOP
+	BLECommandDeleteBond            BLECommand = 4 // BLE_SCOOTER_SERVICE_BLE_COMMANDS_DELETE_BOND
+	BLECommandDeleteAllBonds        BLECommand = 5 // BLE_SCOOTER_SERVICE_BLE_COMMANDS_DELETE_ALL_BONDS
 )
 
 // BatterySlot represents a battery slot number
 type BatterySlot uint8
 
 const (
-	BatterySlot1 BatterySlot = 0  // First battery slot (index 0)
-	BatterySlot2 BatterySlot = 1  // Second battery slot (index 1)
+	BatterySlot1 BatterySlot = 0 // First battery slot (index 0)
+	BatterySlot2 BatterySlot = 1 // Second battery slot (index 1)
 )
 
 // Message represents a BLE message
@@ -225,4 +225,4 @@ var (
 		IsWritable:  true,
 		IsNotifying: false,
 	}
-) 
+)

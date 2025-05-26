@@ -3,6 +3,7 @@ package service
 import (
 	"fmt"
 	"log"
+	"strconv"
 
 	"github.com/fxamacker/cbor/v2"
 	"github.com/librescoot/bluetooth-service/pkg/ble"
@@ -280,9 +281,21 @@ func (s *Service) handleScooterInfoMessage(msgType ble.MessageType, absSubTypeKe
 
 	switch absSubTypeKey {
 	case expectedMileageSubType:
-		if mileage, ok := convertToInt(value); ok {
-			log.Printf("Received mileage: %d", mileage)
-			if err := s.redis.WriteInt(KeyMileage, "odometer", mileage); err != nil { // Corrected key/field
+		// Try string first, then fallback to int if needed
+		if mileageStr, ok := convertToString(value); ok {
+			// Convert string to int
+			if mileage, err := strconv.Atoi(mileageStr); err == nil {
+				log.Printf("Received mileage (string): %d", mileage)
+				if err := s.redis.WriteInt(KeyMileage, "odometer", mileage); err != nil {
+					log.Printf("Failed to update mileage in Redis: %v", err)
+				}
+			} else {
+				log.Printf("Could not convert mileage string to int: %v", err)
+			}
+		} else if mileage, ok := convertToInt(value); ok {
+			// Fallback to direct int handling
+			log.Printf("Received mileage (int): %d", mileage)
+			if err := s.redis.WriteInt(KeyMileage, "odometer", mileage); err != nil {
 				log.Printf("Failed to update mileage in Redis: %v", err)
 			}
 		} else {

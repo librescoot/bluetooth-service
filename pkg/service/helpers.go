@@ -70,6 +70,32 @@ func writeUARTMessage(sock *usock.USOCK, messageType ble.MessageType, subType bl
 	return sock.WriteWithFrameID(frameID, cborData)
 }
 
+// writeUARTMessage32 sends a message with a 32-bit integer value.
+// This is needed for values that don't fit in uint16, like mileage.
+func writeUARTMessage32(sock *usock.USOCK, messageType ble.MessageType, subType ble.SubType, value int32) error {
+	if sock == nil {
+		return fmt.Errorf("USOCK connection is not initialized")
+	}
+	absoluteKey := uint16(messageType) + uint16(subType)
+	message := map[uint16]map[uint16]int32{
+		uint16(messageType): {
+			absoluteKey: value,
+		},
+	}
+
+	cborData, err := cbor.Marshal(message)
+	if err != nil {
+		log.Printf("Failed to marshal CBOR message: %v", err)
+		return fmt.Errorf("failed to marshal CBOR: %w", err)
+	}
+
+	// Use the lower byte of the MessageType as the Frame ID, matching observed logs.
+	frameID := byte(messageType & 0xFF)
+
+	log.Printf("Sending message: Frame ID=0x%02x, CBOR Data=%s", frameID, hex.EncodeToString(cborData))
+	return sock.WriteWithFrameID(frameID, cborData)
+}
+
 // writeUARTMessageString sends a message with a string value.
 // It now calculates the absolute subtype key.
 func writeUARTMessageString(sock *usock.USOCK, messageType ble.MessageType, subType ble.SubType, value string) error {
