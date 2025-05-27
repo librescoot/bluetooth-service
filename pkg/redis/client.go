@@ -40,11 +40,11 @@ func (c *Client) WriteString(key, field, value string) error {
 	return c.client.HSet(c.ctx, key, field, value).Err()
 }
 
-// WriteAndPublishString writes a string value to Redis and publishes it
+// WriteAndPublishString writes a string value to Redis and publishes the field name
 func (c *Client) WriteAndPublishString(key, field, value string) error {
 	pipe := c.client.Pipeline()
 	pipe.HSet(c.ctx, key, field, value)
-	pipe.Publish(c.ctx, key, fmt.Sprintf("%s:%s", field, value))
+	pipe.Publish(c.ctx, key, field)
 	_, err := pipe.Exec(c.ctx)
 	return err
 }
@@ -54,11 +54,11 @@ func (c *Client) WriteInt(key, field string, value int) error {
 	return c.client.HSet(c.ctx, key, field, value).Err()
 }
 
-// WriteAndPublishInt writes an integer value to Redis and publishes it
+// WriteAndPublishInt writes an integer value to Redis and publishes the field name
 func (c *Client) WriteAndPublishInt(key, field string, value int) error {
 	pipe := c.client.Pipeline()
 	pipe.HSet(c.ctx, key, field, value)
-	pipe.Publish(c.ctx, key, fmt.Sprintf("%s:%d", field, value))
+	pipe.Publish(c.ctx, key, field)
 	_, err := pipe.Exec(c.ctx)
 	return err
 }
