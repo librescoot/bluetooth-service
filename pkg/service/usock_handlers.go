@@ -868,6 +868,29 @@ func (s *Service) handleEventMessage(msgType ble.MessageType, absSubTypeKey uint
 			return
 		}
 		
+		// Check if it's a USB mode event
+		if eventStr == "usb:ums" {
+			// Set USB mode to UMS and publish
+			err := s.redis.WriteAndPublishString("usb", "mode", "ums")
+			if err != nil {
+				log.Printf("Failed to set USB mode to UMS: %v", err)
+			} else {
+				log.Printf("Set USB mode: ums")
+			}
+			return
+		}
+		
+		if eventStr == "usb:normal" {
+			// Set USB mode to normal and publish
+			err := s.redis.WriteAndPublishString("usb", "mode", "normal")
+			if err != nil {
+				log.Printf("Failed to set USB mode to normal: %v", err)
+			} else {
+				log.Printf("Set USB mode: normal")
+			}
+			return
+		}
+		
 		log.Printf("Warning: Received unknown event string: %s", eventStr)
 		return // Do not push unknown events
 	}
