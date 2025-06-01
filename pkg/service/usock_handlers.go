@@ -868,6 +868,19 @@ func (s *Service) handleEventMessage(msgType ble.MessageType, absSubTypeKey uint
 			return
 		}
 		
+		// Check if it's an APN configuration event
+		if strings.HasPrefix(eventStr, "apn ") {
+			apnValue := strings.TrimPrefix(eventStr, "apn ")
+			// Use WriteAndPublishString to atomically HSET and PUBLISH
+			err := s.redis.WriteAndPublishString("settings", "cellular.apn", apnValue)
+			if err != nil {
+				log.Printf("Failed to set cellular APN: %v", err)
+			} else {
+				log.Printf("Set cellular APN: %s", apnValue)
+			}
+			return
+		}
+		
 		// Check if it's a USB mode event
 		if eventStr == "usb:ums" {
 			// Set USB mode to UMS and publish
