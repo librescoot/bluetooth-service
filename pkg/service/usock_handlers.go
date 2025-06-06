@@ -142,6 +142,8 @@ func (s *Service) HandleUSockMessage(frameID byte, payload *usock.Payload) {
 				s.handleBatteryInfoMessage(relativeSubType, value) // Call new handler
 			case ble.TypePowerMux: // Add case for Power Mux
 				s.handlePowerMuxMessage(relativeSubType, value)
+			case ble.TypePowerManagementHibernationReq: // Direct hibernation request (0x0803)
+				s.handlePowerManagementMessage(ble.TypePowerManagementHibernationRequest, value)
 			case 0x0000: // Handle generic event messages
 				s.handleEventMessage(msgType, absSubTypeKey, value)
 			default:

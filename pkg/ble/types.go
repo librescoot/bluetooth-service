@@ -5,22 +5,23 @@ type MessageType uint16
 
 const (
 	// Message types
-	TypeDataStream           MessageType = 0x00C0     // BLE_SCOOTER_SERVICE_DATA_STREAM
-	TypeBLEParam             MessageType = 0xA080     // BLE_SCOOTER_SERVICE_BLE_PARAM
-	TypeBattery              MessageType = 0x00E0     // BLE_SCOOTER_SERVICE_BATTERY
-	TypeVehicleState         MessageType = 0x0020     // BLE_SCOOTER_SERVICE_SCOOTER_STATE
-	TypeScooterInfo          MessageType = 0xA040     // BLE_SCOOTER_SERVICE_SCOOTER_INFO
-	TypePowerManagement      MessageType = 0x0800     // BLE_SCOOTER_SERVICE_POWER_MANAGEMENT
-	TypeBLEPairingPinDisplay MessageType = 0xA080 + 2 // BLE_SCOOTER_SERVICE_BLE_PAIRING_PIN_DISPLAY
-	TypeBLEPairingPinRemove  MessageType = 0xA080 + 3 // BLE_SCOOTER_SERVICE_BLE_PAIRING_PIN_REMOVE
-	TypeBLEStatus            MessageType = 0xA080 + 4 // BLE_SCOOTER_SERVICE_BLE_STATUS
-	TypeBLECommand           MessageType = 0xAA00     // BLE_SCOOTER_SERVICE_BLE_COMMANDS
-	TypeBLEDebug             MessageType = 0xA020     // BLE_SCOOTER_SERVICE_DEBUG
-	TypeBLEReset             MessageType = 0xA020 + 1 // BLE_SCOOTER_SERVICE_DEBUG_RESET_INFO
-	TypeBLEVersion           MessageType = 0xA000     // BLE_SCOOTER_SERVICE_VERSION
-	TypeAuxBattery           MessageType = 0x0040     // BLE_SCOOTER_SERVICE_AUX_BATTERY
-	TypeBatteryInfo          MessageType = 0x0060     // BLE_SCOOTER_SERVICE_BATTERY_INFO (Assumed)
-	TypePowerMux             MessageType = 0x0100     // BLE_SCOOTER_SERVICE_POWER_MUX_STATE
+	TypeDataStream                    MessageType = 0x00C0     // BLE_SCOOTER_SERVICE_DATA_STREAM
+	TypeBLEParam                      MessageType = 0xA080     // BLE_SCOOTER_SERVICE_BLE_PARAM
+	TypeBattery                       MessageType = 0x00E0     // BLE_SCOOTER_SERVICE_BATTERY
+	TypeVehicleState                  MessageType = 0x0020     // BLE_SCOOTER_SERVICE_SCOOTER_STATE
+	TypeScooterInfo                   MessageType = 0xA040     // BLE_SCOOTER_SERVICE_SCOOTER_INFO
+	TypePowerManagement               MessageType = 0x0800     // BLE_SCOOTER_SERVICE_POWER_MANAGEMENT
+	TypePowerManagementHibernationReq MessageType = 0x0800 + 3 // BLE_SCOOTER_SERVICE_POWER_MANAGEMENT_HIBERNATION_REQUEST
+	TypeBLEPairingPinDisplay          MessageType = 0xA080 + 2 // BLE_SCOOTER_SERVICE_BLE_PAIRING_PIN_DISPLAY
+	TypeBLEPairingPinRemove           MessageType = 0xA080 + 3 // BLE_SCOOTER_SERVICE_BLE_PAIRING_PIN_REMOVE
+	TypeBLEStatus                     MessageType = 0xA080 + 4 // BLE_SCOOTER_SERVICE_BLE_STATUS
+	TypeBLECommand                    MessageType = 0xAA00     // BLE_SCOOTER_SERVICE_BLE_COMMANDS
+	TypeBLEDebug                      MessageType = 0xA020     // BLE_SCOOTER_SERVICE_DEBUG
+	TypeBLEReset                      MessageType = 0xA020 + 1 // BLE_SCOOTER_SERVICE_DEBUG_RESET_INFO
+	TypeBLEVersion                    MessageType = 0xA000     // BLE_SCOOTER_SERVICE_VERSION
+	TypeAuxBattery                    MessageType = 0x0040     // BLE_SCOOTER_SERVICE_AUX_BATTERY
+	TypeBatteryInfo                   MessageType = 0x0060     // BLE_SCOOTER_SERVICE_CB_BATTERY
+	TypePowerMux                      MessageType = 0x0100     // BLE_SCOOTER_SERVICE_POWER_MUX_STATE
 )
 
 // SubType represents the sub-type of a message
