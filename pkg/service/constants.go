@@ -2,18 +2,18 @@ package service
 
 // Redis keys
 const (
-	KeyBatterySlot1      = "battery:0"
-	KeyBatterySlot2      = "battery:1"
-	KeyVehicle           = "vehicle"
-	KeyPowerManager      = "power-manager"
-	KeyMileage           = "engine-ecu"
-	KeyFirmwareVersion   = "system"
-	KeyBLEPairingPin     = "ble"
-	KeyBLEStatus         = "ble"
-	KeyBLECommand        = "ble"
-	KeyCBBattery         = "cb-battery" // Added for clarity
-	KeyCBBatteryAlert    = "cb-battery:alert" // For STATUS alerts
-	KeyCBBatteryFault    = "cb-battery:fault" // For PROTSTATUS and BATTSTATUS faults
+	KeyBatterySlot1    = "battery:0"
+	KeyBatterySlot2    = "battery:1"
+	KeyVehicle         = "vehicle"
+	KeyPowerManager    = "power-manager"
+	KeyMileage         = "engine-ecu"
+	KeyFirmwareVersion = "system"
+	KeyBLEPairingPin   = "ble"
+	KeyBLEStatus       = "ble"
+	KeyBLECommand      = "ble"
+	KeyCBBattery       = "cb-battery"       // Added for clarity
+	KeyCBBatteryAlert  = "cb-battery:alert" // For STATUS alerts
+	KeyCBBatteryFault  = "cb-battery:fault" // For PROTSTATUS and BATTSTATUS faults
 
 	KeyBLECommandList = "scooter:bluetooth"
 )
@@ -72,4 +72,4 @@ const (
 	CB_BATTERY_BATT_STATUS_FILTER = MAX1730X_BATTSTATUS_CHG_FET_FAIL |
 		MAX1730X_BATTSTATUS_DISCHG_FET_FAIL |
 		MAX1730X_BATTSTATUS_FET_FAIL_OPEN
-) 
+)

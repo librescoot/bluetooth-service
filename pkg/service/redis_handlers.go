@@ -464,12 +464,30 @@ func (s *Service) UpdatePowerManagementState() error {
 
 	// Handle hibernation level separately if needed
 	if stateStr == "hibernating-l2" {
-		level := uint16(1)
+		level := uint16(ble.HibernationLevelL2)
 		// Pass the relative subtype
 		if err := writeUARTMessage(s.usock, ble.TypePowerManagement, ble.TypePowerManagementPowerRequest, level); err != nil {
 			log.Printf("Warning: failed to send power management level L2 request: %v", err)
 		} else {
 			log.Printf("Sent power management hibernation level request: L2")
+		}
+	}
+
+	// Handle hibernation commands to nRF chip
+	if stateStr == "hibernating" || stateStr == "hibernating-manual" || stateStr == "hibernating-timer" {
+		// Disable data streaming before hibernation to prevent automatic wake-up
+		if err := writeUARTMessage(s.usock, ble.TypeDataStream, ble.TypeDataStreamEnable, 0); err != nil {
+			log.Printf("Warning: failed to disable data stream before hibernation: %v", err)
+		} else {
+			log.Printf("Disabled data stream before hibernation")
+		}
+
+		// Send hibernation level request (default to L1)
+		hibernationLevel := uint16(ble.HibernationLevelL1)
+		if err := writeUARTMessage(s.usock, ble.TypePowerManagement, ble.TypePowerManagementPowerRequest, hibernationLevel); err != nil {
+			log.Printf("Warning: failed to send hibernation level request to nRF: %v", err)
+		} else {
+			log.Printf("Sent hibernation level request to nRF: L%d", hibernationLevel+1)
 		}
 	}
 

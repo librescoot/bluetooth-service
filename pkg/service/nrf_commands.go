@@ -63,7 +63,6 @@ func (s *Service) InitializeNRF52() error {
 	return nil
 }
 
-
 // RestartAdvertisingWithoutWhitelist sends command to restart advertising without whitelist
 func (s *Service) RestartAdvertisingWithoutWhitelist() error {
 	if err := writeUARTMessage(s.usock, ble.TypeBLECommand, ble.SubType(ble.BLECommandAdvRestartNoWhitelist), 0); err != nil {
@@ -71,4 +70,4 @@ func (s *Service) RestartAdvertisingWithoutWhitelist() error {
 	}
 	log.Println("Sent command to restart advertising without whitelist")
 	return nil
-} 
+}

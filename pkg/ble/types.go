@@ -79,8 +79,9 @@ const (
 	TypeMileage         SubType = 2 // BLE_SCOOTER_SERVICE_MILEAGE
 
 	// Power management sub-types
-	TypePowerManagementState        SubType = 1 // BLE_SCOOTER_SERVICE_POWER_MANAGEMENT_STATE
-	TypePowerManagementPowerRequest SubType = 2 // BLE_SCOOTER_SERVICE_POWER_MANAGEMENT_POWER_REQUEST
+	TypePowerManagementState              SubType = 1 // BLE_SCOOTER_SERVICE_POWER_MANAGEMENT_STATE
+	TypePowerManagementPowerRequest       SubType = 2 // BLE_SCOOTER_SERVICE_POWER_MANAGEMENT_POWER_REQUEST
+	TypePowerManagementHibernationRequest SubType = 3 // BLE_SCOOTER_SERVICE_POWER_MANAGEMENT_HIBERNATION_REQUEST
 
 	// BLE debug sub-types
 	TypeBLEDebugResetAck SubType = 3 // BLE_SCOOTER_SERVICE_DEBUG_RESET_ACK
@@ -125,6 +126,22 @@ const (
 	BLECommandAdvStop               BLECommand = 3 // BLE_SCOOTER_SERVICE_BLE_COMMANDS_ADV_STOP
 	BLECommandDeleteBond            BLECommand = 4 // BLE_SCOOTER_SERVICE_BLE_COMMANDS_DELETE_BOND
 	BLECommandDeleteAllBonds        BLECommand = 5 // BLE_SCOOTER_SERVICE_BLE_COMMANDS_DELETE_ALL_BONDS
+)
+
+// HibernationLevel represents hibernation power levels
+type HibernationLevel uint16
+
+const (
+	HibernationLevelL1 HibernationLevel = 0 // L1 hibernation with CB battery power
+	HibernationLevelL2 HibernationLevel = 1 // L2 hibernation with AUX battery power
+)
+
+// HibernationRequest represents hibernation request types
+type HibernationRequest uint16
+
+const (
+	HibernationRequestAutomatic HibernationRequest = 0 // Automatic hibernation
+	HibernationRequestManual    HibernationRequest = 1 // Manual hibernation
 )
 
 // BatterySlot represents a battery slot number

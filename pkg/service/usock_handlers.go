@@ -465,6 +465,30 @@ func (s *Service) handlePowerManagementMessage(subType ble.SubType, value interf
 		} else {
 			log.Printf("Could not decode power management power request ACK value: %v", value)
 		}
+	case ble.TypePowerManagementHibernationRequest:
+		if hibernationType, ok := convertToInt(value); ok {
+			hibernationTypeStr := "automatic"
+			if hibernationType == int(ble.HibernationRequestManual) {
+				hibernationTypeStr = "manual"
+			}
+			log.Printf("Received hibernation request from nRF: type=%s (%d)", hibernationTypeStr, hibernationType)
+
+			// Forward hibernation request to power manager via Redis
+			var command string
+			if hibernationType == int(ble.HibernationRequestManual) {
+				command = "hibernate-manual"
+			} else {
+				command = "hibernate"
+			}
+
+			if err := s.redis.LPush("scooter:power", command); err != nil {
+				log.Printf("Failed to forward hibernation request to power manager: %v", err)
+			} else {
+				log.Printf("Forwarded hibernation request to power manager: %s", command)
+			}
+		} else {
+			log.Printf("Could not decode hibernation request value: %v", value)
+		}
 	default:
 		log.Printf("Unknown power management message relative subtype: %v", subType)
 	}
@@ -867,7 +891,7 @@ func (s *Service) handleEventMessage(msgType ble.MessageType, absSubTypeKey uint
 			}
 			return
 		}
-		
+
 		// Check if it's an APN configuration event
 		if strings.HasPrefix(eventStr, "apn ") {
 			apnValue := strings.TrimPrefix(eventStr, "apn ")
@@ -880,7 +904,7 @@ func (s *Service) handleEventMessage(msgType ble.MessageType, absSubTypeKey uint
 			}
 			return
 		}
-		
+
 		// Check if it's a USB mode event
 		if eventStr == "usb:ums" {
 			// Set USB mode to UMS and publish
@@ -892,7 +916,7 @@ func (s *Service) handleEventMessage(msgType ble.MessageType, absSubTypeKey uint
 			}
 			return
 		}
-		
+
 		if eventStr == "usb:normal" {
 			// Set USB mode to normal and publish
 			err := s.redis.WriteAndPublishString("usb", "mode", "normal")
@@ -903,7 +927,7 @@ func (s *Service) handleEventMessage(msgType ble.MessageType, absSubTypeKey uint
 			}
 			return
 		}
-		
+
 		log.Printf("Warning: Received unknown event string: %s", eventStr)
 		return // Do not push unknown events
 	}
