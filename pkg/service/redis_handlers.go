@@ -440,12 +440,24 @@ func (s *Service) UpdatePowerManagementState() error {
 		stateInt = 0
 	case "hibernating":
 		stateInt = 2
+	case "hibernating-manual":
+		stateInt = 2
+		log.Printf("Info: hibernating-manual state detected, sending as hibernating (2) to nRF.")
+	case "hibernating-timer":
+		stateInt = 2
+		log.Printf("Info: hibernating-timer state detected, sending as hibernating (2) to nRF.")
 	case "hibernating-l2":
 		stateInt = 2 // Send base state
 	case "suspending-imminent":
 		stateInt = 3
 	case "hibernating-imminent":
 		stateInt = 4
+	case "hibernating-manual-imminent":
+		stateInt = 4
+		log.Printf("Info: hibernating-manual-imminent state detected, sending as hibernating-imminent (4) to nRF.")
+	case "hibernating-timer-imminent":
+		stateInt = 4
+		log.Printf("Info: hibernating-timer-imminent state detected, sending as hibernating-imminent (4) to nRF.")
 	case "reboot":
 		stateInt = 5
 	case "reboot-imminent":
