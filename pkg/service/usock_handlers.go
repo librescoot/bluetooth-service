@@ -475,16 +475,30 @@ func (s *Service) handlePowerManagementMessage(subType ble.SubType, value interf
 
 			// Forward hibernation request to power manager via Redis
 			var command string
+			var listKey string
+
 			if hibernationType == int(ble.HibernationRequestManual) {
-				command = "hibernate-manual"
+				// Check vehicle state for manual hibernation
+				vehicleState, err := s.redis.GetString(KeyVehicle, "state")
+				if err == nil && vehicleState == "parked" {
+					// If parked, send lock-hibernate to vehicle state handler
+					listKey = "scooter:state"
+					command = "lock-hibernate"
+				} else {
+					// Otherwise send to power manager
+					listKey = "scooter:power"
+					command = "hibernate-manual"
+				}
 			} else {
+				// Automatic hibernation always goes to power manager
+				listKey = "scooter:power"
 				command = "hibernate"
 			}
 
-			if err := s.redis.LPush("scooter:power", command); err != nil {
-				log.Printf("Failed to forward hibernation request to power manager: %v", err)
+			if err := s.redis.LPush(listKey, command); err != nil {
+				log.Printf("Failed to forward hibernation request to %s: %v", listKey, err)
 			} else {
-				log.Printf("Forwarded hibernation request to power manager: %s", command)
+				log.Printf("Forwarded hibernation request to %s: %s", listKey, command)
 			}
 		} else {
 			log.Printf("Could not decode hibernation request value: %v", value)
@@ -878,6 +892,16 @@ func (s *Service) handleEventMessage(msgType ble.MessageType, absSubTypeKey uint
 	case "scooter:blinker off":
 		listKey = "scooter:blinker"
 		listValue = "off"
+	case "hibernate":
+		// Handle BLE string command "hibernate" (manual hibernation from mobile app)
+		log.Printf("Received BLE string command: hibernate")
+		s.handleBLEHibernationCommand(true) // true = manual
+		return
+	case "wakeup":
+		// Handle BLE string command "wakeup" 
+		log.Printf("Received BLE string command: wakeup")
+		s.handleBLEWakeupCommand()
+		return
 	default:
 		// Check if it's a navigation start event
 		if strings.HasPrefix(eventStr, "navi:start ") {
@@ -981,5 +1005,49 @@ func (s *Service) writeFaultToRedis(key, source string, code int, message, fault
 		if err != nil {
 			log.Printf("Error writing Redis field %s for key %s: %v", field, key, err)
 		}
+	}
+}
+
+// handleBLEHibernationCommand handles hibernation commands from BLE (mobile app)
+func (s *Service) handleBLEHibernationCommand(manual bool) {
+	log.Printf("Processing BLE hibernation command: manual=%t", manual)
+	
+	var command string
+	var listKey string
+
+	if manual {
+		// Check vehicle state for manual hibernation
+		vehicleState, err := s.redis.GetString(KeyVehicle, "state")
+		if err == nil && vehicleState == "parked" {
+			// If parked, send lock-hibernate to vehicle state handler
+			listKey = "scooter:state"
+			command = "lock-hibernate"
+		} else {
+			// Otherwise send to power manager
+			listKey = "scooter:power"
+			command = "hibernate-manual"
+		}
+	} else {
+		// Automatic hibernation always goes to power manager
+		listKey = "scooter:power"
+		command = "hibernate"
+	}
+
+	if err := s.redis.LPush(listKey, command); err != nil {
+		log.Printf("Failed to forward BLE hibernation command to %s: %v", listKey, err)
+	} else {
+		log.Printf("Forwarded BLE hibernation command to %s: %s", listKey, command)
+	}
+}
+
+// handleBLEWakeupCommand handles wakeup commands from BLE (mobile app)
+func (s *Service) handleBLEWakeupCommand() {
+	log.Printf("Processing BLE wakeup command")
+	
+	// Send run command to power manager
+	if err := s.redis.LPush("scooter:power", "run"); err != nil {
+		log.Printf("Failed to forward BLE wakeup command: %v", err)
+	} else {
+		log.Printf("Forwarded BLE wakeup command to scooter:power: run")
 	}
 }
