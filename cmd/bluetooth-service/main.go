@@ -46,7 +46,14 @@ const (
 func main() {
 	flag.Parse()
 
-	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
+	var stdLogger *log.Logger
+	if os.Getenv("INVOCATION_ID") != "" {
+		stdLogger = log.New(os.Stdout, "", 0)
+	} else {
+		stdLogger = log.New(os.Stdout, "", log.LstdFlags|log.Lmicroseconds|log.Lmsgprefix)
+	}
+	log.SetOutput(stdLogger.Writer())
+	log.SetFlags(stdLogger.Flags())
 	log.Printf("Starting MDB Bluetooth Service")
 	log.Printf("Serial device: %s", *serialDevice)
 	log.Printf("Baud rate: %d", *baudRate)
