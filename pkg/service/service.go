@@ -1,6 +1,7 @@
 package service
 
 import (
+	"github.com/librescoot/bluetooth-service/pkg/logger"
 	redisclient "github.com/librescoot/bluetooth-service/pkg/redis"
 	"github.com/librescoot/bluetooth-service/pkg/usock"
 )
@@ -9,13 +10,15 @@ import (
 type Service struct {
 	usock  *usock.USOCK
 	redis  *redisclient.Client
+	log    *logger.Logger
 	stopCh chan struct{}
 }
 
 // New creates a new Service instance
-func New(redisClient *redisclient.Client) *Service {
+func New(redisClient *redisclient.Client, log *logger.Logger) *Service {
 	return &Service{
 		redis:  redisClient,
+		log:    log,
 		stopCh: make(chan struct{}),
 	}
 }
