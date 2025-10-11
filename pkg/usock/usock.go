@@ -309,7 +309,7 @@ func (u *USOCK) processByte(b byte) {
 
 		// Validate payload length
 		if u.frame.PayloadLen > MaxPayloadLength {
-			u.log.Errorf("RX Error: Invalid payload length: %d (max: %d)",
+			u.log.Debugf("RX Error: Invalid payload length: %d (max: %d)",
 				u.frame.PayloadLen, MaxPayloadLength)
 			u.state = StateSync1
 		}
@@ -324,7 +324,7 @@ func (u *USOCK) processByte(b byte) {
 
 		// Validate header CRC
 		if calculatedCRC != u.frame.HeaderCRC {
-			u.log.Errorf("RX Error: Invalid header CRC: calculated=0x%04x, received=0x%04x",
+			u.log.Debugf("RX Error: Invalid header CRC: calculated=0x%04x, received=0x%04x",
 				calculatedCRC, u.frame.HeaderCRC)
 			u.state = StateSync1
 			return
@@ -355,7 +355,7 @@ func (u *USOCK) processByte(b byte) {
 
 		// Validate payload CRC
 		if calculatedCRC != u.frame.PayloadCRC {
-			u.log.Errorf("RX Error: Invalid payload CRC: calculated=0x%04x, received=0x%04x",
+			u.log.Debugf("RX Error: Invalid payload CRC: calculated=0x%04x, received=0x%04x",
 				calculatedCRC, u.frame.PayloadCRC)
 			u.state = StateSync1
 			return

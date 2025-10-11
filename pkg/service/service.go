@@ -1,6 +1,8 @@
 package service
 
 import (
+	"sync"
+
 	"github.com/librescoot/bluetooth-service/pkg/logger"
 	redisclient "github.com/librescoot/bluetooth-service/pkg/redis"
 	"github.com/librescoot/bluetooth-service/pkg/usock"
@@ -12,6 +14,7 @@ type Service struct {
 	redis  *redisclient.Client
 	log    *logger.Logger
 	stopCh chan struct{}
+	wg     sync.WaitGroup
 }
 
 // New creates a new Service instance
@@ -31,4 +34,9 @@ func (s *Service) SetUSock(sock *usock.USOCK) {
 // Stop stops the service
 func (s *Service) Stop() {
 	close(s.stopCh)
+}
+
+// Wait waits for all service goroutines to finish
+func (s *Service) Wait() {
+	s.wg.Wait()
 }

@@ -42,6 +42,26 @@ func batteryStateToString(state int) string {
 	}
 }
 
+// Convert string vehicle state to integer
+func vehicleStateToInt(state string) int {
+	switch state {
+	case "stand-by":
+		return 0 // STANDBY
+	case "parked", "waiting-handlebar", "waiting-seatbox", "waiting-hibernation",
+		"waiting-hibernation-advanced", "waiting-hibernation-seatbox", "waiting-hibernation-confirm":
+		return 1 // PARKED
+	case "ready-to-drive":
+		return 2 // READY_TO_DRIVE
+	case "shutting-down":
+		return 3 // SHUTTING_DOWN
+	case "updating":
+		return 4 // UPDATING
+	default:
+		// Unknown states (e.g. "init") map to STANDBY
+		return 0
+	}
+}
+
 // writeUARTMessage sends a message with an integer value.
 // It now calculates the absolute subtype key.
 func writeUARTMessage(sock *usock.USOCK, messageType ble.MessageType, subType ble.SubType, value uint16) error {

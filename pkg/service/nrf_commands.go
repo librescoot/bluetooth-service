@@ -15,7 +15,7 @@ func (s *Service) InitializeNRF52() error {
 	if err := writeUARTMessage(s.usock, ble.TypeDataStream, ble.TypeDataStreamEnable, 0); err != nil {
 		s.log.Warnf(" failed to disable data streaming: %v", err)
 	} else {
-		s.log.Infof("Sent Disable Data Streaming command")
+		s.log.Debugf("Sent Disable Data Streaming command")
 	}
 	time.Sleep(50 * time.Millisecond)
 
@@ -23,7 +23,7 @@ func (s *Service) InitializeNRF52() error {
 	if err := writeUARTMessage(s.usock, ble.TypeBLEVersion, ble.TypeBLEVersionString, 0); err != nil {
 		s.log.Warnf(" failed to request BLE firmware version: %v", err)
 	} else {
-		s.log.Infof("Sent Request BLE Firmware Version command")
+		s.log.Debugf("Sent Request BLE Firmware Version command")
 	}
 	time.Sleep(50 * time.Millisecond)
 
@@ -31,7 +31,7 @@ func (s *Service) InitializeNRF52() error {
 	if err := writeUARTMessage(s.usock, ble.TypeBLEParam, ble.TypeBLEParamMACAddress, 0); err != nil {
 		s.log.Warnf(" failed to request BLE MAC address: %v", err)
 	} else {
-		s.log.Infof("Sent Request BLE MAC Address command")
+		s.log.Debugf("Sent Request BLE MAC Address command")
 	}
 	time.Sleep(50 * time.Millisecond)
 
@@ -39,7 +39,7 @@ func (s *Service) InitializeNRF52() error {
 	if err := writeUARTMessage(s.usock, ble.TypeDataStream, ble.TypeDataStreamEnable, 1); err != nil {
 		s.log.Warnf(" failed to enable data streaming: %v", err)
 	} else {
-		s.log.Infof("Sent Enable Data Streaming command")
+		s.log.Debugf("Sent Enable Data Streaming command")
 	}
 	time.Sleep(50 * time.Millisecond)
 
@@ -47,7 +47,7 @@ func (s *Service) InitializeNRF52() error {
 	if err := writeUARTMessage(s.usock, ble.TypeDataStream, ble.TypeDataStreamSync, 1); err != nil {
 		s.log.Warnf(" Failed to sync data stream: %v", err)
 	} else {
-		s.log.Infof("Sent Data Stream Sync command")
+		s.log.Debugf("Sent Data Stream Sync command")
 	}
 	time.Sleep(50 * time.Millisecond)
 
@@ -55,10 +55,10 @@ func (s *Service) InitializeNRF52() error {
 	if err := writeUARTMessage(s.usock, ble.TypeBLECommand, ble.SubType(ble.BLECommandAdvRestartNoWhitelist), 0); err != nil {
 		s.log.Warnf(" failed to send command to restart advertising without whitelist: %v", err)
 	} else {
-		s.log.Infof("Sent command to restart advertising without whitelist")
+		s.log.Debugf("Sent command to restart advertising without whitelist")
 	}
 
-	s.log.Infof("nRF52 basic initialization sequence sent")
+	s.log.Infof("nRF52 initialization complete")
 	return nil
 }
 
@@ -67,6 +67,6 @@ func (s *Service) RestartAdvertisingWithoutWhitelist() error {
 	if err := writeUARTMessage(s.usock, ble.TypeBLECommand, ble.SubType(ble.BLECommandAdvRestartNoWhitelist), 0); err != nil {
 		return fmt.Errorf("failed to send advertising restart command: %v", err)
 	}
-	s.log.Infof("Sent command to restart advertising without whitelist")
+	s.log.Debugf("Sent command to restart advertising without whitelist")
 	return nil
 }

@@ -123,18 +123,18 @@ func main() {
 		log.Warnf("Warning during initial update: %v", err)
 	}
 	// Update battery states for both slots
-	for slot := 1; slot <= 2; slot++ {
+	for slot := 0; slot <= 1; slot++ {
 		if err := svc.UpdateBatteryPresentStatus(slot); err != nil {
-			log.Warnf("Warning during initial update (Slot %d): %v", slot, err)
+			log.Warnf("Warning during initial update (battery:%d): %v", slot, err)
 		}
 		if err := svc.UpdateBatteryActiveStatus(slot); err != nil {
-			log.Warnf("Warning during initial update (Slot %d): %v", slot, err)
+			log.Warnf("Warning during initial update (battery:%d): %v", slot, err)
 		}
 		if err := svc.UpdateBatteryCycleCount(slot); err != nil {
-			log.Warnf("Warning during initial update (Slot %d): %v", slot, err)
+			log.Warnf("Warning during initial update (battery:%d): %v", slot, err)
 		}
 		if err := svc.UpdateBatteryRemainingCharge(slot); err != nil {
-			log.Warnf("Warning during initial update (Slot %d): %v", slot, err)
+			log.Warnf("Warning during initial update (battery:%d): %v", slot, err)
 		}
 	}
 	// Update power management state
@@ -147,6 +147,7 @@ func main() {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	<-sigCh
-	svc.Stop()
 	log.Infof("Shutting down...")
+	svc.Stop()
+	svc.Wait()
 }

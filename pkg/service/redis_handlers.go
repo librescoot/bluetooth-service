@@ -13,8 +13,8 @@ func (s *Service) SubscribeToRedisChannels() {
 	// Define channels based on observed subscriptions
 	channels := []string{
 		KeyVehicle,         // "vehicle"
-		KeyBatterySlot1,    // "battery:0"
-		KeyBatterySlot2,    // "battery:1"
+		KeyBatterySlot0,    // "battery:0"
+		KeyBatterySlot1,    // "battery:1"
 		KeyPowerManager,    // "power-manager"
 		KeyMileage,         // "engine-ecu"
 		KeyFirmwareVersion, // "system"
@@ -32,127 +32,145 @@ func (s *Service) SubscribeToRedisChannels() {
 	}
 
 	for _, channel := range uniqueChannels {
+		s.wg.Add(1)
 		go func(chName string) {
+			defer s.wg.Done()
 			pubsub, closeFunc := s.redis.Subscribe(chName)
 			defer closeFunc()
 
-			for msg := range pubsub {
-				s.log.Infof("Received Redis message on channel %s: %s", chName, msg.Payload)
-				field := msg.Payload // Payload is the field name that changed
-
-				switch chName {
-				case KeyVehicle:
-					switch field {
-					case "state":
-						if err := s.UpdateVehicleState(); err != nil {
-							s.log.Errorf("Error sending vehicle state update triggered by Redis: %v", err)
-						}
-					case "seatbox:lock":
-						if err := s.UpdateSeatboxLock(); err != nil {
-							s.log.Errorf("Error sending seatbox lock update triggered by Redis: %v", err)
-						}
-					case "handlebar:lock-sensor":
-						if err := s.UpdateHandlebarLock(); err != nil {
-							s.log.Errorf("Error sending handlebar lock update triggered by Redis: %v", err)
-						}
-					default:
-						s.log.Warnf("Unhandled field '%s' for channel '%s'", field, chName)
+			for {
+				select {
+				case <-s.stopCh:
+					s.log.Debugf("Stopping subscription for channel %s", chName)
+					return
+				case msg, ok := <-pubsub:
+					if !ok {
+						s.log.Debugf("Subscription channel %s closed", chName)
+						return
 					}
+					s.log.Debugf("Received Redis message on channel %s: %s", chName, msg.Payload)
+					field := msg.Payload // Payload is the field name that changed
 
-				case KeyBatterySlot1:
-					switch field {
-					case "state":
-						if err := s.UpdateBatteryActiveStatus(1); err != nil {
-							s.log.Errorf("Error sending battery slot 1 state update triggered by Redis: %v", err)
+					switch chName {
+					case KeyVehicle:
+						switch field {
+						case "state":
+							if err := s.UpdateVehicleState(); err != nil {
+								s.log.Errorf("Error sending vehicle state update triggered by Redis: %v", err)
+							}
+						case "seatbox:lock":
+							if err := s.UpdateSeatboxLock(); err != nil {
+								s.log.Errorf("Error sending seatbox lock update triggered by Redis: %v", err)
+							}
+						case "handlebar:lock-sensor":
+							if err := s.UpdateHandlebarLock(); err != nil {
+								s.log.Errorf("Error sending handlebar lock update triggered by Redis: %v", err)
+							}
+						default:
+							s.log.Warnf("Unhandled field '%s' for channel '%s'", field, chName)
 						}
-					case "present":
-						if err := s.UpdateBatteryPresentStatus(1); err != nil {
-							s.log.Errorf("Error sending battery slot 1 presence update triggered by Redis: %v", err)
-						}
-						if err := s.UpdateBatteryCycleCount(1); err != nil {
-							s.log.Errorf("Error sending battery slot 1 cycle count update triggered by Redis: %v", err)
-						}
-					case "charge":
-						if err := s.UpdateBatteryRemainingCharge(1); err != nil {
-							s.log.Errorf("Error sending battery slot 1 charge update triggered by Redis: %v", err)
-						}
-					case "cycle-count":
-						if err := s.UpdateBatteryCycleCount(1); err != nil {
-							s.log.Errorf("Error sending battery slot 1 cycle count update triggered by Redis: %v", err)
-						}
-					default:
-						s.log.Warnf("Unhandled field '%s' for channel '%s'", field, chName)
-					}
 
-				case KeyBatterySlot2:
-					switch field {
-					case "state":
-						if err := s.UpdateBatteryActiveStatus(2); err != nil {
-							s.log.Errorf("Error sending battery slot 2 state update triggered by Redis: %v", err)
+					case KeyBatterySlot0:
+						switch field {
+						case "state":
+							if err := s.UpdateBatteryActiveStatus(0); err != nil {
+								s.log.Errorf("Error sending battery:0 state update triggered by Redis: %v", err)
+							}
+						case "present":
+							if err := s.UpdateBatteryPresentStatus(0); err != nil {
+								s.log.Errorf("Error sending battery:0 presence update triggered by Redis: %v", err)
+							}
+							if err := s.UpdateBatteryCycleCount(0); err != nil {
+								s.log.Errorf("Error sending battery:0 cycle count update triggered by Redis: %v", err)
+							}
+						case "charge":
+							if err := s.UpdateBatteryRemainingCharge(0); err != nil {
+								s.log.Errorf("Error sending battery:0 charge update triggered by Redis: %v", err)
+							}
+						case "cycle-count":
+							if err := s.UpdateBatteryCycleCount(0); err != nil {
+								s.log.Errorf("Error sending battery:0 cycle count update triggered by Redis: %v", err)
+							}
+						case "temperature-state":
+							// Silently ignore temperature-state updates
+							s.log.Debugf("Ignoring temperature-state update for battery:0")
+						default:
+							s.log.Warnf("Unhandled field '%s' for channel '%s'", field, chName)
 						}
-					case "present":
-						if err := s.UpdateBatteryPresentStatus(2); err != nil {
-							s.log.Errorf("Error sending battery slot 2 presence update triggered by Redis: %v", err)
-						}
-						if err := s.UpdateBatteryCycleCount(2); err != nil {
-							s.log.Errorf("Error sending battery slot 2 cycle count update triggered by Redis: %v", err)
-						}
-					case "charge":
-						if err := s.UpdateBatteryRemainingCharge(2); err != nil {
-							s.log.Errorf("Error sending battery slot 2 charge update triggered by Redis: %v", err)
-						}
-					case "cycle-count":
-						if err := s.UpdateBatteryCycleCount(2); err != nil {
-							s.log.Errorf("Error sending battery slot 2 cycle count update triggered by Redis: %v", err)
-						}
-					default:
-						s.log.Warnf("Unhandled field '%s' for channel '%s'", field, chName)
-					}
 
-				case KeyPowerManager:
-					if field == "state" {
-						if err := s.UpdatePowerManagementState(); err != nil {
-							s.log.Errorf("Error sending power management state update triggered by Redis: %v", err)
+					case KeyBatterySlot1:
+						switch field {
+						case "state":
+							if err := s.UpdateBatteryActiveStatus(1); err != nil {
+								s.log.Errorf("Error sending battery:1 state update triggered by Redis: %v", err)
+							}
+						case "present":
+							if err := s.UpdateBatteryPresentStatus(1); err != nil {
+								s.log.Errorf("Error sending battery:1 presence update triggered by Redis: %v", err)
+							}
+							if err := s.UpdateBatteryCycleCount(1); err != nil {
+								s.log.Errorf("Error sending battery:1 cycle count update triggered by Redis: %v", err)
+							}
+						case "charge":
+							if err := s.UpdateBatteryRemainingCharge(1); err != nil {
+								s.log.Errorf("Error sending battery:1 charge update triggered by Redis: %v", err)
+							}
+						case "cycle-count":
+							if err := s.UpdateBatteryCycleCount(1); err != nil {
+								s.log.Errorf("Error sending battery:1 cycle count update triggered by Redis: %v", err)
+							}
+						case "temperature-state":
+							// Silently ignore temperature-state updates
+							s.log.Debugf("Ignoring temperature-state update for battery:1")
+						default:
+							s.log.Warnf("Unhandled field '%s' for channel '%s'", field, chName)
 						}
-					} else {
-						s.log.Warnf("Unhandled field '%s' for channel '%s'", field, chName)
-					}
 
-				case KeyMileage:
-					if field == "odometer" {
-						if err := s.UpdateMileage(); err != nil {
-							s.log.Errorf("Error sending mileage update triggered by Redis: %v", err)
-						}
-					} else {
-						s.log.Warnf("Unhandled field '%s' for channel '%s'", field, chName)
-					}
-
-				case KeyFirmwareVersion:
-					if field == "mdb-version" {
-						if err := s.UpdateFirmwareVersion(); err != nil {
-							s.log.Errorf("Error sending firmware version update triggered by Redis: %v", err)
-						}
-					} else {
-						s.log.Warnf("Unhandled field '%s' for channel '%s'", field, chName)
-					}
-
-				case KeyBLEPairingPin:
-					if field == "pin-code" {
-						pin, err := s.redis.GetString(KeyBLEPairingPin, "pin-code")
-						if (err != nil && err != redis.Nil) || pin == "" {
-							s.log.Infof("Pin code removed notification received for channel '%s'. Sending removal command.", chName)
-							if err := writeUARTMessage(s.usock, ble.TypeBLEPairingPinRemove, 0, 1); err != nil {
-								s.log.Errorf("Error sending pairing pin removal command: %v", err)
+					case KeyPowerManager:
+						if field == "state" {
+							if err := s.UpdatePowerManagementState(); err != nil {
+								s.log.Errorf("Error sending power management state update triggered by Redis: %v", err)
 							}
 						} else {
-							s.log.Infof("Pin code set/updated notification received for channel '%s'. No action needed.", chName)
+							s.log.Warnf("Unhandled field '%s' for channel '%s'", field, chName)
 						}
-					} else {
-						s.log.Warnf("Unhandled field '%s' for channel '%s'", field, chName)
-					}
 
-				default:
-					s.log.Warnf("Unhandled Redis channel in subscription: %s", chName)
+					case KeyMileage:
+						if field == "odometer" {
+							if err := s.UpdateMileage(); err != nil {
+								s.log.Errorf("Error sending mileage update triggered by Redis: %v", err)
+							}
+						} else {
+							s.log.Warnf("Unhandled field '%s' for channel '%s'", field, chName)
+						}
+
+					case KeyFirmwareVersion:
+						if field == "mdb-version" {
+							if err := s.UpdateFirmwareVersion(); err != nil {
+								s.log.Errorf("Error sending firmware version update triggered by Redis: %v", err)
+							}
+						} else {
+							s.log.Warnf("Unhandled field '%s' for channel '%s'", field, chName)
+						}
+
+					case KeyBLEPairingPin:
+						if field == "pin-code" {
+							pin, err := s.redis.GetString(KeyBLEPairingPin, "pin-code")
+							if (err != nil && err != redis.Nil) || pin == "" {
+								s.log.Debugf("Pin code removed notification received for channel '%s'. Sending removal command.", chName)
+								if err := writeUARTMessage(s.usock, ble.TypeBLEPairingPinRemove, 0, 1); err != nil {
+									s.log.Errorf("Error sending pairing pin removal command: %v", err)
+								}
+							} else {
+								s.log.Debugf("Pin code set/updated notification received for channel '%s'. No action needed.", chName)
+							}
+						} else {
+							s.log.Warnf("Unhandled field '%s' for channel '%s'", field, chName)
+						}
+
+					default:
+						s.log.Warnf("Unhandled Redis channel in subscription: %s", chName)
+					}
 				}
 			}
 		}(channel) // Pass channel name to the goroutine
@@ -164,6 +182,8 @@ func (s *Service) SubscribeToRedisChannels() {
 // WatchRedisCommands listens for commands on a Redis list (using BRPOP)
 // and sends the corresponding command to the nRF52.
 func (s *Service) WatchRedisCommands() {
+	s.wg.Add(1)
+	defer s.wg.Done()
 	s.log.Infof("Starting Redis command watcher on list key: %s", KeyBLECommandList)
 	for {
 		select {
@@ -171,21 +191,25 @@ func (s *Service) WatchRedisCommands() {
 			s.log.Infof("Stopping Redis command watcher.")
 			return
 		default:
-			// Block indefinitely waiting for a command (timeout 0)
-			result, err := s.redis.BRPop(0*time.Second, KeyBLECommandList)
+			// Use 1 second timeout to allow periodic stopCh checks
+			result, err := s.redis.BRPop(1*time.Second, KeyBLECommandList)
 			if err != nil {
-				// Don't log Nil errors, they just mean timeout (which shouldn't happen with 0)
+				// Don't log Nil errors, they just mean timeout
 				if err != redis.Nil {
 					s.log.Errorf("Error receiving command from Redis list %s: %v", KeyBLECommandList, err)
-					// Optionally add a small delay before retrying after an error
 					time.Sleep(1 * time.Second)
 				}
 				continue // Continue loop to retry BRPOP
 			}
 
 			// result should be [listKey, commandString]
-			if result == nil || len(result) != 2 {
-				s.log.Warnf(" Received nil or unexpected result from BRPOP: %v", result)
+			// Empty result means timeout, just continue
+			if len(result) == 0 {
+				continue
+			}
+
+			if len(result) != 2 {
+				s.log.Warnf("Unexpected BRPOP result format: %v", result)
 				continue
 			}
 
@@ -236,16 +260,19 @@ func (s *Service) WatchRedisCommands() {
 
 // UpdateVehicleState sends the current vehicle state from Redis to nRF52
 func (s *Service) UpdateVehicleState() error {
-	state, err := s.redis.GetStateInt(KeyVehicle, "state")
+	stateStr, err := s.redis.GetString(KeyVehicle, "state")
 	if err != nil {
-		s.log.Warnf(" failed to get vehicle state from Redis: %v. Sending default (0).", err)
-		state = 0 // Default if not found
+		s.log.Warnf(" failed to get vehicle state from Redis: %v. Sending default (stand-by).", err)
+		stateStr = "stand-by" // Default if not found
 	}
+
+	state := vehicleStateToInt(stateStr)
+
 	// Pass the relative subtype
 	if err := writeUARTMessage(s.usock, ble.TypeVehicleState, ble.TypeVehicleStateState, uint16(state)); err != nil {
 		return fmt.Errorf("failed to send vehicle state: %v", err)
 	}
-	s.log.Infof("Sent vehicle state: %d", state)
+	s.log.Infof("Sent vehicle state: %d (from %s)", state, stateStr)
 	return nil
 }
 
@@ -256,11 +283,17 @@ func (s *Service) UpdateSeatboxLock() error {
 		s.log.Warnf(" failed to get seatbox lock state from Redis: %v. Sending default (0).", err)
 		state = 0 // Default if not found
 	}
+
+	stateStr := "locked"
+	if state != 0 {
+		stateStr = "open"
+	}
+
 	// Pass the relative subtype
 	if err := writeUARTMessage(s.usock, ble.TypeVehicleState, ble.TypeVehicleStateSeatbox, uint16(state)); err != nil {
 		return fmt.Errorf("failed to send seatbox lock state: %v", err)
 	}
-	s.log.Infof("Sent seatbox lock state: %d", state)
+	s.log.Infof("Sent seatbox lock state: %d (%s)", state, stateStr)
 	return nil
 }
 
@@ -270,7 +303,8 @@ func (s *Service) UpdateHandlebarLock() error {
 	var stateInt uint16 = 0                                                 // Default to 0 (locked?)
 
 	if err != nil {
-		s.log.Warnf(" failed to get handlebar lock state from Redis: %v. Sending default (0).", err)
+		s.log.Warnf(" failed to get handlebar lock state from Redis: %v. Sending default (locked).", err)
+		stateStr = "locked"
 		// stateInt remains 0
 	} else {
 		switch stateStr {
@@ -279,7 +313,8 @@ func (s *Service) UpdateHandlebarLock() error {
 		case "unlocked":
 			stateInt = 1
 		default:
-			s.log.Warnf(" unknown handlebar lock state string from Redis: '%s'. Sending default (0).", stateStr)
+			s.log.Warnf(" unknown handlebar lock state string from Redis: '%s'. Sending default (locked).", stateStr)
+			stateStr = "locked"
 			stateInt = 0
 		}
 	}
@@ -288,7 +323,7 @@ func (s *Service) UpdateHandlebarLock() error {
 	if err := writeUARTMessage(s.usock, ble.TypeVehicleState, ble.TypeVehicleStateHandlebar, stateInt); err != nil {
 		return fmt.Errorf("failed to send handlebar lock state: %v", err)
 	}
-	s.log.Infof("Sent handlebar lock state: %d", stateInt)
+	s.log.Infof("Sent handlebar lock state: %d (%s)", stateInt, stateStr)
 	return nil
 }
 
@@ -324,16 +359,16 @@ func (s *Service) UpdateFirmwareVersion() error {
 
 // UpdateBatteryActiveStatus sends the battery active status from Redis to nRF52
 func (s *Service) UpdateBatteryActiveStatus(slot int) error {
-	key := KeyBatterySlot1
-	var baseSubType ble.SubType = ble.TypeBatterySlot1State
-	if slot == 2 {
-		key = KeyBatterySlot2
-		baseSubType = ble.TypeBatterySlot2State
+	key := KeyBatterySlot0
+	var baseSubType ble.SubType = ble.TypeBatterySlot0State
+	if slot == 1 {
+		key = KeyBatterySlot1
+		baseSubType = ble.TypeBatterySlot1State
 	}
 
 	stateStr, err := s.redis.GetString(key, "state")
 	if err != nil {
-		s.log.Warnf(" failed to get battery status for slot %d from Redis: %v. Sending default.", slot, err)
+		s.log.Warnf(" failed to get battery:%d status from Redis: %v. Sending default.", slot, err)
 		stateStr = "unknown"
 	}
 
@@ -341,26 +376,26 @@ func (s *Service) UpdateBatteryActiveStatus(slot int) error {
 
 	// Pass the relative subtype
 	if err := writeUARTMessage(s.usock, ble.TypeBattery, baseSubType, uint16(status)); err != nil {
-		return fmt.Errorf("failed to send battery status for slot %d: %v", slot, err)
+		return fmt.Errorf("failed to send battery:%d status: %v", slot, err)
 	}
-	s.log.Infof("Sent battery status for slot %d: %d (from %s)", slot, status, stateStr)
+	s.log.Infof("Set battery:%d state to %s", slot, stateStr)
 	return nil
 }
 
 // UpdateBatteryPresentStatus sends the battery presence status from Redis to nRF52
 func (s *Service) UpdateBatteryPresentStatus(slot int) error {
-	key := KeyBatterySlot1
-	var baseSubType ble.SubType = ble.TypeBatterySlot1Presence
-	if slot == 2 {
-		key = KeyBatterySlot2
-		baseSubType = ble.TypeBatterySlot2Presence
+	key := KeyBatterySlot0
+	var baseSubType ble.SubType = ble.TypeBatterySlot0Presence
+	if slot == 1 {
+		key = KeyBatterySlot1
+		baseSubType = ble.TypeBatterySlot1Presence
 	}
 
 	present, err := s.redis.GetInt(key, "present")
 	if err != nil {
 		presentStr, strErr := s.redis.GetString(key, "present")
 		if strErr != nil {
-			s.log.Warnf(" Failed to get battery presence status for slot %d from Redis: %v. Sending default (0).", slot, strErr)
+			s.log.Warnf(" Failed to get battery:%d presence from Redis: %v. Sending default (not present).", slot, strErr)
 			present = 0
 		} else {
 			switch presentStr {
@@ -371,55 +406,61 @@ func (s *Service) UpdateBatteryPresentStatus(slot int) error {
 			}
 		}
 	}
+
+	presentStr := "not present"
+	if present != 0 {
+		presentStr = "present"
+	}
+
 	// Pass the relative subtype
 	if err := writeUARTMessage(s.usock, ble.TypeBattery, baseSubType, uint16(present)); err != nil {
-		return fmt.Errorf("failed to send battery presence status for slot %d: %v", slot, err)
+		return fmt.Errorf("failed to send battery:%d presence: %v", slot, err)
 	}
-	s.log.Infof("Sent battery presence status for slot %d: %d", slot, present)
+	s.log.Infof("Set battery:%d present to %s", slot, presentStr)
 	return nil
 }
 
 // UpdateBatteryCycleCount sends the battery cycle count from Redis to nRF52
 func (s *Service) UpdateBatteryCycleCount(slot int) error {
-	key := KeyBatterySlot1
-	var baseSubType ble.SubType = ble.TypeBatterySlot1CycleCount
-	if slot == 2 {
-		key = KeyBatterySlot2
-		baseSubType = ble.TypeBatterySlot2CycleCount
+	key := KeyBatterySlot0
+	var baseSubType ble.SubType = ble.TypeBatterySlot0CycleCount
+	if slot == 1 {
+		key = KeyBatterySlot1
+		baseSubType = ble.TypeBatterySlot1CycleCount
 	}
 
 	cycles, err := s.redis.GetInt(key, "cycle-count")
 	if err != nil {
-		s.log.Warnf(" failed to get battery cycle count for slot %d from Redis: %v. Sending 0.", slot, err)
+		s.log.Warnf(" failed to get battery:%d cycle-count from Redis: %v. Sending 0.", slot, err)
 		cycles = 0
 	}
 	// Pass the relative subtype
 	if err := writeUARTMessage(s.usock, ble.TypeBattery, baseSubType, uint16(cycles)); err != nil {
-		return fmt.Errorf("failed to send battery cycle count for slot %d: %v", slot, err)
+		return fmt.Errorf("failed to send battery:%d cycle-count: %v", slot, err)
 	}
-	s.log.Infof("Sent battery cycle count for slot %d: %d", slot, cycles)
+	s.log.Infof("Set battery:%d cycle-count to %d", slot, cycles)
 	return nil
 }
 
 // UpdateBatteryRemainingCharge sends the battery remaining charge from Redis to nRF52
 func (s *Service) UpdateBatteryRemainingCharge(slot int) error {
-	key := KeyBatterySlot1
-	var baseSubType ble.SubType = ble.TypeBatterySlot1Charge
-	if slot == 2 {
-		key = KeyBatterySlot2
-		baseSubType = ble.TypeBatterySlot2Charge
+	key := KeyBatterySlot0
+	var baseSubType ble.SubType = ble.TypeBatterySlot0Charge
+	if slot == 1 {
+		key = KeyBatterySlot1
+		baseSubType = ble.TypeBatterySlot1Charge
 	}
 
 	charge, err := s.redis.GetInt(key, "charge")
 	if err != nil {
-		s.log.Warnf(" failed to get battery charge for slot %d from Redis: %v. Sending 0.", slot, err)
+		s.log.Warnf(" failed to get battery:%d charge from Redis: %v. Sending 0.", slot, err)
 		charge = 0
 	}
 	// Pass the relative subtype
 	if err := writeUARTMessage(s.usock, ble.TypeBattery, baseSubType, uint16(charge)); err != nil {
-		return fmt.Errorf("failed to send battery charge for slot %d: %v", slot, err)
+		return fmt.Errorf("failed to send battery:%d charge: %v", slot, err)
 	}
-	s.log.Infof("Sent battery charge for slot %d: %d", slot, charge)
+	s.log.Infof("Set battery:%d charge to %d%%", slot, charge)
 	return nil
 }
 
@@ -441,10 +482,10 @@ func (s *Service) UpdatePowerManagementState() error {
 		stateInt = 2
 	case "hibernating-manual":
 		stateInt = 2
-		s.log.Infof(" hibernating-manual state detected, sending as hibernating (2) to nRF.")
+		s.log.Debugf(" hibernating-manual state detected, sending as hibernating (2) to nRF.")
 	case "hibernating-timer":
 		stateInt = 2
-		s.log.Infof(" hibernating-timer state detected, sending as hibernating (2) to nRF.")
+		s.log.Debugf(" hibernating-timer state detected, sending as hibernating (2) to nRF.")
 	case "hibernating-l2":
 		stateInt = 2 // Send base state
 	case "suspending-imminent":
@@ -453,15 +494,15 @@ func (s *Service) UpdatePowerManagementState() error {
 		stateInt = 4
 	case "hibernating-manual-imminent":
 		stateInt = 4
-		s.log.Infof(" hibernating-manual-imminent state detected, sending as hibernating-imminent (4) to nRF.")
+		s.log.Debugf(" hibernating-manual-imminent state detected, sending as hibernating-imminent (4) to nRF.")
 	case "hibernating-timer-imminent":
 		stateInt = 4
-		s.log.Infof(" hibernating-timer-imminent state detected, sending as hibernating-imminent (4) to nRF.")
+		s.log.Debugf(" hibernating-timer-imminent state detected, sending as hibernating-imminent (4) to nRF.")
 	case "reboot":
 		stateInt = 5
 	case "reboot-imminent":
 		stateInt = 1
-		s.log.Infof(" Reboot-imminent state detected, sending 'running' state to nRF.")
+		s.log.Debugf(" Reboot-imminent state detected, sending 'running' state to nRF.")
 	default:
 		s.log.Warnf("Unknown power management state string: %s. Sending default (running).", stateStr)
 		stateInt = 1

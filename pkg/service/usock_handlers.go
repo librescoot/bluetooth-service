@@ -21,31 +21,31 @@ func (s *Service) HandleUSockMessage(frameID byte, payload *usock.Payload) {
 		return
 	}
 
-	s.log.Infof("Received message: Frame ID=0x%02x, Data=%x", frameID, payload.Data)
+	s.log.Debugf("Received message: Frame ID=0x%02x, Data=%x", frameID, payload.Data)
 
 	var absoluteMsgType uint16
 	var params interface{}
 	// Find the single top-level key which represents the absolute message type (e.g., 0xA000 for version)
 	if len(msgData) != 1 {
 		if len(msgData) == 0 && len(payload.Data) == 4 && payload.Data[0] == 0xa1 && payload.Data[2] == frameID && payload.Data[3] == 0xa0 {
-			s.log.Infof("Received acknowledgment (empty map) for Frame ID: 0x%02x", frameID)
+			s.log.Debugf("Received acknowledgment (empty map) for Frame ID: 0x%02x", frameID)
 			switch frameID {
 			case byte(ble.TypeDataStream & 0xFF): // 0xC0
-				s.log.Infof("Received acknowledgment for Data Stream command")
+				s.log.Debugf("Received acknowledgment for Data Stream command")
 			case byte(ble.TypeBattery & 0xFF): // 0xE0
-				s.log.Infof("Received acknowledgment for Battery command")
+				s.log.Debugf("Received acknowledgment for Battery command")
 			case byte(ble.TypeBLECommand & 0xFF): // 0xAA
-				s.log.Infof("Received acknowledgment for BLE Command")
+				s.log.Debugf("Received acknowledgment for BLE Command")
 			case byte(ble.TypeVehicleState & 0xFF): // 0x20 - Also overlaps with TypeBLEDebug
-				s.log.Infof("Received acknowledgment for command with Frame ID 0x20 (Could be Vehicle State or BLE Debug)")
+				s.log.Debugf("Received acknowledgment for command with Frame ID 0x20 (Could be Vehicle State or BLE Debug)")
 			// Note: Frame ID 0x00 overlaps TypePowerManagement and TypeBLEVersion
 			case 0x40:
-				s.log.Infof("Received acknowledgment for command with Frame ID 0x40 (Could be Scooter Info or Aux Battery)")
+				s.log.Debugf("Received acknowledgment for command with Frame ID 0x40 (Could be Scooter Info or Aux Battery)")
 			case byte(ble.TypeBLEParam & 0xFF): // 0x80
-				s.log.Infof("Received acknowledgment for BLE Param command")
+				s.log.Debugf("Received acknowledgment for BLE Param command")
 			// Removed specific cases for overlapping Frame IDs (0x00, 0x20, 0x40) that evaluated to the same byte.
 			default:
-				s.log.Infof("Received unknown acknowledgment type via Frame ID 0x%02x", frameID)
+				s.log.Debugf("Received unknown acknowledgment type via Frame ID 0x%02x", frameID)
 			}
 			return // Processing finished for simple ACK
 		} else {
@@ -61,7 +61,6 @@ func (s *Service) HandleUSockMessage(frameID byte, payload *usock.Payload) {
 	}
 
 	msgType := ble.MessageType(absoluteMsgType)
-	s.log.Debugf("Decoded message type: 0x%04x", msgType)
 
 	// Decode the inner parameter map (key should be absolute subtype)
 	interMap, okInter := params.(map[interface{}]interface{})
@@ -85,6 +84,32 @@ func (s *Service) HandleUSockMessage(frameID byte, payload *usock.Payload) {
 		paramMap[uint16(keyInt)] = v // Key is the ABSOLUTE subtype (e.g., 0xA001)
 	}
 
+	// Log decoded CBOR structure with MessageType and SubTypes
+	if len(paramMap) > 0 {
+		subtypeStr := ""
+		for absSubType, value := range paramMap {
+			if subtypeStr != "" {
+				subtypeStr += ", "
+			}
+			// Format value based on type
+			switch v := value.(type) {
+			case int64:
+				subtypeStr += fmt.Sprintf("0x%04x=%d", absSubType, v)
+			case uint64:
+				subtypeStr += fmt.Sprintf("0x%04x=%d", absSubType, v)
+			case string:
+				subtypeStr += fmt.Sprintf("0x%04x=\"%s\"", absSubType, v)
+			case []interface{}:
+				subtypeStr += fmt.Sprintf("0x%04x=[%d items]", absSubType, len(v))
+			default:
+				subtypeStr += fmt.Sprintf("0x%04x=<%T>", absSubType, v)
+			}
+		}
+		s.log.Debugf("Received: Type=0x%04x %s", msgType, subtypeStr)
+	} else {
+		s.log.Debugf("Received: Type=0x%04x (empty params)", msgType)
+	}
+
 	// Handle messages based on the ABSOLUTE subtype key found in the inner map
 	if len(paramMap) > 0 {
 		for absSubTypeKey, value := range paramMap {
@@ -103,16 +128,16 @@ func (s *Service) HandleUSockMessage(frameID byte, payload *usock.Payload) {
 			switch msgType { // Route based on outer message type
 			case ble.TypeBattery:
 				// Battery handler needs to determine slot from absolute subtype key
-				slot := 0
+				slot := -1
 				// Determine slot based on ABSOLUTE key range from ble/types.go definitions
-				if absSubTypeKey >= (uint16(ble.TypeBattery)+uint16(ble.TypeBatterySlot1State)) &&
+				if absSubTypeKey >= (uint16(ble.TypeBattery)+uint16(ble.TypeBatterySlot0State)) &&
+					absSubTypeKey <= (uint16(ble.TypeBattery)+uint16(ble.TypeBatterySlot0Charge)) { // Simplified range check
+					slot = 0
+				} else if absSubTypeKey >= (uint16(ble.TypeBattery)+uint16(ble.TypeBatterySlot1State)) &&
 					absSubTypeKey <= (uint16(ble.TypeBattery)+uint16(ble.TypeBatterySlot1Charge)) { // Simplified range check
 					slot = 1
-				} else if absSubTypeKey >= (uint16(ble.TypeBattery)+uint16(ble.TypeBatterySlot2State)) &&
-					absSubTypeKey <= (uint16(ble.TypeBattery)+uint16(ble.TypeBatterySlot2Charge)) { // Simplified range check
-					slot = 2
 				}
-				if slot != 0 {
+				if slot >= 0 {
 					// Pass the RELATIVE subtype to the handler for case matching
 					s.handleBatteryMessage(relativeSubType, value, slot)
 				} else {
@@ -143,6 +168,8 @@ func (s *Service) HandleUSockMessage(frameID byte, payload *usock.Payload) {
 				s.handlePowerMuxMessage(relativeSubType, value)
 			case ble.TypePowerManagementHibernationReq: // Direct hibernation request (0x0803)
 				s.handlePowerManagementMessage(ble.TypePowerManagementHibernationRequest, value)
+			case ble.TypeAccelerometer: // Add case for Accelerometer
+				s.handleAccelerometerMessage(relativeSubType, value)
 			case 0x0000: // Handle generic event messages
 				s.handleEventMessage(msgType, absSubTypeKey, value)
 			default:
@@ -170,15 +197,15 @@ func (s *Service) handleBLECommandMessage(msgType ble.MessageType, absSubTypeKey
 
 	switch relativeCmd {
 	case ble.BLECommandAdvStartWithWhitelist:
-		s.log.Infof("Received acknowledgment for Start Advertising (Whitelist) command.")
+		s.log.Debugf("Received acknowledgment for Start Advertising (Whitelist) command.")
 	case ble.BLECommandAdvRestartNoWhitelist:
-		s.log.Infof("Received acknowledgment for Restart Advertising (No Whitelist) command.")
+		s.log.Debugf("Received acknowledgment for Restart Advertising (No Whitelist) command.")
 	case ble.BLECommandAdvStop:
-		s.log.Infof("Received acknowledgment for Stop Advertising command.")
+		s.log.Debugf("Received acknowledgment for Stop Advertising command.")
 	case ble.BLECommandDeleteBond:
-		s.log.Infof("Received acknowledgment for Delete Bond command.")
+		s.log.Debugf("Received acknowledgment for Delete Bond command.")
 	case ble.BLECommandDeleteAllBonds:
-		s.log.Infof("Received acknowledgment for Delete All Bonds command.")
+		s.log.Debugf("Received acknowledgment for Delete All Bonds command.")
 	default:
 		s.log.Warnf("Unknown relative BLE command subtype: %d (Absolute Key: 0x%04x)", relativeCmd, absSubTypeKey)
 	}
@@ -193,9 +220,9 @@ func (s *Service) handleBatteryMessage(subType ble.SubType, value interface{}, s
 	}*/
 
 	switch subType {
-	case ble.TypeBatterySlot1State, ble.TypeBatterySlot2State:
+	case ble.TypeBatterySlot0State, ble.TypeBatterySlot1State:
 		if state, ok := convertToInt(value); ok {
-			s.log.Infof("Received battery state for slot %d: %d (%s)", slot, state, batteryStateToString(state))
+			s.log.Debugf("Received battery state for slot %d: %d (%s)", slot, state, batteryStateToString(state))
 			/*if err := s.redis.WriteInt(redisKey, "state", state); err != nil {
 				s.log.Errorf("Failed to update battery state in Redis: %v", err)
 			}*/
@@ -203,10 +230,10 @@ func (s *Service) handleBatteryMessage(subType ble.SubType, value interface{}, s
 			s.log.Warnf("Could not decode battery state value: %v", value)
 		}
 
-	case ble.TypeBatterySlot1Presence, ble.TypeBatterySlot2Presence:
+	case ble.TypeBatterySlot0Presence, ble.TypeBatterySlot1Presence:
 		if present, ok := convertToInt(value); ok {
 			presentBool := present != 0
-			s.log.Infof("Received battery presence for slot %d: %t", slot, presentBool)
+			s.log.Debugf("Received battery presence for slot %d: %t", slot, presentBool)
 			/*presentStr := "false"
 			if presentBool {
 				presentStr = "true"
@@ -218,9 +245,9 @@ func (s *Service) handleBatteryMessage(subType ble.SubType, value interface{}, s
 			s.log.Warnf("Could not decode battery presence value: %v", value)
 		}
 
-	case ble.TypeBatterySlot1CycleCount, ble.TypeBatterySlot2CycleCount:
+	case ble.TypeBatterySlot0CycleCount, ble.TypeBatterySlot1CycleCount:
 		if count, ok := convertToInt(value); ok {
-			s.log.Infof("Received battery cycle count for slot %d: %d", slot, count)
+			s.log.Debugf("Received battery cycle count for slot %d: %d", slot, count)
 			/*if err := s.redis.WriteInt(redisKey, "cycle-count", count); err != nil {
 				s.log.Errorf("Failed to update battery cycle count in Redis: %v", err)
 			}*/
@@ -228,9 +255,9 @@ func (s *Service) handleBatteryMessage(subType ble.SubType, value interface{}, s
 			s.log.Warnf("Could not decode battery cycle count value: %v", value)
 		}
 
-	case ble.TypeBatterySlot1Charge, ble.TypeBatterySlot2Charge:
+	case ble.TypeBatterySlot0Charge, ble.TypeBatterySlot1Charge:
 		if charge, ok := convertToInt(value); ok {
-			s.log.Infof("Received battery charge for slot %d: %d %%", slot, charge)
+			s.log.Debugf("Received battery charge for slot %d: %d %%", slot, charge)
 			/*if err := s.redis.WriteInt(redisKey, "charge", charge); err != nil {
 				s.log.Errorf("Failed to update battery charge in Redis: %v", err)
 			}*/
@@ -250,21 +277,21 @@ func (s *Service) handleVehicleStateMessage(subType ble.SubType, value interface
 	switch subType {
 	case ble.TypeVehicleStateState:
 		if state, ok := convertToInt(value); ok {
-			s.log.Infof("Received vehicle state: %d", state)
+			s.log.Debugf("Received vehicle state: %d", state)
 		} else {
 			s.log.Warnf("Could not decode vehicle state value: %v", value)
 		}
 
 	case ble.TypeVehicleStateSeatbox:
 		if state, ok := convertToInt(value); ok {
-			s.log.Infof("Received seatbox state: %d", state)
+			s.log.Debugf("Received seatbox state: %d", state)
 		} else {
 			s.log.Warnf("Could not decode seatbox state value: %v", value)
 		}
 
 	case ble.TypeVehicleStateHandlebar:
 		if state, ok := convertToInt(value); ok {
-			s.log.Infof("Received handlebar lock state: %d", state)
+			s.log.Debugf("Received handlebar lock state: %d", state)
 		} else {
 			s.log.Warnf("Could not decode handlebar lock state value: %v", value)
 		}
@@ -287,7 +314,7 @@ func (s *Service) handleScooterInfoMessage(msgType ble.MessageType, absSubTypeKe
 		if mileageStr, ok := convertToString(value); ok {
 			// Convert string to int
 			if mileage, err := strconv.Atoi(mileageStr); err == nil {
-				s.log.Infof("Received mileage (string): %d", mileage)
+				s.log.Debugf("Received mileage (string): %d", mileage)
 				if err := s.redis.WriteInt(KeyMileage, "odometer", mileage); err != nil {
 					s.log.Errorf("Failed to update mileage in Redis: %v", err)
 				}
@@ -296,7 +323,7 @@ func (s *Service) handleScooterInfoMessage(msgType ble.MessageType, absSubTypeKe
 			}
 		} else if mileage, ok := convertToInt(value); ok {
 			// Fallback to direct int handling
-			s.log.Infof("Received mileage (int): %d", mileage)
+			s.log.Debugf("Received mileage (int): %d", mileage)
 			if err := s.redis.WriteInt(KeyMileage, "odometer", mileage); err != nil {
 				s.log.Errorf("Failed to update mileage in Redis: %v", err)
 			}
@@ -305,7 +332,7 @@ func (s *Service) handleScooterInfoMessage(msgType ble.MessageType, absSubTypeKe
 		}
 	case expectedVersionSubType:
 		if versionStr, ok := convertToString(value); ok {
-			s.log.Infof("Received software version: %s", versionStr)
+			s.log.Debugf("Received software version: %s", versionStr)
 			if err := s.redis.WriteString(KeyFirmwareVersion, "mdb-version", versionStr); err != nil {
 				s.log.Errorf("Failed to update software version in Redis: %v", err)
 			}
@@ -325,7 +352,7 @@ func (s *Service) handleBLEVersionMessage(msgType ble.MessageType, absSubTypeKey
 
 	if absSubTypeKey == expectedAbsSubType {
 		if versionStr, ok := convertToString(value); ok {
-			s.log.Infof("Received BLE version: %s", versionStr)
+			s.log.Debugf("Received BLE version: %s", versionStr)
 			if err := s.redis.WriteString(KeyBLEStatus, "nrf-fw-version", versionStr); err != nil {
 				s.log.Errorf("Failed to update BLE version in Redis: %v", err)
 			}
@@ -346,14 +373,14 @@ func (s *Service) handleBLEDebugMessage(msgType ble.MessageType, absSubTypeKey u
 
 	switch absSubTypeKey {
 	case expectedResetAckSubType:
-		s.log.Infof("Received BLE Debug Reset Ack")
+		s.log.Debugf("Received BLE Debug Reset Ack")
 		// Handle ack if needed (e.g., stop a sync timer)
 	case expectedResetInfoSubType:
 		if resetInfoArr, ok := value.([]interface{}); ok && len(resetInfoArr) == 2 {
 			reason, reasonOk := convertToInt(resetInfoArr[0])
 			count, countOk := convertToInt(resetInfoArr[1])
 			if reasonOk && countOk {
-				s.log.Infof("Received nRF Reset Info: Reason=0x%X, Count=%d", reason, count)
+				s.log.Debugf("Received nRF Reset Info: Reason=0x%X, Count=%d", reason, count)
 				// Store reason and count in Redis
 				if err := s.redis.WriteInt(KeyPowerManager, "nrf-reset-count", count); err != nil {
 					s.log.Errorf("Failed to write nrf-reset-count to Redis: %v", err)
@@ -366,7 +393,7 @@ func (s *Service) handleBLEDebugMessage(msgType ble.MessageType, absSubTypeKey u
 				if err := writeUARTMessage(s.usock, ble.TypeBLEDebug, ble.TypeBLEDebugResetAck, 0); err != nil {
 					s.log.Errorf("Failed to send Reset ACK to nRF: %v", err)
 				} else {
-					s.log.Infof("Sent Reset ACK to nRF")
+					s.log.Debugf("Sent Reset ACK to nRF")
 				}
 			} else {
 				s.log.Warnf("Could not decode nRF Reset Info array values: %v", resetInfoArr)
@@ -388,7 +415,7 @@ func (s *Service) handleDataStreamMessage(subType ble.SubType, value interface{}
 	case ble.TypeDataStreamEnable:
 		if enabled, ok := convertToInt(value); ok {
 			enabledBool := enabled != 0
-			s.log.Infof("Received data stream enable status update: %t", enabledBool)
+			s.log.Debugf("Received data stream enable status update: %t", enabledBool)
 			if err := s.redis.WriteInt("aux-battery", "data-stream-enable", enabled); err != nil {
 				s.log.Errorf("Failed to write data-stream-enable to Redis: %v", err)
 			}
@@ -398,7 +425,7 @@ func (s *Service) handleDataStreamMessage(subType ble.SubType, value interface{}
 
 	case ble.TypeDataStreamSync:
 		if syncVal, ok := convertToInt(value); ok {
-			s.log.Infof("Received data stream sync confirmation/value: %d", syncVal)
+			s.log.Debugf("Received data stream sync confirmation/value: %d", syncVal)
 			// Handle sync confirmation if needed
 		} else {
 			s.log.Warnf("Could not decode data stream sync value: %v", value)
@@ -416,7 +443,7 @@ func (s *Service) handleAuxBatteryMessage(subType ble.SubType, value interface{}
 	switch subType {
 	case ble.TypeAuxBatteryVoltage:
 		if voltage, ok := convertToInt(value); ok {
-			s.log.Infof("Received aux battery voltage: %d", voltage)
+			s.log.Debugf("Received aux battery voltage: %d", voltage)
 			if err := s.redis.WriteInt("aux-battery", "voltage", voltage); err != nil { // Don't publish voltage often
 				s.log.Errorf("Failed to update aux battery voltage in Redis: %v", err)
 			}
@@ -426,7 +453,7 @@ func (s *Service) handleAuxBatteryMessage(subType ble.SubType, value interface{}
 
 	case ble.TypeAuxBatteryCharge:
 		if charge, ok := convertToInt(value); ok {
-			s.log.Infof("Received aux battery charge: %d %%", charge)
+			s.log.Debugf("Received aux battery charge: %d %%", charge)
 			if err := s.redis.WriteInt("aux-battery", "charge", charge); err != nil { // Don't publish charge often
 				s.log.Errorf("Failed to update aux battery charge in Redis: %v", err)
 			}
@@ -436,7 +463,7 @@ func (s *Service) handleAuxBatteryMessage(subType ble.SubType, value interface{}
 
 	case ble.TypeAuxBatteryChargerStatus:
 		if statusStr, ok := convertToString(value); ok {
-			s.log.Infof("Received aux battery charger status: %s", statusStr)
+			s.log.Debugf("Received aux battery charger status: %s", statusStr)
 			if err := s.redis.WriteString("aux-battery", "charge-status", statusStr); err != nil { // Don't publish status often
 				s.log.Errorf("Failed to update aux battery charger status in Redis: %v", err)
 			}
@@ -456,13 +483,13 @@ func (s *Service) handlePowerManagementMessage(subType ble.SubType, value interf
 	switch subType {
 	case ble.TypePowerManagementState:
 		if stateAck, ok := convertToInt(value); ok {
-			s.log.Infof("Received ACK for Power Management State update: %d", stateAck)
+			s.log.Debugf("Received ACK for Power Management State update: %d", stateAck)
 		} else {
 			s.log.Warnf("Could not decode power management state ACK value: %v", value)
 		}
 	case ble.TypePowerManagementPowerRequest:
 		if levelAck, ok := convertToInt(value); ok {
-			s.log.Infof("Received ACK for Power Management Power Request update: %d", levelAck)
+			s.log.Debugf("Received ACK for Power Management Power Request update: %d", levelAck)
 		} else {
 			s.log.Warnf("Could not decode power management power request ACK value: %v", value)
 		}
@@ -472,7 +499,7 @@ func (s *Service) handlePowerManagementMessage(subType ble.SubType, value interf
 			if hibernationType == int(ble.HibernationRequestManual) {
 				hibernationTypeStr = "manual"
 			}
-			s.log.Infof("Received hibernation request from nRF: type=%s (%d)", hibernationTypeStr, hibernationType)
+			s.log.Debugf("Received hibernation request from nRF: type=%s (%d)", hibernationTypeStr, hibernationType)
 
 			// Forward hibernation request to power manager via Redis
 			var command string
@@ -486,6 +513,7 @@ func (s *Service) handlePowerManagementMessage(subType ble.SubType, value interf
 					listKey = "scooter:state"
 					command = "lock-hibernate"
 				} else {
+
 					// Otherwise send to power manager
 					listKey = "scooter:power"
 					command = "hibernate-manual"
@@ -499,7 +527,7 @@ func (s *Service) handlePowerManagementMessage(subType ble.SubType, value interf
 			if err := s.redis.LPush(listKey, command); err != nil {
 				s.log.Errorf("Failed to forward hibernation request to %s: %v", listKey, err)
 			} else {
-				s.log.Infof("Forwarded hibernation request to %s: %s", listKey, command)
+				s.log.Debugf("Forwarded hibernation request to %s: %s", listKey, command)
 			}
 		} else {
 			s.log.Warnf("Could not decode hibernation request value: %v", value)
@@ -519,7 +547,7 @@ func (s *Service) handleBLEParamMessage(msgType ble.MessageType, absSubTypeKey u
 	switch absSubTypeKey {
 	case expectedMACSubType: // 0xA081
 		if macAddrStr, ok := convertToString(value); ok {
-			s.log.Infof("Received BLE MAC address: %s", macAddrStr)
+			s.log.Debugf("Received BLE MAC address: %s", macAddrStr)
 			if err := s.redis.WriteString(KeyBLEStatus, "mac-address", macAddrStr); err != nil {
 				s.log.Errorf("Failed to update BLE MAC address in Redis: %v", err)
 			}
@@ -530,7 +558,7 @@ func (s *Service) handleBLEParamMessage(msgType ble.MessageType, absSubTypeKey u
 	case uint16(ble.TypeBLEPairingPinDisplay): // 0xA082
 		// This subtype carries the PIN code as a string.
 		if strValue, ok := convertToString(value); ok {
-			s.log.Infof("Received BLE Pairing PIN for display: %s", strValue)
+			s.log.Debugf("Received BLE Pairing PIN for display: %s", strValue)
 			if err := s.redis.WriteAndPublishString(KeyBLEPairingPin, "pin-code", strValue); err != nil {
 				s.log.Errorf("Failed to update and publish BLE pairing PIN in Redis: %v", err)
 			}
@@ -540,7 +568,7 @@ func (s *Service) handleBLEParamMessage(msgType ble.MessageType, absSubTypeKey u
 
 	case uint16(ble.TypeBLEPairingPinRemove): // 0xA083
 		// This subtype is a command acknowledgement/signal, not necessarily tied to BLEParam message type.
-		s.log.Infof("Received request/ack to remove BLE Pairing PIN from display (Subtype 0x%04x)", absSubTypeKey)
+		s.log.Debugf("Received request/ack to remove BLE Pairing PIN from display (Subtype 0x%04x)", absSubTypeKey)
 		if _, err := s.redis.HDel(KeyBLEPairingPin, "pin-code"); err != nil {
 			s.log.Errorf("Failed to delete pairing pin from Redis: %v", err)
 		}
@@ -550,12 +578,12 @@ func (s *Service) handleBLEParamMessage(msgType ble.MessageType, absSubTypeKey u
 		}
 
 	case expectedParamDataSubType: // 0xA098
-		s.log.Infof("Received BLE Param Data (Absolute Subtype Key 0x%04x): %v", absSubTypeKey, value)
+		s.log.Debugf("Received BLE Param Data (Absolute Subtype Key 0x%04x): %v", absSubTypeKey, value)
 
 	case uint16(ble.TypeBLEStatus): // 0xA084 - Check outer type first
 		if msgType == ble.TypeBLEParam {
 			if statusStr, ok := convertToString(value); ok {
-				s.log.Infof("Received BLE Status update: %s", statusStr)
+				s.log.Debugf("Received BLE Status update: %s", statusStr)
 				if err := s.redis.WriteString(KeyBLEStatus, "connection-status", statusStr); err != nil {
 					s.log.Errorf("Failed to write BLE status to Redis: %v", err)
 				}
@@ -607,7 +635,7 @@ func (s *Service) handleBatteryInfoMessage(subType ble.SubType, value interface{
 	switch subType {
 	case ble.TypeBatteryInfoStatus: // 8
 		if isInt {
-			s.log.Infof("Received CB Battery Status alert = %d (0x%X)", valueInt, valueInt)
+			s.log.Debugf("Received CB Battery Status alert = %d (0x%X)", valueInt, valueInt)
 			// Check bits and write alert string or clear
 			if valueInt&MAX1730X_STATUS_CURR_MIN_ALERT != 0 {
 				s.writeFaultToRedis(KeyCBBatteryAlert, KeyCBBattery, 0, "Minimum Current Alert Threshold Exceeded", "alert")
@@ -631,13 +659,13 @@ func (s *Service) handleBatteryInfoMessage(subType ble.SubType, value interface{
 				s.log.Warnf("Unhandled BLE_SCOOTER_SERVICE_CB_BATTERY_STATUS alert bits: %d (0x%X)", valueInt, valueInt)
 			}
 		} else {
-			s.log.Infof("Received CB Battery Status with non-integer value: %v", value)
+			s.log.Debugf("Received CB Battery Status with non-integer value: %v", value)
 		}
 		return // Handled, exit switch
 
 	case ble.TypeBatteryInfoProtectionStatus: // 11
 		if isInt {
-			s.log.Infof("Received CB Battery Prot Status = %d (0x%X)", valueInt, valueInt)
+			s.log.Debugf("Received CB Battery Prot Status = %d (0x%X)", valueInt, valueInt)
 			// Check bits and write fault string or clear
 			dischargeFault := (valueInt&MAX1730X_PROTSTATUS_ODCP != 0) ||
 				(valueInt&MAX1730X_PROTSTATUS_UVP != 0) ||
@@ -662,13 +690,13 @@ func (s *Service) handleBatteryInfoMessage(subType ble.SubType, value interface{
 				s.log.Warnf("Unhandled BLE_SCOOTER_SERVICE_CB_BATTERY_PROT_STATUS bits: %d (0x%X)", valueInt, valueInt)
 			}
 		} else {
-			s.log.Infof("Received CB Battery Prot Status with non-integer value: %v", value)
+			s.log.Debugf("Received CB Battery Prot Status with non-integer value: %v", value)
 		}
 		return // Handled, exit switch
 
 	case ble.TypeBatteryInfoBattStatus: // 15
 		if isInt {
-			s.log.Infof("Received CB Battery Batt Status = %d (0x%X)", valueInt, valueInt)
+			s.log.Debugf("Received CB Battery Batt Status = %d (0x%X)", valueInt, valueInt)
 			// Check bits and write fault string or clear
 			if valueInt&MAX1730X_BATTSTATUS_CHG_FET_FAIL != 0 {
 				s.writeFaultToRedis(KeyCBBatteryFault, KeyCBBattery, 2, "ChargeFET Failure-Short Detected", "fault")
@@ -682,7 +710,7 @@ func (s *Service) handleBatteryInfoMessage(subType ble.SubType, value interface{
 				s.log.Warnf("Unhandled BLE_SCOOTER_SERVICE_CB_BATTERY_BATT_STATUS bits: %d (0x%X)", valueInt, valueInt)
 			}
 		} else {
-			s.log.Infof("Received CB Battery Batt Status with non-integer value: %v", value)
+			s.log.Debugf("Received CB Battery Batt Status with non-integer value: %v", value)
 		}
 		return // Handled, exit switch
 	}
@@ -699,6 +727,7 @@ func (s *Service) handleBatteryInfoMessage(subType ble.SubType, value interface{
 	case ble.TypeBatteryInfoCharge: // 1
 		redisField = "charge"
 		if isInt {
+			s.log.Debugf("Received CB Battery Charge: %d %%", valueInt)
 			redisValue = valueInt
 		} else {
 			processedStandard = false
@@ -706,6 +735,7 @@ func (s *Service) handleBatteryInfoMessage(subType ble.SubType, value interface{
 	case ble.TypeBatteryInfoCurrent: // 2
 		redisField = "current"
 		if isInt {
+			s.log.Debugf("Received CB Battery Current: %d", valueInt)
 			redisValue = valueInt
 		} else {
 			processedStandard = false
@@ -713,6 +743,7 @@ func (s *Service) handleBatteryInfoMessage(subType ble.SubType, value interface{
 	case ble.TypeBatteryInfoRemCapacity: // 3
 		redisField = "remaining-capacity"
 		if isInt {
+			s.log.Debugf("Received CB Battery Remaining Capacity: %d", valueInt)
 			redisValue = valueInt
 		} else {
 			processedStandard = false
@@ -720,6 +751,7 @@ func (s *Service) handleBatteryInfoMessage(subType ble.SubType, value interface{
 	case ble.TypeBatteryInfoFullCapacity: // 4
 		redisField = "full-capacity"
 		if isInt {
+			s.log.Debugf("Received CB Battery Full Capacity: %d", valueInt)
 			redisValue = valueInt
 		} else {
 			processedStandard = false
@@ -727,6 +759,7 @@ func (s *Service) handleBatteryInfoMessage(subType ble.SubType, value interface{
 	case ble.TypeBatteryInfoCellVoltage: // 5
 		redisField = "cell-voltage"
 		if isInt {
+			s.log.Debugf("Received CB Battery Cell Voltage: %d", valueInt)
 			redisValue = valueInt
 		} else {
 			processedStandard = false
@@ -734,6 +767,7 @@ func (s *Service) handleBatteryInfoMessage(subType ble.SubType, value interface{
 	case ble.TypeBatteryInfoTemp: // 6
 		redisField = "temperature"
 		if isInt {
+			s.log.Debugf("Received CB Battery Temperature: %d", valueInt)
 			redisValue = valueInt
 		} else {
 			processedStandard = false
@@ -741,6 +775,7 @@ func (s *Service) handleBatteryInfoMessage(subType ble.SubType, value interface{
 	case ble.TypeBatteryInfoCycleCount: // 7
 		redisField = "cycle-count"
 		if isInt {
+			s.log.Debugf("Received CB Battery Cycle Count: %d", valueInt)
 			redisValue = valueInt
 		} else {
 			processedStandard = false
@@ -748,6 +783,7 @@ func (s *Service) handleBatteryInfoMessage(subType ble.SubType, value interface{
 	case ble.TypeBatteryInfoTTE: // 9
 		redisField = "time-to-empty"
 		if isInt {
+			s.log.Debugf("Received CB Battery Time-To-Empty: %d", valueInt)
 			redisValue = valueInt
 		} else {
 			processedStandard = false
@@ -755,6 +791,7 @@ func (s *Service) handleBatteryInfoMessage(subType ble.SubType, value interface{
 	case ble.TypeBatteryInfoTTF: // 10
 		redisField = "time-to-full"
 		if isInt {
+			s.log.Debugf("Received CB Battery Time-To-Full: %d", valueInt)
 			redisValue = valueInt
 		} else {
 			processedStandard = false
@@ -762,6 +799,7 @@ func (s *Service) handleBatteryInfoMessage(subType ble.SubType, value interface{
 	case ble.TypeBatteryInfoSOH: // 12
 		redisField = "state-of-health"
 		if isInt {
+			s.log.Debugf("Received CB Battery State-Of-Health: %d %%", valueInt)
 			redisValue = valueInt
 		} else {
 			processedStandard = false
@@ -769,6 +807,7 @@ func (s *Service) handleBatteryInfoMessage(subType ble.SubType, value interface{
 	case ble.TypeBatteryInfoUniqueID: // 13
 		redisField = "unique-id"
 		if isString {
+			s.log.Debugf("Received CB Battery Unique ID: %s", valueStr)
 			redisValue = valueStr
 		} else {
 			processedStandard = false
@@ -776,6 +815,7 @@ func (s *Service) handleBatteryInfoMessage(subType ble.SubType, value interface{
 	case ble.TypeBatteryInfoSerialNumber: // 14
 		redisField = "serial-number"
 		if isString {
+			s.log.Debugf("Received CB Battery Serial Number: %s", valueStr)
 			redisValue = valueStr
 		} else {
 			processedStandard = false
@@ -796,7 +836,11 @@ func (s *Service) handleBatteryInfoMessage(subType ble.SubType, value interface{
 			redisValue = valueStr
 			isString = true // Mark as string for writing
 			isInt = false
-			s.log.Infof("Received CB Battery Part Number: %s (from int %d)", valueStr, valueInt)
+			s.log.Debugf("Received CB Battery Part Number: %s (from int %d)", valueStr, valueInt)
+		} else if isString {
+			// Part number received as string, use directly
+			redisValue = valueStr
+			s.log.Debugf("Received CB Battery Part Number: %s", valueStr)
 		} else {
 			processedStandard = false
 		}
@@ -804,7 +848,7 @@ func (s *Service) handleBatteryInfoMessage(subType ble.SubType, value interface{
 		redisField = "present"
 		if isInt {
 			presentBool := valueInt != 0
-			s.log.Infof("Received CB Battery Present: %t", presentBool)
+			s.log.Debugf("Received CB Battery Present: %t", presentBool)
 			redisValue = presentBool // Store bool type
 			isBool = true            // Mark as bool for Redis write switch
 			isInt = false            // Unmark as int
@@ -825,7 +869,7 @@ func (s *Service) handleBatteryInfoMessage(subType ble.SubType, value interface{
 			redisValue = valueStr
 			isString = true // Mark as string for writing
 			isInt = false
-			s.log.Infof("Received CB Battery Charge Status: %s (from int %d)", valueStr, valueInt)
+			s.log.Debugf("Received CB Battery Charge Status: %s (from int %d)", valueStr, valueInt)
 		} else {
 			processedStandard = false
 		}
@@ -866,7 +910,7 @@ func (s *Service) handleEventMessage(msgType ble.MessageType, absSubTypeKey uint
 		s.log.Debugf("Handling Event message: value is not a string: %T", value)
 		return
 	}
-	s.log.Infof("Received event string: %s", eventStr)
+	s.log.Debugf("Received event string: %s", eventStr)
 
 	var listKey string
 	var listValue string
@@ -902,7 +946,7 @@ func (s *Service) handleEventMessage(msgType ble.MessageType, absSubTypeKey uint
 			if err != nil {
 				s.log.Errorf("Failed to set navigation destination: %v", err)
 			} else {
-				s.log.Infof("Set navigation destination: %s", coords)
+				s.log.Debugf("Set navigation destination: %s", coords)
 			}
 			return
 		}
@@ -915,7 +959,7 @@ func (s *Service) handleEventMessage(msgType ble.MessageType, absSubTypeKey uint
 			if err != nil {
 				s.log.Errorf("Failed to set cellular APN: %v", err)
 			} else {
-				s.log.Infof("Set cellular APN: %s", apnValue)
+				s.log.Debugf("Set cellular APN: %s", apnValue)
 			}
 			return
 		}
@@ -927,7 +971,7 @@ func (s *Service) handleEventMessage(msgType ble.MessageType, absSubTypeKey uint
 			if err != nil {
 				s.log.Errorf("Failed to set USB mode to UMS: %v", err)
 			} else {
-				s.log.Infof("Set USB mode: ums")
+				s.log.Debugf("Set USB mode: ums")
 			}
 			return
 		}
@@ -938,7 +982,7 @@ func (s *Service) handleEventMessage(msgType ble.MessageType, absSubTypeKey uint
 			if err != nil {
 				s.log.Errorf("Failed to set USB mode to normal: %v", err)
 			} else {
-				s.log.Infof("Set USB mode: normal")
+				s.log.Debugf("Set USB mode: normal")
 			}
 			return
 		}
@@ -952,7 +996,7 @@ func (s *Service) handleEventMessage(msgType ble.MessageType, absSubTypeKey uint
 	if err != nil {
 		s.log.Errorf("Failed to LPUSH event '%s' to Redis list '%s': %v", listValue, listKey, err)
 	} else {
-		s.log.Infof("LPUSHed event '%s' to Redis list '%s'", listValue, listKey)
+		s.log.Debugf("LPUSHed event '%s' to Redis list '%s'", listValue, listKey)
 	}
 }
 
@@ -972,7 +1016,7 @@ func (s *Service) handlePowerMuxMessage(subType ble.SubType, value interface{}) 
 	} else {
 		selectedInput = "cb"
 	}
-	s.log.Infof("Received PowerMux update: selected-input=%s (raw value: %d)", selectedInput, powerMuxState)
+	s.log.Debugf("Received PowerMux update: selected-input=%s (raw value: %d)", selectedInput, powerMuxState)
 
 	// Publish the string value to Redis
 	err := s.redis.WriteAndPublishString("power-mux", "selected-input", selectedInput)
@@ -996,5 +1040,29 @@ func (s *Service) writeFaultToRedis(key, source string, code int, message, fault
 		if err != nil {
 			s.log.Errorf("Error writing Redis field %s for key %s: %v", field, key, err)
 		}
+	}
+}
+
+// handleAccelerometerMessage handles accelerometer wake-up messages from nRF52
+func (s *Service) handleAccelerometerMessage(subType ble.SubType, value interface{}) {
+	s.log.Debugf("Handling accelerometer message with relative subtype: %v", subType)
+
+	switch subType {
+	case ble.TypeAccelerometerWakeUpSuspend:
+		s.log.Debugf("Received accelerometer wake-up from suspend mode")
+		// Publish to bmx:interrupt channel to wake up alarm-service
+		if err := s.redis.Publish("bmx:interrupt", "wake-suspend"); err != nil {
+			s.log.Errorf("Failed to publish accelerometer wake interrupt: %v", err)
+		}
+
+	case ble.TypeAccelerometerWakeUpHibernation:
+		s.log.Debugf("Received accelerometer wake-up from hibernation mode")
+		// Publish to bmx:interrupt channel to wake up alarm-service
+		if err := s.redis.Publish("bmx:interrupt", "wake-hibernation"); err != nil {
+			s.log.Errorf("Failed to publish accelerometer wake interrupt: %v", err)
+		}
+
+	default:
+		s.log.Warnf("Unknown accelerometer message relative subtype: %v", subType)
 	}
 }

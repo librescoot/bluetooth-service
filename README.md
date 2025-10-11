@@ -26,7 +26,7 @@ The service operates around a central `service` package that manages:
 
 ### Key Components
 
-- **Main Application (`cmd/mdb-bluetooth`)**: Initializes connections, sets up the service, and handles startup/shutdown.
+- **Main Application (`cmd/bluetooth-service`)**: Initializes connections, sets up the service, and handles startup/shutdown.
 - **Service (`pkg/service`)**: Core logic for message handling, Redis interaction, and state management.
 - **USOCK (`pkg/usock`)**: Handles the custom serial communication protocol with the microcontroller.
 - **Redis (`pkg/redis`)**: Manages the connection and interaction with the Redis instance.
@@ -41,12 +41,12 @@ To build the service (for ARMv6 Linux):
 make build
 ```
 
-Other build targets exist (e.g., `make build-amd64`). The output binary will be placed in the `bin/` directory (e.g., `bin/mdb-bluetooth`).
+Other build targets exist (e.g., `make build-amd64`). The output binary will be placed in the `bin/` directory (e.g., `bin/bluetooth-service`).
 
 To run the service (example):
 
 ```bash
-./bin/mdb-bluetooth --serial /dev/ttymxc1 --redis-addr localhost:6379
+./bin/bluetooth-service --serial /dev/ttymxc1 --redis-addr localhost:6379
 ```
 
 Refer to the command-line flags for configuration options.
@@ -60,6 +60,7 @@ The service can be configured via command-line flags:
 - `--redis-addr`: Address of the Redis server (default: `localhost:6379`)
 - `--redis-pass`: Password for the Redis server (default: `""`)
 - `--redis-db`: Redis database number (default: `0`)
+- `--log-level`: Log level (default: `3`, 0=none, 1=error, 2=warning, 3=info, 4=debug)
 
 Redis keys used for state and commands are defined as constants within the `main` package.
 

@@ -2,8 +2,8 @@ package service
 
 // Redis keys
 const (
-	KeyBatterySlot1    = "battery:0"
-	KeyBatterySlot2    = "battery:1"
+	KeyBatterySlot0    = "battery:0"
+	KeyBatterySlot1    = "battery:1"
 	KeyVehicle         = "vehicle"
 	KeyPowerManager    = "power-manager"
 	KeyMileage         = "engine-ecu"

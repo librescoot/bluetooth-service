@@ -22,6 +22,7 @@ const (
 	TypeAuxBattery                    MessageType = 0x0040     // BLE_SCOOTER_SERVICE_AUX_BATTERY
 	TypeBatteryInfo                   MessageType = 0x0060     // BLE_SCOOTER_SERVICE_CB_BATTERY
 	TypePowerMux                      MessageType = 0x0100     // BLE_SCOOTER_SERVICE_POWER_MUX_STATE
+	TypeAccelerometer                 MessageType = 0x0200     // BLE_SCOOTER_SERVICE_ACCELEROMETER
 )
 
 // SubType represents the sub-type of a message
@@ -38,37 +39,37 @@ const (
 	TypeBLEParamAdvertising SubType = 3  // BLE_SCOOTER_SERVICE_BLE_PARAM_ADVERTISING
 	TypeBLEParamData        SubType = 24 // 0x18 - Custom data parameter
 
-	// Battery sub-types (Slot 1)
-	TypeBatterySlot1Base       SubType = 0x00E0 // Base for slot 1
-	TypeBatterySlot1State      SubType = 2      // Relative subtype 2 from TypeBattery (0x00E0), absolute 0x00E2
-	TypeBatterySlot1Presence   SubType = 3      // Relative subtype 3 from TypeBattery (0x00E0), absolute 0x00E3
-	TypeBatterySlot1CycleCount SubType = 6      // Relative subtype 6 from TypeBattery (0x00E0), absolute 0x00E6
-	TypeBatterySlot1Charge     SubType = 9      // Relative subtype 9 from TypeBattery (0x00E0), absolute 0x00E9
-	// Add other slot 1 metrics if needed
-	// TypeBatterySlot1Voltage       SubType = 7
-	// TypeBatterySlot1Current       SubType = 8
-	// TypeBatterySlot1FullCharge    SubType = 10
-	// TypeBatterySlot1Temperature   SubType = 11
-	// TypeBatterySlot1Health        SubType = 12
-	// TypeBatterySlot1FaultCode     SubType = 13
-	// TypeBatterySlot1SerialNumber  SubType = 4
-	// TypeBatterySlot1ManufacDate   SubType = 5
+	// Battery sub-types (Slot 0 = battery:0)
+	TypeBatterySlot0Base       SubType = 0x00E0 // Base for slot 0
+	TypeBatterySlot0State      SubType = 2      // Relative subtype 2 from TypeBattery (0x00E0), absolute 0x00E2
+	TypeBatterySlot0Presence   SubType = 3      // Relative subtype 3 from TypeBattery (0x00E0), absolute 0x00E3
+	TypeBatterySlot0CycleCount SubType = 6      // Relative subtype 6 from TypeBattery (0x00E0), absolute 0x00E6
+	TypeBatterySlot0Charge     SubType = 9      // Relative subtype 9 from TypeBattery (0x00E0), absolute 0x00E9
+	// Add other slot 0 metrics if needed
+	// TypeBatterySlot0Voltage       SubType = 7
+	// TypeBatterySlot0Current       SubType = 8
+	// TypeBatterySlot0FullCharge    SubType = 10
+	// TypeBatterySlot0Temperature   SubType = 11
+	// TypeBatterySlot0Health        SubType = 12
+	// TypeBatterySlot0FaultCode     SubType = 13
+	// TypeBatterySlot0SerialNumber  SubType = 4
+	// TypeBatterySlot0ManufacDate   SubType = 5
 
-	// Battery sub-types (Slot 2)
-	TypeBatterySlot2Base       SubType = 0x00EC // Base for slot 2
-	TypeBatterySlot2State      SubType = 14     // Relative subtype 14 from TypeBattery (0x00E0), absolute 0x00EE
-	TypeBatterySlot2Presence   SubType = 15     // Relative subtype 15 from TypeBattery (0x00E0), absolute 0x00EF
-	TypeBatterySlot2CycleCount SubType = 18     // Relative subtype 18 from TypeBattery (0x00E0), absolute 0x00F2
-	TypeBatterySlot2Charge     SubType = 21     // Relative subtype 21 from TypeBattery (0x00E0), absolute 0x00F5
-	// Add other slot 2 metrics if needed
-	// TypeBatterySlot2Voltage       SubType = 19
-	// TypeBatterySlot2Current       SubType = 20
-	// TypeBatterySlot2FullCharge    SubType = 22
-	// TypeBatterySlot2Temperature   SubType = 23
-	// TypeBatterySlot2Health        SubType = 24
-	// TypeBatterySlot2FaultCode     SubType = 25
-	// TypeBatterySlot2SerialNumber  SubType = 16
-	// TypeBatterySlot2ManufacDate   SubType = 17
+	// Battery sub-types (Slot 1 = battery:1)
+	TypeBatterySlot1Base       SubType = 0x00EC // Base for slot 1
+	TypeBatterySlot1State      SubType = 14     // Relative subtype 14 from TypeBattery (0x00E0), absolute 0x00EE
+	TypeBatterySlot1Presence   SubType = 15     // Relative subtype 15 from TypeBattery (0x00E0), absolute 0x00EF
+	TypeBatterySlot1CycleCount SubType = 18     // Relative subtype 18 from TypeBattery (0x00E0), absolute 0x00F2
+	TypeBatterySlot1Charge     SubType = 21     // Relative subtype 21 from TypeBattery (0x00E0), absolute 0x00F5
+	// Add other slot 1 metrics if needed
+	// TypeBatterySlot1Voltage       SubType = 19
+	// TypeBatterySlot1Current       SubType = 20
+	// TypeBatterySlot1FullCharge    SubType = 22
+	// TypeBatterySlot1Temperature   SubType = 23
+	// TypeBatterySlot1Health        SubType = 24
+	// TypeBatterySlot1FaultCode     SubType = 25
+	// TypeBatterySlot1SerialNumber  SubType = 16
+	// TypeBatterySlot1ManufacDate   SubType = 17
 
 	// Vehicle state sub-types
 	TypeVehicleStateState     SubType = 1 // BLE_SCOOTER_SERVICE_SCOOTER_STATE_STATE
@@ -116,6 +117,10 @@ const (
 	TypeBatteryInfoPresent          SubType = 17 // BLE_SCOOTER_SERVICE_CB_BATTERY_PRESENT
 	TypeBatteryInfoChargeStatus     SubType = 18 // BLE_SCOOTER_SERVICE_CB_BATTERY_CHARGE_STATUS
 	// Note: Subtypes used here are relative to TypeBatteryInfo (0x0060)
+
+	// Accelerometer sub-types
+	TypeAccelerometerWakeUpSuspend     SubType = 1 // BLE_SCOOTER_SERVICE_ACCELEROMETER_WAKE_UP_SUSPEND
+	TypeAccelerometerWakeUpHibernation SubType = 2 // BLE_SCOOTER_SERVICE_ACCELEROMETER_WAKE_UP_HIBERNATION
 )
 
 // BLECommand represents BLE control commands

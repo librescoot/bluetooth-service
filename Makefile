@@ -1,4 +1,4 @@
-.PHONY: build clean build-arm build-amd64 lint test
+.PHONY: build clean dist build-arm build-amd64 lint test
 
 BINARY_NAME=bluetooth-service
 BUILD_DIR=bin
@@ -6,14 +6,18 @@ LDFLAGS=-ldflags "-w -s -extldflags '-static'"
 
 build:
 	mkdir -p $(BUILD_DIR)
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=6 go build $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/bluetooth-service
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/bluetooth-service
 
-clean:
-	rm -rf $(BUILD_DIR)
+dist:
+	mkdir -p $(BUILD_DIR)
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/bluetooth-service
 
 build-arm:
 	mkdir -p $(BUILD_DIR)
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=6 go build $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/bluetooth-service
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/bluetooth-service
+
+clean:
+	rm -rf $(BUILD_DIR)
 
 build-amd64:
 	mkdir -p $(BUILD_DIR)
