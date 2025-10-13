@@ -1,9 +1,7 @@
 package service
 
 import (
-	"encoding/hex"
 	"fmt"
-	"log"
 
 	"github.com/fxamacker/cbor/v2"
 	"github.com/librescoot/bluetooth-service/pkg/ble"
@@ -22,7 +20,7 @@ func batteryStateToInt(state string) int {
 	case "active":
 		return BatteryStateActive
 	default:
-		log.Printf("Unknown battery state: %s, defaulting to Unknown", state)
+		// s.log.Warnf("Unknown battery state: %s, defaulting to Unknown", state)
 		return BatteryStateUnknown // Default to unknown
 	}
 }
@@ -39,8 +37,28 @@ func batteryStateToString(state int) string {
 	case BatteryStateActive:
 		return "active"
 	default:
-		log.Printf("Unknown battery state code: %d", state)
+		// s.log.Warnf("Unknown battery state code: %d", state)
 		return "unknown"
+	}
+}
+
+// Convert string vehicle state to integer
+func vehicleStateToInt(state string) int {
+	switch state {
+	case "stand-by":
+		return 0 // STANDBY
+	case "parked", "waiting-handlebar", "waiting-seatbox", "waiting-hibernation",
+		"waiting-hibernation-advanced", "waiting-hibernation-seatbox", "waiting-hibernation-confirm":
+		return 1 // PARKED
+	case "ready-to-drive":
+		return 2 // READY_TO_DRIVE
+	case "shutting-down":
+		return 3 // SHUTTING_DOWN
+	case "updating":
+		return 4 // UPDATING
+	default:
+		// Unknown states (e.g. "init") map to STANDBY
+		return 0
 	}
 }
 
@@ -59,14 +77,14 @@ func writeUARTMessage(sock *usock.USOCK, messageType ble.MessageType, subType bl
 
 	cborData, err := cbor.Marshal(message)
 	if err != nil {
-		log.Printf("Failed to marshal CBOR message: %v", err)
+		// s.log.Errorf("Failed to marshal CBOR message: %v", err)
 		return fmt.Errorf("failed to marshal CBOR: %w", err)
 	}
 
 	// Use the lower byte of the MessageType as the Frame ID, matching observed logs.
 	frameID := byte(messageType & 0xFF)
 
-	log.Printf("Sending message: Frame ID=0x%02x, CBOR Data=%s", frameID, hex.EncodeToString(cborData))
+	// s.log.Debugf("Sending message: Frame ID=0x%02x, CBOR Data=%s", frameID, hex.EncodeToString(cborData))
 	return sock.WriteWithFrameID(frameID, cborData)
 }
 
@@ -85,14 +103,14 @@ func writeUARTMessage32(sock *usock.USOCK, messageType ble.MessageType, subType 
 
 	cborData, err := cbor.Marshal(message)
 	if err != nil {
-		log.Printf("Failed to marshal CBOR message: %v", err)
+		// s.log.Errorf("Failed to marshal CBOR message: %v", err)
 		return fmt.Errorf("failed to marshal CBOR: %w", err)
 	}
 
 	// Use the lower byte of the MessageType as the Frame ID, matching observed logs.
 	frameID := byte(messageType & 0xFF)
 
-	log.Printf("Sending message: Frame ID=0x%02x, CBOR Data=%s", frameID, hex.EncodeToString(cborData))
+	// s.log.Debugf("Sending message: Frame ID=0x%02x, CBOR Data=%s", frameID, hex.EncodeToString(cborData))
 	return sock.WriteWithFrameID(frameID, cborData)
 }
 
@@ -111,14 +129,14 @@ func writeUARTMessageString(sock *usock.USOCK, messageType ble.MessageType, subT
 
 	cborData, err := cbor.Marshal(message)
 	if err != nil {
-		log.Printf("Failed to marshal CBOR string message: %v", err)
+		// s.log.Errorf("Failed to marshal CBOR string message: %v", err)
 		return fmt.Errorf("failed to marshal CBOR string: %w", err)
 	}
 
 	// Use the lower byte of the MessageType as the Frame ID, matching observed logs.
 	frameID := byte(messageType & 0xFF)
 
-	log.Printf("Sending string message: Frame ID=0x%02x, CBOR Data=%s", frameID, hex.EncodeToString(cborData))
+	// s.log.Debugf("Sending string message: Frame ID=0x%02x, CBOR Data=%s", frameID, hex.EncodeToString(cborData))
 	return sock.WriteWithFrameID(frameID, cborData)
 }
 
@@ -137,13 +155,13 @@ func convertToInt(value interface{}) (int, bool) {
 		if v <= int64(^uint(0)>>1) && v >= int64(int(^uint(0)>>1)*-1-1) {
 			return int(v), true
 		}
-		log.Printf("Integer value %d out of range for int type", v)
+		// log.Printf("Integer value %d out of range for int type", v)
 		return 0, false
 	case uint:
 		if uint64(v) <= uint64(^uint(0)>>1) {
 			return int(v), true
 		}
-		log.Printf("Unsigned integer value %d out of range for int type", v)
+		// log.Printf("Unsigned integer value %d out of range for int type", v)
 		return 0, false
 	case uint8:
 		return int(v), true
@@ -153,16 +171,16 @@ func convertToInt(value interface{}) (int, bool) {
 		if uint64(v) <= uint64(^uint(0)>>1) {
 			return int(v), true
 		}
-		log.Printf("Unsigned integer value %d out of range for int type", v)
+		// log.Printf("Unsigned integer value %d out of range for int type", v)
 		return 0, false
 	case uint64:
 		if v <= uint64(^uint(0)>>1) {
 			return int(v), true
 		}
-		log.Printf("Unsigned integer value %d out of range for int type", v)
+		// log.Printf("Unsigned integer value %d out of range for int type", v)
 		return 0, false
 	default:
-		log.Printf("Value is not a convertible integer type: %T", value)
+		// log.Printf("Value is not a convertible integer type: %T", value)
 		return 0, false
 	}
 }
@@ -175,7 +193,7 @@ func convertToString(value interface{}) (string, bool) {
 	case []byte:
 		return string(v), true
 	default:
-		log.Printf("Value is not a string or []byte type: %T", value)
+		// log.Printf("Value is not a string or []byte type: %T", value)
 		return "", false
 	}
 }
@@ -185,6 +203,6 @@ func convertToBytes(value interface{}) ([]byte, bool) {
 	if v, ok := value.([]byte); ok {
 		return v, true
 	}
-	log.Printf("Value is not a []byte type: %T", value)
+	// log.Printf("Value is not a []byte type: %T", value)
 	return nil, false
 }

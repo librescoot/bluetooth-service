@@ -5,17 +5,17 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"log"
 	"sync"
 	"time"
 
+	"github.com/librescoot/bluetooth-service/pkg/logger"
 	"github.com/tarm/serial"
 )
 
 const (
 	MaxPayloadLength = 1024
-	SyncByte1       = 0xF6
-	SyncByte2       = 0xD9
+	SyncByte1        = 0xF6
+	SyncByte2        = 0xD9
 )
 
 // State machine states
@@ -55,6 +55,7 @@ type Payload struct {
 type USOCK struct {
 	port     *serial.Port
 	handler  func(*Payload)
+	log      *logger.Logger
 	stopChan chan struct{}
 	wg       sync.WaitGroup
 	state    State
@@ -90,7 +91,7 @@ var crc16Table = []uint16{
 }
 
 // New creates a new USOCK connection
-func New(devicePath string, baudRate int, handler func(*Payload)) (*USOCK, error) {
+func New(devicePath string, baudRate int, handler func(*Payload), log *logger.Logger) (*USOCK, error) {
 	// First clear UART attributes to ensure a clean start
 	if err := clearUARTAttributes(devicePath); err != nil {
 		return nil, fmt.Errorf("failed to clear UART attributes: %v", err)
@@ -115,6 +116,7 @@ func New(devicePath string, baudRate int, handler func(*Payload)) (*USOCK, error
 	usock := &USOCK{
 		port:     port,
 		handler:  handler,
+		log:      log,
 		stopChan: make(chan struct{}),
 		state:    StateSync1,
 		buffer:   make([]byte, 0, 256),
@@ -139,21 +141,21 @@ func clearUARTAttributes(devicePath string) error {
 		StopBits:    serial.Stop1,
 		ReadTimeout: 0,
 	}
-	
+
 	port, err := serial.OpenPort(config)
 	if err != nil {
 		return fmt.Errorf("failed to open serial port for attribute clearing: %v", err)
 	}
-	
+
 	// Close the port to release resources
 	err = port.Close()
 	if err != nil {
 		return fmt.Errorf("failed to close serial port after attribute clearing: %v", err)
 	}
-	
+
 	// Wait a moment for the port to fully close
 	time.Sleep(100 * time.Millisecond)
-	
+
 	return nil
 }
 
@@ -186,30 +188,30 @@ func (u *USOCK) WriteWithFrameID(frameID byte, data []byte) error {
 	frame.PayloadCRC = calculateCRC16(frame.Payload, 0)
 
 	// Log detailed frame information
-	log.Printf("TX Frame: ID=0x%02x, Len=%d, HeaderCRC=0x%04x, PayloadCRC=0x%04x", 
+	u.log.Debugf("TX Frame: ID=0x%02x, Len=%d, HeaderCRC=0x%04x, PayloadCRC=0x%04x",
 		frame.ID, frame.PayloadLen, frame.HeaderCRC, frame.PayloadCRC)
-	
+
 	// Log the payload in hex format for debugging
-	log.Printf("TX Payload: %s", hex.EncodeToString(frame.Payload))
+	u.log.Debugf("TX Payload: %s", hex.EncodeToString(frame.Payload))
 
 	// Construct the complete frame in a single buffer to send all at once
 	completeFrame := make([]byte, 0, 7+len(frame.Payload)+2) // 7 bytes header + payload + 2 bytes CRC
-	
+
 	// Add header (sync bytes + frame ID + payload length)
 	completeFrame = append(completeFrame, header...)
-	
+
 	// Add header CRC (little-endian)
 	completeFrame = append(completeFrame, byte(frame.HeaderCRC&0xFF), byte((frame.HeaderCRC>>8)&0xFF))
-	
+
 	// Add payload
 	completeFrame = append(completeFrame, frame.Payload...)
-	
+
 	// Add payload CRC (little-endian)
 	completeFrame = append(completeFrame, byte(frame.PayloadCRC&0xFF), byte((frame.PayloadCRC>>8)&0xFF))
-	
+
 	// Log the complete frame in hex format for debugging
-	log.Printf("TX Complete Frame: %s", hex.EncodeToString(completeFrame))
-	
+	u.log.Debugf("TX Complete Frame: %s", hex.EncodeToString(completeFrame))
+
 	// Write the complete frame in a single operation
 	if _, err := u.port.Write(completeFrame); err != nil {
 		return fmt.Errorf("failed to write frame: %v", err)
@@ -224,11 +226,11 @@ func (u *USOCK) Write(data []byte) error {
 	if len(data) == 0 {
 		return fmt.Errorf("cannot write empty data")
 	}
-	
+
 	// Use the first byte as the frame ID and the rest as payload
 	frameID := data[0]
 	payload := data[1:]
-	
+
 	return u.WriteWithFrameID(frameID, payload)
 }
 
@@ -244,7 +246,7 @@ func (u *USOCK) readLoop() {
 	defer u.wg.Done()
 
 	buf := make([]byte, 1) // Read one byte at a time for more precise control
-	log.Printf("Starting serial read loop")
+	u.log.Debugf("Starting serial read loop")
 
 	for {
 		select {
@@ -255,7 +257,7 @@ func (u *USOCK) readLoop() {
 			n, err := u.port.Read(buf)
 			if err != nil {
 				if err != io.EOF {
-					log.Printf("Error reading from serial port: %v", err)
+					u.log.Errorf("Error reading from serial port: %v", err)
 					time.Sleep(10 * time.Millisecond)
 				}
 				continue
@@ -301,13 +303,13 @@ func (u *USOCK) processByte(b byte) {
 		u.frame.PayloadLen |= uint16(b) << 8
 		u.buffer = append(u.buffer, b)
 		u.state = StateHeaderCRC1
-		
+
 		// Calculate header CRC over the entire header at once
 		u.frame.HeaderCRC = calculateCRC16(u.buffer, 0)
-		
+
 		// Validate payload length
 		if u.frame.PayloadLen > MaxPayloadLength {
-			log.Printf("RX Error: Invalid payload length: %d (max: %d)", 
+			u.log.Debugf("RX Error: Invalid payload length: %d (max: %d)",
 				u.frame.PayloadLen, MaxPayloadLength)
 			u.state = StateSync1
 		}
@@ -316,18 +318,18 @@ func (u *USOCK) processByte(b byte) {
 		u.state = StateHeaderCRC2
 	case StateHeaderCRC2:
 		u.frame.HeaderCRC |= uint16(b) << 8
-		
+
 		// Calculate CRC for the header (sync bytes + frame ID + payload length)
 		calculatedCRC := calculateCRC16(u.buffer, 0)
-		
+
 		// Validate header CRC
 		if calculatedCRC != u.frame.HeaderCRC {
-			log.Printf("RX Error: Invalid header CRC: calculated=0x%04x, received=0x%04x", 
+			u.log.Debugf("RX Error: Invalid header CRC: calculated=0x%04x, received=0x%04x",
 				calculatedCRC, u.frame.HeaderCRC)
 			u.state = StateSync1
 			return
 		}
-		
+
 		// Prepare for payload
 		u.frame.Payload = make([]byte, 0, u.frame.PayloadLen)
 		u.buffer = u.buffer[:0] // Clear buffer for payload CRC calculation
@@ -335,7 +337,7 @@ func (u *USOCK) processByte(b byte) {
 	case StatePayload:
 		u.frame.Payload = append(u.frame.Payload, b)
 		u.buffer = append(u.buffer, b)
-		
+
 		// Check if we've received the entire payload
 		if uint16(len(u.frame.Payload)) >= u.frame.PayloadLen {
 			u.state = StatePayloadCRC1
@@ -347,27 +349,27 @@ func (u *USOCK) processByte(b byte) {
 		u.state = StatePayloadCRC2
 	case StatePayloadCRC2:
 		u.frame.PayloadCRC |= uint16(b) << 8
-		
+
 		// Calculate CRC for the payload
 		calculatedCRC := calculateCRC16(u.buffer, 0)
-		
+
 		// Validate payload CRC
 		if calculatedCRC != u.frame.PayloadCRC {
-			log.Printf("RX Error: Invalid payload CRC: calculated=0x%04x, received=0x%04x", 
+			u.log.Debugf("RX Error: Invalid payload CRC: calculated=0x%04x, received=0x%04x",
 				calculatedCRC, u.frame.PayloadCRC)
 			u.state = StateSync1
 			return
 		}
-		
+
 		// Log successful frame reception with detailed information
-		log.Printf("RX Frame: ID=0x%02x, Len=%d, HeaderCRC=0x%04x, PayloadCRC=0x%04x", 
+		u.log.Debugf("RX Frame: ID=0x%02x, Len=%d, HeaderCRC=0x%04x, PayloadCRC=0x%04x",
 			u.frame.ID, u.frame.PayloadLen, u.frame.HeaderCRC, u.frame.PayloadCRC)
-		log.Printf("RX Payload: %s", hex.EncodeToString(u.frame.Payload))
-		
+		u.log.Debugf("RX Payload: %s", hex.EncodeToString(u.frame.Payload))
+
 		// Create a copy of the payload to avoid data races
 		payload := make([]byte, len(u.frame.Payload))
 		copy(payload, u.frame.Payload)
-		
+
 		// Call the callback with the payload
 		if u.handler != nil {
 			go u.handler(&Payload{
@@ -376,7 +378,7 @@ func (u *USOCK) processByte(b byte) {
 				Size: len(payload),
 			})
 		}
-		
+
 		// Reset state machine
 		u.state = StateSync1
 	}
@@ -399,4 +401,4 @@ func calculateCRC8(data []byte) uint8 {
 		crc ^= b
 	}
 	return crc
-} 
+}

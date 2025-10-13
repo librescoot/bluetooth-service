@@ -3,7 +3,6 @@ package redis
 import (
 	"context"
 	"fmt"
-	"log"
 	"strconv"
 	"time"
 
@@ -152,7 +151,7 @@ func (c *Client) HDel(key, field string) (int64, error) {
 func (c *Client) LPush(key string, value string) error {
 	_, err := c.client.LPush(c.ctx, key, value).Result()
 	if err != nil {
-		log.Printf("Failed to LPUSH %s to key %s: %v", value, key, err)
+		// log.Printf("Failed to LPUSH %s to key %s: %v", value, key, err) // Commented out - redis package doesn't have logger access
 		return err
 	}
 	return nil
@@ -167,12 +166,12 @@ func (c *Client) BRPop(timeout time.Duration, key string) ([]string, error) {
 		if err == redis.Nil {
 			return nil, nil // Return nil slice and nil error for timeout
 		}
-		log.Printf("Error during BRPOP on key %s: %v", key, err)
+		// log.Printf("Error during BRPOP on key %s: %v", key, err) // Commented out - redis package doesn't have logger access
 		return nil, err
 	}
 	// result is []string{key, value}
 	if len(result) != 2 {
-		log.Printf("Unexpected result length from BRPOP on key %s: %d", key, len(result))
+		// log.Printf("Unexpected result length from BRPOP on key %s: %d", key, len(result)) // Commented out - redis package doesn't have logger access
 		return nil, fmt.Errorf("unexpected result from BRPOP: %v", result)
 	}
 	return result, nil
