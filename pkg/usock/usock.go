@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	MaxPayloadLength = 1024
+	MaxPayloadLength = 512  // Reduced from 2048 but still sufficient for 256-byte chunks + protocol overhead
 	SyncByte1        = 0xF6
 	SyncByte2        = 0xD9
 )

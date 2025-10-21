@@ -23,6 +23,7 @@ const (
 	TypeBatteryInfo                   MessageType = 0x0060     // BLE_SCOOTER_SERVICE_CB_BATTERY
 	TypePowerMux                      MessageType = 0x0100     // BLE_SCOOTER_SERVICE_POWER_MUX_STATE
 	TypeAccelerometer                 MessageType = 0x0200     // BLE_SCOOTER_SERVICE_ACCELEROMETER
+	TypeFileTransfer                  MessageType = 0x0300     // File transfer service
 )
 
 // SubType represents the sub-type of a message
@@ -121,6 +122,14 @@ const (
 	// Accelerometer sub-types
 	TypeAccelerometerWakeUpSuspend     SubType = 1 // BLE_SCOOTER_SERVICE_ACCELEROMETER_WAKE_UP_SUSPEND
 	TypeAccelerometerWakeUpHibernation SubType = 2 // BLE_SCOOTER_SERVICE_ACCELEROMETER_WAKE_UP_HIBERNATION
+
+	// File transfer sub-types
+	TypeFileTransferInit     SubType = 1 // Initialize file transfer (filename, size, crc32)
+	TypeFileTransferChunk    SubType = 2 // Data chunk (sequence number, data)
+	TypeFileTransferAck      SubType = 3 // Acknowledge chunk receipt
+	TypeFileTransferComplete SubType = 4 // Transfer complete (final crc32, status)
+	TypeFileTransferAbort    SubType = 5 // Abort transfer (reason)
+	TypeFileTransferStatus   SubType = 6 // Query transfer status (progress, state)
 )
 
 // BLECommand represents BLE control commands

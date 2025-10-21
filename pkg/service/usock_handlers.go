@@ -1,6 +1,8 @@
 package service
 
 import (
+	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	"strconv"
 	"strings"
@@ -170,6 +172,8 @@ func (s *Service) HandleUSockMessage(frameID byte, payload *usock.Payload) {
 				s.handlePowerManagementMessage(ble.TypePowerManagementHibernationRequest, value)
 			case ble.TypeAccelerometer: // Add case for Accelerometer
 				s.handleAccelerometerMessage(relativeSubType, value)
+			case ble.TypeFileTransfer: // Add case for File Transfer
+				s.handleFileTransferMessage(msgType, absSubTypeKey, value)
 			case 0x0000: // Handle generic event messages
 				s.handleEventMessage(msgType, absSubTypeKey, value)
 			default:
@@ -1064,5 +1068,313 @@ func (s *Service) handleAccelerometerMessage(subType ble.SubType, value interfac
 
 	default:
 		s.log.Warnf("Unknown accelerometer message relative subtype: %v", subType)
+	}
+}
+
+// handleFileTransferMessage handles incoming file transfer messages from nRF52
+func (s *Service) handleFileTransferMessage(msgType ble.MessageType, absSubTypeKey uint16, value interface{}) {
+	s.log.Debugf("Handling file transfer message (Type 0x%04x) with absolute subtype key: 0x%04x", msgType, absSubTypeKey)
+
+	// Check if file transfer manager is available
+	if s.fileTransferManager == nil {
+		s.log.Errorf("File transfer manager not initialized")
+		// Send error response back
+		if err := writeUARTMessage(s.usock, ble.TypeFileTransfer, ble.TypeFileTransferAbort, 1); err != nil {
+			s.log.Errorf("Failed to send abort response: %v", err)
+		}
+		return
+	}
+
+	// Calculate relative subtype
+	relativeSubType := ble.SubType(0)
+	if absSubTypeKey >= uint16(msgType) {
+		relativeSubType = ble.SubType(absSubTypeKey - uint16(msgType))
+	}
+
+	// The value from nRF might be raw bytes (as string) or already decoded
+	// Try to extract raw bytes first
+	var rawData []byte
+	if strVal, ok := value.(string); ok {
+		rawData = []byte(strVal)
+	} else if bytesVal, ok := value.([]byte); ok {
+		rawData = bytesVal
+	}
+
+	// If we have raw data, try to decode it as CBOR
+	var decodedValue interface{}
+	if rawData != nil && len(rawData) > 0 {
+		// Try to decode as CBOR
+		if err := cbor.Unmarshal(rawData, &decodedValue); err != nil {
+			// If CBOR decode fails, use raw data as-is
+			s.log.Debugf("Could not decode file transfer payload as CBOR, using raw data: %v", err)
+			decodedValue = rawData
+		} else {
+			s.log.Debugf("Successfully decoded file transfer CBOR payload")
+		}
+	} else {
+		// Use the value as-is if it's not bytes
+		decodedValue = value
+	}
+
+	switch relativeSubType {
+	case ble.TypeFileTransferInit:
+		// Abort any existing active transfer before starting a new one
+		if s.activeTransferID != "" {
+			s.log.Warnf("Aborting existing transfer %s to start new transfer", s.activeTransferID)
+			if err := s.fileTransferManager.AbortTransfer(s.activeTransferID, "New transfer initiated"); err != nil {
+				s.log.Errorf("Failed to abort existing transfer: %v", err)
+			}
+			s.activeTransferID = ""
+		}
+
+		// Parse init message: expects map with filename, size, and crc32
+		var filename string
+		var size uint32
+		var crc32Val uint32
+
+		// Try to parse as map first (CBOR decoded)
+		if initData, ok := decodedValue.(map[interface{}]interface{}); ok {
+			if fn, ok := initData["filename"].(string); ok {
+				filename = fn
+			}
+			if sz, ok := convertToInt(initData["size"]); ok {
+				size = uint32(sz)
+			}
+			if crc, ok := convertToInt(initData["crc32"]); ok {
+				crc32Val = uint32(crc)
+			}
+		} else if rawData != nil && len(rawData) >= 8 {
+			// Try base64 decode first (for data sent from Python client)
+			if decoded, err := base64.StdEncoding.DecodeString(string(rawData)); err == nil && len(decoded) >= 8 {
+				rawData = decoded
+			}
+
+			// Parse as raw binary format: size(4) + crc32(4) + filename(rest)
+			size = binary.LittleEndian.Uint32(rawData[0:4])
+			crc32Val = binary.LittleEndian.Uint32(rawData[4:8])
+			if len(rawData) > 8 {
+				filename = string(rawData[8:])
+			}
+		} else {
+			s.log.Errorf("Invalid file transfer init data format")
+			return
+		}
+
+		// Initialize transfer
+		transfer, err := s.fileTransferManager.InitTransfer(filename, size, crc32Val)
+		if err != nil {
+			s.log.Errorf("Failed to initialize transfer: %v", err)
+			// Send error response
+			if err := writeUARTMessage(s.usock, ble.TypeFileTransfer, ble.TypeFileTransferAbort, 1); err != nil {
+				s.log.Errorf("Failed to send abort response: %v", err)
+			}
+			return
+		}
+
+		// Store the active transfer ID in the service
+		s.activeTransferID = transfer.ID
+
+		// Send success acknowledgment (just send 1 to indicate success)
+		s.log.Infof("File transfer initialized: ID=%s, File=%s, Size=%d bytes", transfer.ID, filename, size)
+		if err := writeUARTMessage(s.usock, ble.TypeFileTransfer, ble.TypeFileTransferAck, 1); err != nil {
+			s.log.Errorf("Failed to send init acknowledgment: %v", err)
+		}
+
+		// Store transfer ID in Redis for tracking
+		if err := s.redis.WriteString("file-transfer:active", transfer.ID, transfer.Filename); err != nil {
+			s.log.Errorf("Failed to store active transfer in Redis: %v", err)
+		}
+
+	case ble.TypeFileTransferChunk:
+		// Use the active transfer ID stored during init
+		transferID := s.activeTransferID
+		if transferID == "" {
+			s.log.Errorf("No active transfer - chunk received without init")
+			return
+		}
+
+		var sequence uint16
+		var data []byte
+
+		// Try to parse as map first (CBOR decoded)
+		if chunkData, ok := decodedValue.(map[interface{}]interface{}); ok {
+			if seq, ok := convertToInt(chunkData["sequence"]); ok {
+				sequence = uint16(seq)
+			}
+			if d, ok := chunkData["data"].([]byte); ok {
+				data = d
+			} else if d, ok := chunkData["data"].(string); ok {
+				data = []byte(d)
+			}
+		} else if rawData != nil {
+			// Try base64 decode first (for data sent from Python client)
+			if decoded, err := base64.StdEncoding.DecodeString(string(rawData)); err == nil && len(decoded) >= 2 {
+				rawData = decoded
+			}
+
+			// Parse as raw binary format: sequence(2) + data(rest)
+			if len(rawData) >= 2 {
+				sequence = binary.LittleEndian.Uint16(rawData[0:2])
+				if len(rawData) > 2 {
+					data = rawData[2:]
+				}
+			}
+		} else {
+			s.log.Errorf("Invalid file transfer chunk data format")
+			return
+		}
+
+		// Handle the chunk
+		if err := s.fileTransferManager.HandleChunk(transferID, sequence, data); err != nil {
+			s.log.Errorf("Failed to handle chunk %d for transfer %s: %v", sequence, transferID, err)
+			// Send NACK
+			if err := writeUARTMessage(s.usock, ble.TypeFileTransfer, ble.TypeFileTransferAck, 0); err != nil {
+				s.log.Errorf("Failed to send chunk NACK: %v", err)
+			}
+			return
+		}
+
+		// Send ACK for the chunk
+		if err := writeUARTMessage(s.usock, ble.TypeFileTransfer, ble.TypeFileTransferAck, sequence); err != nil {
+			s.log.Errorf("Failed to send chunk ACK: %v", err)
+		}
+
+		// Update progress in Redis
+		transfer, _ := s.fileTransferManager.GetTransferStatus(transferID)
+		if transfer != nil {
+			if err := s.redis.WriteInt("file-transfer:progress", transferID, int(transfer.Progress)); err != nil {
+				s.log.Errorf("Failed to update transfer progress in Redis: %v", err)
+			}
+		}
+
+	case ble.TypeFileTransferComplete:
+		// Use the active transfer ID stored during init
+		transferID := s.activeTransferID
+		if transferID == "" {
+			s.log.Errorf("No active transfer - complete received without init")
+			return
+		}
+
+		var finalCRC uint32
+
+		// Try to parse as map first (CBOR decoded)
+		if completeData, ok := decodedValue.(map[interface{}]interface{}); ok {
+			if crc, ok := convertToInt(completeData["crc32"]); ok {
+				finalCRC = uint32(crc)
+			}
+		} else if rawData != nil {
+			// Try base64 decode first (for data sent from Python client)
+			if decoded, err := base64.StdEncoding.DecodeString(string(rawData)); err == nil && len(decoded) >= 4 {
+				rawData = decoded
+			}
+
+			// Parse as raw binary format: crc32(4 bytes)
+			if len(rawData) >= 4 {
+				finalCRC = binary.LittleEndian.Uint32(rawData[0:4])
+			} else {
+				s.log.Errorf("Invalid file transfer complete data format")
+				return
+			}
+		} else {
+			s.log.Errorf("Invalid file transfer complete data format")
+			return
+		}
+
+		// Complete the transfer
+		if err := s.fileTransferManager.CompleteTransfer(transferID, finalCRC); err != nil {
+			s.log.Errorf("Failed to complete transfer %s: %v", transferID, err)
+			// Send error response
+			if err := writeUARTMessage(s.usock, ble.TypeFileTransfer, ble.TypeFileTransferComplete, 0); err != nil {
+				s.log.Errorf("Failed to send complete NACK: %v", err)
+			}
+			return
+		}
+
+		// Send success acknowledgment
+		if err := writeUARTMessage(s.usock, ble.TypeFileTransfer, ble.TypeFileTransferComplete, 1); err != nil {
+			s.log.Errorf("Failed to send complete ACK: %v", err)
+		}
+
+		// Update Redis - mark as complete
+		if err := s.redis.WriteString("file-transfer:completed", transferID, "success"); err != nil {
+			s.log.Errorf("Failed to mark transfer as completed in Redis: %v", err)
+		}
+		// Remove from active transfers
+		if _, err := s.redis.HDel("file-transfer:active", transferID); err != nil {
+			s.log.Errorf("Failed to remove transfer from active list: %v", err)
+		}
+
+		s.log.Infof("File transfer completed successfully: %s", transferID)
+
+	case ble.TypeFileTransferAbort:
+		// Parse abort message: expects map with transferID and reason
+		var transferID string
+		var reason string
+
+		// Try to parse as map first (CBOR decoded)
+		if abortData, ok := decodedValue.(map[interface{}]interface{}); ok {
+			if tid, ok := abortData["transfer_id"].(string); ok {
+				transferID = tid
+			}
+			if r, ok := abortData["reason"].(string); ok {
+				reason = r
+			}
+		} else if rawData != nil && len(rawData) > 0 {
+			// Parse as raw string format: "transferID:reason" or just "reason"
+			strData := string(rawData)
+			parts := strings.SplitN(strData, ":", 2)
+			if len(parts) == 2 {
+				transferID = parts[0]
+				reason = parts[1]
+			} else {
+				reason = strData
+			}
+		} else {
+			s.log.Errorf("Invalid file transfer abort data format")
+			return
+		}
+
+		// Abort the transfer
+		if err := s.fileTransferManager.AbortTransfer(transferID, reason); err != nil {
+			s.log.Errorf("Failed to abort transfer %s: %v", transferID, err)
+		}
+
+		// Update Redis - mark as aborted
+		if err := s.redis.WriteString("file-transfer:aborted", transferID, reason); err != nil {
+			s.log.Errorf("Failed to mark transfer as aborted in Redis: %v", err)
+		}
+		// Remove from active transfers
+		if _, err := s.redis.HDel("file-transfer:active", transferID); err != nil {
+			s.log.Errorf("Failed to remove transfer from active list: %v", err)
+		}
+
+		s.log.Warnf("File transfer aborted: %s, reason: %s", transferID, reason)
+
+	case ble.TypeFileTransferStatus:
+		// Parse status request: expects transferID
+		var transferID string
+		if tid, ok := value.(string); ok {
+			transferID = tid
+		} else if statusData, ok := value.(map[interface{}]interface{}); ok {
+			if tid, ok := statusData["transfer_id"].(string); ok {
+				transferID = tid
+			}
+		}
+
+		// Get transfer status
+		transfer, err := s.fileTransferManager.GetTransferStatus(transferID)
+		if err != nil {
+			s.log.Errorf("Failed to get transfer status for %s: %v", transferID, err)
+			return
+		}
+
+		// Send status response (would need a more complex response structure)
+		// For now, just send progress percentage
+		if err := writeUARTMessage(s.usock, ble.TypeFileTransfer, ble.TypeFileTransferStatus, uint16(transfer.Progress)); err != nil {
+			s.log.Errorf("Failed to send transfer status: %v", err)
+		}
+
+	default:
+		s.log.Warnf("Unknown file transfer message relative subtype: %v", relativeSubType)
 	}
 }

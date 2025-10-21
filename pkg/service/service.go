@@ -10,19 +10,30 @@ import (
 
 // Service represents the MDB Bluetooth service
 type Service struct {
-	usock  *usock.USOCK
-	redis  *redisclient.Client
-	log    *logger.Logger
-	stopCh chan struct{}
-	wg     sync.WaitGroup
+	usock               *usock.USOCK
+	redis               *redisclient.Client
+	log                 *logger.Logger
+	fileTransferManager *FileTransferManager
+	activeTransferID    string // Track the current active transfer ID
+	stopCh              chan struct{}
+	wg                  sync.WaitGroup
 }
 
 // New creates a new Service instance
 func New(redisClient *redisclient.Client, log *logger.Logger) *Service {
+	// Initialize file transfer manager
+	ftm, err := NewFileTransferManager(log)
+	if err != nil {
+		log.Errorf("Failed to initialize file transfer manager: %v", err)
+		// Continue without file transfer support
+		ftm = nil
+	}
+
 	return &Service{
-		redis:  redisClient,
-		log:    log,
-		stopCh: make(chan struct{}),
+		redis:               redisClient,
+		log:                 log,
+		fileTransferManager: ftm,
+		stopCh:              make(chan struct{}),
 	}
 }
 

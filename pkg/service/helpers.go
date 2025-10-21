@@ -140,6 +140,58 @@ func writeUARTMessageString(sock *usock.USOCK, messageType ble.MessageType, subT
 	return sock.WriteWithFrameID(frameID, cborData)
 }
 
+// writeUARTMessageBytes sends a message with binary data value.
+// It calculates the absolute subtype key and encodes the data as CBOR bytes.
+func writeUARTMessageBytes(sock *usock.USOCK, messageType ble.MessageType, subType ble.SubType, value []byte) error {
+	if sock == nil {
+		return fmt.Errorf("USOCK connection is not initialized")
+	}
+	absoluteKey := uint16(messageType) + uint16(subType)
+	message := map[uint16]map[uint16][]byte{
+		uint16(messageType): {
+			absoluteKey: value,
+		},
+	}
+
+	cborData, err := cbor.Marshal(message)
+	if err != nil {
+		// s.log.Errorf("Failed to marshal CBOR bytes message: %v", err)
+		return fmt.Errorf("failed to marshal CBOR bytes: %w", err)
+	}
+
+	// Use the lower byte of the MessageType as the Frame ID, matching observed logs.
+	frameID := byte(messageType & 0xFF)
+
+	// s.log.Debugf("Sending bytes message: Frame ID=0x%02x, CBOR Data len=%d", frameID, len(cborData))
+	return sock.WriteWithFrameID(frameID, cborData)
+}
+
+// writeUARTMessageMap sends a message with a map value (for complex structures).
+// It calculates the absolute subtype key and encodes the map as CBOR.
+func writeUARTMessageMap(sock *usock.USOCK, messageType ble.MessageType, subType ble.SubType, value map[string]interface{}) error {
+	if sock == nil {
+		return fmt.Errorf("USOCK connection is not initialized")
+	}
+	absoluteKey := uint16(messageType) + uint16(subType)
+	message := map[uint16]map[uint16]interface{}{
+		uint16(messageType): {
+			absoluteKey: value,
+		},
+	}
+
+	cborData, err := cbor.Marshal(message)
+	if err != nil {
+		// s.log.Errorf("Failed to marshal CBOR map message: %v", err)
+		return fmt.Errorf("failed to marshal CBOR map: %w", err)
+	}
+
+	// Use the lower byte of the MessageType as the Frame ID, matching observed logs.
+	frameID := byte(messageType & 0xFF)
+
+	// s.log.Debugf("Sending map message: Frame ID=0x%02x, CBOR Data len=%d", frameID, len(cborData))
+	return sock.WriteWithFrameID(frameID, cborData)
+}
+
 // Helper function to safely convert interface{} to int
 func convertToInt(value interface{}) (int, bool) {
 	switch v := value.(type) {
