@@ -353,7 +353,7 @@ func (s *Service) handleBLEVersionMessage(msgType ble.MessageType, absSubTypeKey
 	if absSubTypeKey == expectedAbsSubType {
 		if versionStr, ok := convertToString(value); ok {
 			s.log.Debugf("Received BLE version: %s", versionStr)
-			if err := s.redis.WriteString(KeyBLEStatus, "nrf-fw-version", versionStr); err != nil {
+			if err := s.redis.WriteString(KeyFirmwareVersion, "nrf-fw-version", versionStr); err != nil {
 				s.log.Errorf("Failed to update BLE version in Redis: %v", err)
 			}
 		} else {
