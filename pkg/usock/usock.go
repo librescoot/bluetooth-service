@@ -53,15 +53,16 @@ type Payload struct {
 
 // USOCK represents a UART socket connection to the nRF52
 type USOCK struct {
-	port     *serial.Port
-	handler  func(*Payload)
-	log      *logger.Logger
-	stopChan chan struct{}
-	wg       sync.WaitGroup
-	state    State
-	frame    Frame
-	buffer   []byte
-	mu       sync.Mutex
+	port        *serial.Port
+	handler     func(*Payload)
+	errorHandler func(error)
+	log         *logger.Logger
+	stopChan    chan struct{}
+	wg          sync.WaitGroup
+	state       State
+	frame       Frame
+	buffer      []byte
+	mu          sync.Mutex
 }
 
 // CRC-16/ARC lookup table
@@ -114,12 +115,13 @@ func New(devicePath string, baudRate int, handler func(*Payload), log *logger.Lo
 
 	// Create USOCK instance
 	usock := &USOCK{
-		port:     port,
-		handler:  handler,
-		log:      log,
-		stopChan: make(chan struct{}),
-		state:    StateSync1,
-		buffer:   make([]byte, 0, 256),
+		port:         port,
+		handler:      handler,
+		errorHandler: nil, // Can be set later via SetErrorHandler
+		log:          log,
+		stopChan:     make(chan struct{}),
+		state:        StateSync1,
+		buffer:       make([]byte, 0, 256),
 	}
 
 	// Start read loop
@@ -234,6 +236,13 @@ func (u *USOCK) Write(data []byte) error {
 	return u.WriteWithFrameID(frameID, payload)
 }
 
+// SetErrorHandler sets a callback for serial communication errors
+func (u *USOCK) SetErrorHandler(handler func(error)) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.errorHandler = handler
+}
+
 // Close closes the USOCK connection
 func (u *USOCK) Close() error {
 	close(u.stopChan)
@@ -258,6 +267,12 @@ func (u *USOCK) readLoop() {
 			if err != nil {
 				if err != io.EOF {
 					u.log.Errorf("Error reading from serial port: %v", err)
+					// Notify error handler if set
+					u.mu.Lock()
+					if u.errorHandler != nil {
+						go u.errorHandler(fmt.Errorf("serial read error: %v", err))
+					}
+					u.mu.Unlock()
 					time.Sleep(10 * time.Millisecond)
 				}
 				continue

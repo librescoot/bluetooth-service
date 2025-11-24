@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -76,9 +77,16 @@ func main() {
 	}
 	sock, err := usock.New(*serialDevice, *baudRate, usockHandler, log)
 	if err != nil {
+		svc.SetBLEError(fmt.Sprintf("Failed to open serial port: %v", err))
 		log.Fatalf("Failed to connect to nRF52 via USOCK: %v", err)
 	}
 	svc.SetUSock(sock)
+
+	// Set error handler for serial communication errors
+	sock.SetErrorHandler(func(err error) {
+		svc.SetBLEError(err.Error())
+	})
+
 	defer sock.Close()
 	log.Infof("Connected to nRF52 via USOCK")
 
@@ -90,10 +98,15 @@ func main() {
 
 	log.Infof("Subscribed to Redis channels")
 
+	// Start health heartbeat before initialization
+	svc.StartHealthHeartbeat()
+
 	log.Infof("Initializing communication with nRF52...")
 	if err := svc.InitializeNRF52(); err != nil {
+		svc.SetBLEError(fmt.Sprintf("Failed to initialize nRF52: %v", err))
 		log.Errorf("Error during nRF52 initialization sequence: %v", err)
 	} else {
+		svc.ClearBLEError()
 		log.Infof("nRF52 initialization sequence sent successfully.")
 	}
 
