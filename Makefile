@@ -1,8 +1,9 @@
-.PHONY: build clean dist build-arm build-amd64 lint test
+.PHONY: build clean dist build-arm build-amd64 build-host lint test fmt deps
 
 BINARY_NAME=bluetooth-service
 BUILD_DIR=bin
-LDFLAGS=-ldflags "-w -s -extldflags '-static'"
+VERSION=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+LDFLAGS=-ldflags "-w -s -X main.version=$(VERSION) -extldflags '-static'"
 
 build:
 	mkdir -p $(BUILD_DIR)
@@ -27,4 +28,14 @@ lint:
 	golangci-lint run
 
 test:
-	go test -v ./... 
+	go test -v ./...
+
+build-host:
+	mkdir -p $(BUILD_DIR)
+	CGO_ENABLED=0 go build $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-host ./cmd/bluetooth-service
+
+fmt:
+	go fmt ./...
+
+deps:
+	go mod download && go mod tidy

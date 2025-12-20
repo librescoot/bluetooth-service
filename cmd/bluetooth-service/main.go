@@ -15,6 +15,8 @@ import (
 	"github.com/librescoot/bluetooth-service/pkg/usock"
 )
 
+var version = "dev"
+
 // Configuration flags
 var (
 	serialDevice = flag.String("serial", "/dev/ttymxc1", "Serial device path")
@@ -58,7 +60,7 @@ func main() {
 
 	log := logger.NewLogger(stdLogger, logger.LogLevel(*logLevel))
 
-	log.Infof("Starting MDB Bluetooth Service")
+	log.Infof("librescoot-bluetooth %s starting", version)
 	log.Infof("Serial device: %s", *serialDevice)
 	log.Infof("Baud rate: %d", *baudRate)
 	log.Infof("Redis address: %s", *redisAddr)

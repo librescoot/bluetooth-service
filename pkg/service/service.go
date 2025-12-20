@@ -105,6 +105,26 @@ func (s *Service) ClearBLEError() {
 	}
 }
 
+// setErrorAndSleep sets an error state in Redis and blocks forever to prevent restart loops
+func (s *Service) setErrorAndSleep(errorMsg string) {
+	s.log.Errorf("Fatal error: %s", errorMsg)
+
+	// Write error state to Redis
+	if err := s.redis.WriteString("ble", "service-health", "error"); err != nil {
+		s.log.Errorf("Failed to write service-health: %v", err)
+	}
+	if err := s.redis.WriteString("ble", "service-error", errorMsg); err != nil {
+		s.log.Errorf("Failed to write service-error: %v", err)
+	}
+	if err := s.redis.Publish("ble", "service-health"); err != nil {
+		s.log.Errorf("Failed to publish service-health: %v", err)
+	}
+
+	// Block forever to prevent restart loop
+	s.log.Errorf("Blocking forever to prevent restart loop")
+	select {} // Block indefinitely
+}
+
 // StartHealthHeartbeat starts a goroutine that updates the last-update timestamp every 5 seconds
 func (s *Service) StartHealthHeartbeat() {
 	s.wg.Add(1)
