@@ -360,6 +360,11 @@ func (s *Service) handleBLEVersionMessage(msgType ble.MessageType, absSubTypeKey
 		if versionStr, ok := convertToString(value); ok {
 			s.log.Infof("Detected firmware version: %s", versionStr)
 
+			// Write version to Redis immediately (before compatibility check)
+			if err := s.redis.WriteString(KeyFirmwareVersion, "nrf-fw-version", versionStr); err != nil {
+				s.log.Errorf("Failed to update BLE version in Redis: %v", err)
+			}
+
 			// Parse version
 			fwVersion, err := ParseFirmwareVersion(versionStr)
 			if err != nil {
@@ -379,11 +384,6 @@ func (s *Service) handleBLEVersionMessage(msgType ble.MessageType, absSubTypeKey
 			}
 
 			s.log.Infof("Firmware version %s is compatible", versionStr)
-
-			// Write version to Redis
-			if err := s.redis.WriteString(KeyFirmwareVersion, "nrf-fw-version", versionStr); err != nil {
-				s.log.Errorf("Failed to update BLE version in Redis: %v", err)
-			}
 		} else {
 			s.log.Infof("Received BLE version with unexpected value type: %T", value)
 		}
