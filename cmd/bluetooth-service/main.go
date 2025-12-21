@@ -7,10 +7,10 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
+
+	ipc "github.com/librescoot/redis-ipc"
 
 	"github.com/librescoot/bluetooth-service/pkg/logger"
-	"github.com/librescoot/bluetooth-service/pkg/redis"
 	"github.com/librescoot/bluetooth-service/pkg/service"
 	"github.com/librescoot/bluetooth-service/pkg/usock"
 )
@@ -65,14 +65,17 @@ func main() {
 	log.Infof("Baud rate: %d", *baudRate)
 	log.Infof("Redis address: %s", *redisAddr)
 
-	redisClient, err := redis.New(*redisAddr, *redisPass, *redisDB)
+	ipcClient, err := ipc.New(
+		ipc.WithURL(*redisAddr),
+		ipc.WithCodec(ipc.StringCodec{}),
+	)
 	if err != nil {
 		log.Fatalf("Failed to connect to Redis: %v", err)
 	}
-	defer redisClient.Close()
+	defer ipcClient.Close()
 	log.Infof("Connected to Redis")
 
-	svc := service.New(redisClient, log)
+	svc := service.New(ipcClient, log)
 
 	usockHandler := func(payload *usock.Payload) {
 		svc.HandleUSockMessage(payload.ID, payload)
@@ -112,51 +115,7 @@ func main() {
 		log.Infof("nRF52 initialization sequence sent successfully.")
 	}
 
-	log.Debugf("Waiting briefly before sending initial state updates...")
-	time.Sleep(200 * time.Millisecond)
-
-	log.Infof("Sending initial state updates...")
-
-	// Update vehicle state
-	if err := svc.UpdateVehicleState(); err != nil {
-		log.Warnf("Warning during initial update: %v", err)
-	}
-	// Update seatbox lock state
-	if err := svc.UpdateSeatboxLock(); err != nil {
-		log.Warnf("Warning during initial update: %v", err)
-	}
-	// Update handlebar lock state
-	if err := svc.UpdateHandlebarLock(); err != nil {
-		log.Warnf("Warning during initial update: %v", err)
-	}
-	// Update mileage
-	if err := svc.UpdateMileage(); err != nil {
-		log.Warnf("Warning during initial update: %v", err)
-	}
-	// Update firmware version
-	if err := svc.UpdateFirmwareVersion(); err != nil {
-		log.Warnf("Warning during initial update: %v", err)
-	}
-	// Update battery states for both slots
-	for slot := 0; slot <= 1; slot++ {
-		if err := svc.UpdateBatteryPresentStatus(slot); err != nil {
-			log.Warnf("Warning during initial update (battery:%d): %v", slot, err)
-		}
-		if err := svc.UpdateBatteryActiveStatus(slot); err != nil {
-			log.Warnf("Warning during initial update (battery:%d): %v", slot, err)
-		}
-		if err := svc.UpdateBatteryCycleCount(slot); err != nil {
-			log.Warnf("Warning during initial update (battery:%d): %v", slot, err)
-		}
-		if err := svc.UpdateBatteryRemainingCharge(slot); err != nil {
-			log.Warnf("Warning during initial update (battery:%d): %v", slot, err)
-		}
-	}
-	// Update power management state
-	if err := svc.UpdatePowerManagementState(); err != nil {
-		log.Warnf("Warning during initial update: %v", err)
-	}
-	log.Infof("Initial state updates sent.")
+	log.Infof("Initial state loaded via StartWithSync callbacks")
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
