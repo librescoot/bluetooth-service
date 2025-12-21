@@ -58,7 +58,7 @@ func (s *Service) SubscribeToRedisChannels() {
 								s.log.Errorf("Error sending handlebar lock update triggered by Redis: %v", err)
 							}
 						default:
-							s.log.Warnf("Unhandled field '%s' for channel '%s'", field, chName)
+							s.log.Debugf("Unhandled field '%s' for channel '%s'", field, chName)
 						}
 
 					case KeyBatterySlot0:
@@ -89,7 +89,7 @@ func (s *Service) SubscribeToRedisChannels() {
 							// Silently ignore temperature-state updates
 							s.log.Debugf("Ignoring temperature-state update for battery:0")
 						default:
-							s.log.Warnf("Unhandled field '%s' for channel '%s'", field, chName)
+							s.log.Debugf("Unhandled field '%s' for channel '%s'", field, chName)
 						}
 
 					case KeyBatterySlot1:
@@ -120,7 +120,7 @@ func (s *Service) SubscribeToRedisChannels() {
 							// Silently ignore temperature-state updates
 							s.log.Debugf("Ignoring temperature-state update for battery:1")
 						default:
-							s.log.Warnf("Unhandled field '%s' for channel '%s'", field, chName)
+							s.log.Debugf("Unhandled field '%s' for channel '%s'", field, chName)
 						}
 
 					case KeyPowerManager:
@@ -129,7 +129,7 @@ func (s *Service) SubscribeToRedisChannels() {
 								s.log.Errorf("Error sending power management state update triggered by Redis: %v", err)
 							}
 						} else {
-							s.log.Warnf("Unhandled field '%s' for channel '%s'", field, chName)
+							s.log.Debugf("Unhandled field '%s' for channel '%s'", field, chName)
 						}
 
 					case KeyMileage:
@@ -138,7 +138,7 @@ func (s *Service) SubscribeToRedisChannels() {
 								s.log.Errorf("Error sending mileage update triggered by Redis: %v", err)
 							}
 						} else {
-							s.log.Warnf("Unhandled field '%s' for channel '%s'", field, chName)
+							s.log.Debugf("Unhandled field '%s' for channel '%s'", field, chName)
 						}
 
 					case KeyFirmwareVersion:
@@ -147,7 +147,7 @@ func (s *Service) SubscribeToRedisChannels() {
 								s.log.Errorf("Error sending firmware version update triggered by Redis: %v", err)
 							}
 						} else {
-							s.log.Warnf("Unhandled field '%s' for channel '%s'", field, chName)
+							s.log.Debugf("Unhandled field '%s' for channel '%s'", field, chName)
 						}
 
 					case KeyBLEPairingPin:
@@ -162,7 +162,7 @@ func (s *Service) SubscribeToRedisChannels() {
 								s.log.Debugf("Pin code set/updated notification received for channel '%s'. No action needed.", chName)
 							}
 						} else {
-							s.log.Warnf("Unhandled field '%s' for channel '%s'", field, chName)
+							s.log.Debugf("Unhandled field '%s' for channel '%s'", field, chName)
 						}
 
 					default:
