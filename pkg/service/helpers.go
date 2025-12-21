@@ -5,7 +5,6 @@ import (
 
 	"github.com/fxamacker/cbor/v2"
 	"github.com/librescoot/bluetooth-service/pkg/ble"
-	"github.com/librescoot/bluetooth-service/pkg/usock"
 )
 
 // Convert battery state string to integer
@@ -64,7 +63,7 @@ func vehicleStateToInt(state string) int {
 
 // writeUARTMessage sends a message with an integer value.
 // It now calculates the absolute subtype key.
-func writeUARTMessage(sock *usock.USOCK, messageType ble.MessageType, subType ble.SubType, value uint16) error {
+func writeUARTMessage(sock usockWriter, messageType ble.MessageType, subType ble.SubType, value uint16) error {
 	if sock == nil {
 		return fmt.Errorf("USOCK connection is not initialized")
 	}
@@ -90,7 +89,7 @@ func writeUARTMessage(sock *usock.USOCK, messageType ble.MessageType, subType bl
 
 // writeUARTMessage32 sends a message with a 32-bit integer value.
 // This is needed for values that don't fit in uint16, like mileage.
-func writeUARTMessage32(sock *usock.USOCK, messageType ble.MessageType, subType ble.SubType, value int32) error {
+func writeUARTMessage32(sock usockWriter, messageType ble.MessageType, subType ble.SubType, value int32) error {
 	if sock == nil {
 		return fmt.Errorf("USOCK connection is not initialized")
 	}
@@ -116,7 +115,7 @@ func writeUARTMessage32(sock *usock.USOCK, messageType ble.MessageType, subType 
 
 // writeUARTMessageString sends a message with a string value.
 // It now calculates the absolute subtype key.
-func writeUARTMessageString(sock *usock.USOCK, messageType ble.MessageType, subType ble.SubType, value string) error {
+func writeUARTMessageString(sock usockWriter, messageType ble.MessageType, subType ble.SubType, value string) error {
 	if sock == nil {
 		return fmt.Errorf("USOCK connection is not initialized")
 	}

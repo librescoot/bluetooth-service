@@ -11,9 +11,14 @@ import (
 	"github.com/librescoot/bluetooth-service/pkg/usock"
 )
 
+// usockWriter is an interface for writing USOCK messages (for testing)
+type usockWriter interface {
+	WriteWithFrameID(frameID byte, data []byte) error
+}
+
 // Service represents the MDB Bluetooth service
 type Service struct {
-	usock         *usock.USOCK
+	usock         usockWriter
 	ipc           *ipc.Client // Redis IPC client
 	log           *logger.Logger
 	stopCh        chan struct{}
