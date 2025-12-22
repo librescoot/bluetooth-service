@@ -25,6 +25,7 @@ var (
 	redisPass    = flag.String("redis-pass", "", "Redis password")
 	redisDB      = flag.Int("redis-db", 0, "Redis database number")
 	logLevel     = flag.Int("log-level", int(logger.LogLevelInfo), "Log level (0=none, 1=error, 2=warning, 3=info, 4=debug)")
+	showVersion  = flag.Bool("version", false, "Print version and exit")
 )
 
 // Redis keys
@@ -50,6 +51,11 @@ const (
 
 func main() {
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Printf("bluetooth-service %s\n", version)
+		return
+	}
 
 	var stdLogger *log.Logger
 	if os.Getenv("INVOCATION_ID") != "" {
