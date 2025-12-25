@@ -1,24 +1,32 @@
-# MDB Bluetooth Service
+# LibreScoot Bluetooth Service
 
 [![CC BY-NC-SA 4.0][cc-by-nc-sa-shield]][cc-by-nc-sa]
 
-The MDB Bluetooth Service acts as a communication bridge, interfacing an nRF52 with a Redis-based backend system. It facilitates the control and monitoring of vehicle components through this interface.
+The LibreScoot Bluetooth Service acts as a communication bridge between an nRF52 microcontroller and a Redis-based backend system. It facilitates control and monitoring of vehicle components through BLE connectivity, including lock/unlock commands, battery status, and mileage synchronization.
 
 ## Features
 
-- Serial communication using a custom USOCK protocol
-- Redis-based state management and command handling
-- Interface for vehicle systems (battery, locks, mileage, firmware info)
-- Handles messages between the serial device and Redis
-- Monitors Redis for commands to send to the serial device
-- Initialization sequence for the connected device (e.g., nRF52)
+- Serial communication with nRF52 using USOCK protocol over CBOR
+- Redis-based state management via redis-ipc library
+- BLE pairing management and device connectivity
+- Bidirectional message forwarding between nRF52 and Redis
+- Vehicle state synchronization (locks, battery, mileage)
+- Fault tracking and reporting via FaultSet API
+- Configurable logging levels
+- Build-time version information embedded in binary
 - Graceful shutdown on signal interrupts
+
+## Dependencies
+
+- `github.com/librescoot/redis-ipc` - Redis-based IPC library for service communication
+- `github.com/tarm/serial` - Serial port communication
+- `github.com/fxamacker/cbor/v2` - CBOR encoding/decoding for USOCK protocol
 
 ## System Architecture
 
 The service operates around a central `service` package that manages:
-- Connection to the serial device via the `usock` package
-- Connection to the Redis server via the `redis` package
+- Connection to the nRF52 via the `usock` package
+- Connection to the Redis server via the `redis-ipc` library
 - Handling incoming messages from the serial device
 - Watching for outgoing commands from Redis
 - Translating and forwarding messages/commands between the serial interface and Redis
@@ -28,41 +36,76 @@ The service operates around a central `service` package that manages:
 
 - **Main Application (`cmd/bluetooth-service`)**: Initializes connections, sets up the service, and handles startup/shutdown.
 - **Service (`pkg/service`)**: Core logic for message handling, Redis interaction, and state management.
-- **USOCK (`pkg/usock`)**: Handles the custom serial communication protocol with the microcontroller.
-- **Redis (`pkg/redis`)**: Manages the connection and interaction with the Redis instance.
+- **USOCK (`pkg/usock`)**: Handles the custom serial communication protocol with the nRF52 microcontroller.
+- **BLE (`pkg/ble`)**: BLE-specific data structures and constants.
+- **Logger (`pkg/logger`)**: Leveled logging with systemd/journald integration.
 
 ## Building and Running
 
-The project uses a Makefile for common tasks.
-
-To build the service (for ARMv6 Linux):
+To build the service:
 
 ```bash
 make build
 ```
 
-Other build targets exist (e.g., `make build-amd64`). The output binary will be placed in the `bin/` directory (e.g., `bin/bluetooth-service`).
-
-To run the service (example):
+To build for the current host platform (development):
 
 ```bash
-./bin/bluetooth-service --serial /dev/ttymxc1 --redis-addr localhost:6379
+make build-host
 ```
 
-Refer to the command-line flags for configuration options.
+The compiled binary will be available in the `bin` directory.
 
-## Configuration
+### Development
 
-The service can be configured via command-line flags:
+- `make build`: Build for ARM (default target, production)
+- `make build-arm`: Alias for `build`
+- `make build-amd64`: Build for AMD64
+- `make build-host`: Build for current host platform
+- `make dist`: Stripped ARM binary for distribution
+- `make test`: Run tests
+- `make lint`: Run golangci-lint
+- `make fmt`: Format code
+- `make deps`: Download and tidy dependencies
+- `make clean`: Remove build artifacts
 
-- `--serial`: Path to the serial device (default: `/dev/ttymxc1`)
-- `--baud`: Baud rate for serial communication (default: `115200`)
-- `--redis-addr`: Address of the Redis server (default: `localhost:6379`)
-- `--redis-pass`: Password for the Redis server (default: `""`)
+## Usage
+
+Run the service with default settings:
+
+```bash
+./bin/bluetooth-service
+```
+
+### Command Line Options
+
+- `--version`: Print version information and exit
+- `--serial`: Serial device path (default: `/dev/ttymxc1`)
+- `--baud`: Serial baud rate (default: `115200`)
+- `--redis-addr`: Redis server address (default: `localhost:6379`)
+- `--redis-pass`: Redis password (default: empty)
 - `--redis-db`: Redis database number (default: `0`)
-- `--log-level`: Log level (default: `3`, 0=none, 1=error, 2=warning, 3=info, 4=debug)
+- `--log-level`: Log level (0=NONE, 1=ERROR, 2=WARN, 3=INFO, 4=DEBUG, default: 3)
 
-Redis keys used for state and commands are defined as constants within the `main` package.
+## Logging
+
+The service utilizes a leveled logging system with systemd/journald integration. When running under systemd, timestamps are omitted to avoid duplication with journald's timestamps.
+
+Log levels:
+- **0=NONE**: No logs
+- **1=ERROR**: Only error messages
+- **2=WARN**: Warning messages and errors
+- **3=INFO**: Informational messages, warnings, and errors (default)
+- **4=DEBUG**: Detailed debug messages and all above
+
+## Fault Tracking
+
+The service reports faults via the FaultSet API to the `ble:fault` Redis key:
+
+| Code | Description |
+|------|-------------|
+| 1    | Serial port communication error |
+| 2    | nRF52 initialization error |
 
 ## License
 
