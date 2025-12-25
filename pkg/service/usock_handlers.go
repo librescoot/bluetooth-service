@@ -14,12 +14,6 @@ import (
 
 // HandleUSockMessage handles incoming USOCK messages
 func (s *Service) HandleUSockMessage(frameID byte, payload *usock.Payload) {
-	// Clear error status on first successful frame reception
-	if !s.hasSeenFrames {
-		s.hasSeenFrames = true
-		s.ClearBLEError()
-	}
-
 	var msgData map[uint16]interface{}
 	err := cbor.Unmarshal(payload.Data, &msgData)
 	if err != nil {

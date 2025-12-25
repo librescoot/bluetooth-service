@@ -1,9 +1,7 @@
 package service
 
 import (
-	"fmt"
 	"sync"
-	"time"
 
 	ipc "github.com/librescoot/redis-ipc"
 
@@ -18,31 +16,54 @@ type usockWriter interface {
 
 // Service represents the MDB Bluetooth service
 type Service struct {
-	usock         usockWriter
-	ipc           *ipc.Client // Redis IPC client
-	log           *logger.Logger
-	stopCh        chan struct{}
-	wg            sync.WaitGroup
-	healthStatus  string // "connected", "disconnected", or "error"
-	healthError   string // Error message when status is "error"
-	healthMutex   sync.Mutex
-	hasSeenFrames bool // Track if we've successfully received frames
-
+	usock  usockWriter
+	ipc    *ipc.Client // Redis IPC client
+	log    *logger.Logger
+	stopCh chan struct{}
+	wg     sync.WaitGroup
+	faults *ipc.FaultSet // Fault tracking
 }
+
+// Fault codes for bluetooth service
+const (
+	FaultSerialPort = 1 // Serial port communication error
+	FaultNRFInit    = 2 // nRF52 initialization error
+)
 
 // New creates a new Service instance
 func New(ipcClient *ipc.Client, log *logger.Logger) *Service {
 	return &Service{
-		ipc:          ipcClient,
-		log:          log,
-		stopCh:       make(chan struct{}),
-		healthStatus: "disconnected", // Start in disconnected state
+		ipc:    ipcClient,
+		log:    log,
+		stopCh: make(chan struct{}),
+		faults: ipcClient.NewFaultSet("ble:fault", "ble", "fault"),
 	}
 }
 
 // SetUSock sets the USOCK connection for the service
 func (s *Service) SetUSock(sock *usock.USOCK) {
 	s.usock = sock
+}
+
+// SetFault adds a fault code to the fault set
+func (s *Service) SetFault(code int) {
+	if err := s.faults.Add(code); err != nil {
+		s.log.Errorf("Failed to add fault %d: %v", code, err)
+	}
+}
+
+// ClearFault removes a fault code from the fault set
+func (s *Service) ClearFault(code int) {
+	if err := s.faults.Remove(code); err != nil {
+		s.log.Errorf("Failed to remove fault %d: %v", code, err)
+	}
+}
+
+// ClearAllFaults removes all fault codes
+func (s *Service) ClearAllFaults() {
+	if err := s.faults.Clear(); err != nil {
+		s.log.Errorf("Failed to clear faults: %v", err)
+	}
 }
 
 // Stop stops the service
@@ -55,53 +76,6 @@ func (s *Service) Wait() {
 	s.wg.Wait()
 }
 
-// SetBLEError sets the BLE service health to error and writes to Redis
-func (s *Service) SetBLEError(errorMsg string) {
-	s.healthMutex.Lock()
-	defer s.healthMutex.Unlock()
-
-	// Only update if the error status actually changed
-	if s.healthStatus == "error" && s.healthError == errorMsg {
-		return
-	}
-
-	s.healthStatus = "error"
-	s.healthError = errorMsg
-
-	s.log.Warnf("Setting BLE service health to error: %s", errorMsg)
-
-	// Write to Redis
-	if err := s.ipc.Hash("ble").SetMany(map[string]any{
-		"service-health": "error",
-		"service-error":  errorMsg,
-	}); err != nil {
-		s.log.Errorf("Failed to write BLE service health to Redis: %v", err)
-	}
-}
-
-// ClearBLEError clears the BLE service health error status
-func (s *Service) ClearBLEError() {
-	s.healthMutex.Lock()
-	defer s.healthMutex.Unlock()
-
-	// Only update if we're transitioning from error state
-	if s.healthStatus != "error" {
-		return
-	}
-
-	s.log.Infof("Clearing BLE service health error")
-
-	// Restore to normal (non-error) state
-	s.healthStatus = "ok"
-	s.healthError = ""
-
-	if err := s.ipc.Hash("ble").Set("service-health", "ok"); err != nil {
-		s.log.Errorf("Failed to write BLE service-health to Redis: %v", err)
-	}
-	if err := s.ipc.Hash("ble").Delete("service-error"); err != nil {
-		s.log.Errorf("Failed to delete BLE service-error field: %v", err)
-	}
-}
 
 // setErrorAndSleep sets an error state in Redis and blocks forever to prevent restart loops
 func (s *Service) setErrorAndSleep(errorMsg string) {
@@ -120,40 +94,3 @@ func (s *Service) setErrorAndSleep(errorMsg string) {
 	select {} // Block indefinitely
 }
 
-// StartHealthHeartbeat starts a goroutine that updates the last-update timestamp every 5 seconds
-func (s *Service) StartHealthHeartbeat() {
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-
-		ticker := time.NewTicker(5 * time.Second)
-		defer ticker.Stop()
-
-		s.log.Debugf("Starting BLE health heartbeat")
-
-		// Initialize service-health to "ok" when heartbeat starts
-		s.healthMutex.Lock()
-		if s.healthStatus != "error" {
-			s.healthStatus = "ok"
-			if err := s.ipc.Hash("ble").Set("service-health", "ok"); err != nil {
-				s.log.Errorf("Failed to initialize BLE service-health: %v", err)
-			}
-		}
-		s.healthMutex.Unlock()
-
-		for {
-			select {
-			case <-s.stopCh:
-				s.log.Debugf("Stopping BLE health heartbeat")
-				return
-			case <-ticker.C:
-				timestamp := time.Now().Unix()
-				if err := s.ipc.Hash("ble").Set("last-update", fmt.Sprintf("%d", timestamp)); err != nil {
-					s.log.Errorf("Failed to update BLE heartbeat timestamp: %v", err)
-				} else {
-					s.log.Debugf("Updated BLE heartbeat timestamp: %d", timestamp)
-				}
-			}
-		}
-	}()
-}
