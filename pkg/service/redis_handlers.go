@@ -71,12 +71,6 @@ func (s *Service) SubscribeToRedisChannels() {
 							if err := s.UpdateBatteryPresentStatus(0, value); err != nil {
 								s.log.Errorf("Error sending battery:0 presence update triggered by Redis: %v", err)
 							}
-							// Fetch and update cycle count when battery presence changes
-							if cycleCount, err := s.ipc.HGet(KeyBatterySlot0, "cycle-count"); err == nil {
-								if err := s.UpdateBatteryCycleCount(0, cycleCount); err != nil {
-									s.log.Errorf("Error sending battery:0 cycle count update triggered by Redis: %v", err)
-								}
-							}
 						case "charge":
 							if err := s.UpdateBatteryRemainingCharge(0, value); err != nil {
 								s.log.Errorf("Error sending battery:0 charge update triggered by Redis: %v", err)
@@ -101,12 +95,6 @@ func (s *Service) SubscribeToRedisChannels() {
 						case "present":
 							if err := s.UpdateBatteryPresentStatus(1, value); err != nil {
 								s.log.Errorf("Error sending battery:1 presence update triggered by Redis: %v", err)
-							}
-							// Fetch and update cycle count when battery presence changes
-							if cycleCount, err := s.ipc.HGet(KeyBatterySlot1, "cycle-count"); err == nil {
-								if err := s.UpdateBatteryCycleCount(1, cycleCount); err != nil {
-									s.log.Errorf("Error sending battery:1 cycle count update triggered by Redis: %v", err)
-								}
 							}
 						case "charge":
 							if err := s.UpdateBatteryRemainingCharge(1, value); err != nil {
