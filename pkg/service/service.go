@@ -40,6 +40,11 @@ type Service struct {
 	firmwareUpdater firmwareUpdaterInterface
 	autoUpdate      bool
 	mu              sync.RWMutex
+
+	// Subscription management
+	subStopCh chan struct{}
+	subWg     sync.WaitGroup
+	subMu     sync.Mutex
 }
 
 // Fault codes for bluetooth service
@@ -165,12 +170,31 @@ func (s *Service) ClearAllFaults() {
 
 // Stop stops the service
 func (s *Service) Stop() {
+	s.StopSubscriptions()
 	close(s.stopCh)
 }
 
 // Wait waits for all service goroutines to finish
 func (s *Service) Wait() {
 	s.wg.Wait()
+}
+
+// StopSubscriptions stops all Redis subscriptions
+func (s *Service) StopSubscriptions() {
+	s.subMu.Lock()
+	if s.subStopCh != nil {
+		close(s.subStopCh)
+		s.subStopCh = nil
+	}
+	s.subMu.Unlock()
+	s.subWg.Wait()
+	s.log.Infof("Redis subscriptions stopped")
+}
+
+// RestartSubscriptions stops existing subscriptions and starts new ones
+func (s *Service) RestartSubscriptions() {
+	s.StopSubscriptions()
+	s.SubscribeToRedisChannels()
 }
 
 

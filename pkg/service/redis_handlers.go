@@ -11,6 +11,12 @@ import (
 
 // SubscribeToRedisChannels subscribes to Redis channels for characteristic writes
 func (s *Service) SubscribeToRedisChannels() {
+	// Create a new stop channel for subscriptions
+	s.subMu.Lock()
+	s.subStopCh = make(chan struct{})
+	stopCh := s.subStopCh
+	s.subMu.Unlock()
+
 	// Define channels based on observed subscriptions
 	channels := []string{
 		KeyVehicle,         // "vehicle"
@@ -33,9 +39,9 @@ func (s *Service) SubscribeToRedisChannels() {
 	}
 
 	for _, channel := range uniqueChannels {
-		s.wg.Add(1)
+		s.subWg.Add(1)
 		go func(chName string) {
-			defer s.wg.Done()
+			defer s.subWg.Done()
 
 			watcher := s.ipc.NewHashWatcher(chName)
 
@@ -163,7 +169,7 @@ func (s *Service) SubscribeToRedisChannels() {
 				watcher.StartWithSync() // Fetches initial state and calls handlers
 				defer watcher.Stop()
 
-				<-s.stopCh
+				<-stopCh
 				s.log.Debugf("Stopping subscription for channel %s", chName)
 		}(channel) // Pass channel name to the goroutine
 	}

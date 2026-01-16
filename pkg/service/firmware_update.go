@@ -223,17 +223,21 @@ func (fu *FirmwareUpdater) PerformUpdate(firmwarePath string) error {
 	fu.log.Infof("Starting firmware update with %s", firmwarePath)
 	fu.setStatus("updating")
 
-	// Step 1: Close serial connection
+	// Step 1: Stop subscriptions (they will be restarted after reconnect)
+	fu.log.Infof("Stopping Redis subscriptions...")
+	fu.service.StopSubscriptions()
+
+	// Step 2: Close serial connection
 	fu.log.Infof("Closing serial connection...")
 	if err := fu.service.CloseUSock(); err != nil {
 		fu.log.Errorf("Failed to close serial connection: %v", err)
 		// Continue anyway, the update might still work
 	}
 
-	// Step 2: Wait for port release
+	// Step 3: Wait for port release
 	time.Sleep(500 * time.Millisecond)
 
-	// Step 3: Run nrfupdate.py to enter DFU mode
+	// Step 4: Run nrfupdate.py to enter DFU mode
 	fu.log.Infof("Entering DFU mode...")
 	if err := fu.enterDFUMode(); err != nil {
 		fu.setStatus("failed:nrfupdate")
@@ -242,7 +246,7 @@ func (fu *FirmwareUpdater) PerformUpdate(firmwarePath string) error {
 		return fmt.Errorf("failed to enter DFU mode: %w", err)
 	}
 
-	// Step 4: Run Nordic DFU tool
+	// Step 5: Run Nordic DFU tool
 	fu.log.Infof("Running Nordic DFU...")
 	if err := fu.runNordicDFU(firmwarePath); err != nil {
 		fu.setStatus("failed:dfu")
@@ -251,17 +255,21 @@ func (fu *FirmwareUpdater) PerformUpdate(firmwarePath string) error {
 		return fmt.Errorf("DFU failed: %w", err)
 	}
 
-	// Step 5: Wait for nRF to reboot
+	// Step 6: Wait for nRF to reboot
 	fu.log.Infof("Waiting for nRF to reboot...")
-	time.Sleep(2 * time.Second)
+	time.Sleep(15 * time.Second)
 
-	// Step 6: Reconnect
+	// Step 7: Reconnect
 	fu.log.Infof("Reconnecting to nRF...")
 	if err := fu.service.ReconnectUSock(); err != nil {
 		fu.setStatus("failed:reconnect")
 		fu.service.SetFault(FaultFirmwareUpdate)
 		return fmt.Errorf("failed to reconnect after update: %w", err)
 	}
+
+	// Step 8: Restart subscriptions (this will sync state via StartWithSync)
+	fu.log.Infof("Restarting Redis subscriptions...")
+	fu.service.SubscribeToRedisChannels()
 
 	fu.service.ClearFault(FaultFirmwareUpdate)
 	fu.setStatus("success")
@@ -355,5 +363,7 @@ func (fu *FirmwareUpdater) attemptReconnect() {
 		fu.log.Errorf("Failed to reconnect after failed update: %v", err)
 	} else {
 		fu.log.Infof("Reconnected successfully after failed update")
+		// Restart subscriptions to sync state
+		fu.service.SubscribeToRedisChannels()
 	}
 }
