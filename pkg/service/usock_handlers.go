@@ -367,6 +367,21 @@ func (s *Service) handleBLEVersionMessage(msgType ble.MessageType, absSubTypeKey
 			}
 
 			s.log.Infof("Firmware version %s is compatible", versionStr)
+
+			// Trigger firmware update check if auto-update is enabled
+			if s.GetAutoUpdate() {
+				fu := s.GetFirmwareUpdater()
+				if fu != nil {
+					go func() {
+						updated, err := fu.CheckAndUpdate(versionStr)
+						if err != nil {
+							s.log.Errorf("Firmware update check failed: %v", err)
+						} else if updated {
+							s.log.Infof("Firmware was updated successfully")
+						}
+					}()
+				}
+			}
 		} else {
 			s.log.Infof("Received BLE version with unexpected value type: %T", value)
 		}

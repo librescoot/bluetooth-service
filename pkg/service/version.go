@@ -129,3 +129,46 @@ func (v *FirmwareVersion) String() string {
 	}
 	return s
 }
+
+// Compare compares this version with another version.
+// Returns -1 if v < other, 0 if v == other, 1 if v > other.
+// Comparison order: Major > Minor > Patch > Build
+func (v *FirmwareVersion) Compare(other *FirmwareVersion) int {
+	if other == nil {
+		return 1
+	}
+
+	// Compare major version
+	if v.Major < other.Major {
+		return -1
+	}
+	if v.Major > other.Major {
+		return 1
+	}
+
+	// Compare minor version
+	if v.Minor < other.Minor {
+		return -1
+	}
+	if v.Minor > other.Minor {
+		return 1
+	}
+
+	// Compare patch version
+	if v.Patch < other.Patch {
+		return -1
+	}
+	if v.Patch > other.Patch {
+		return 1
+	}
+
+	// Compare build number
+	if v.Build < other.Build {
+		return -1
+	}
+	if v.Build > other.Build {
+		return 1
+	}
+
+	return 0
+}

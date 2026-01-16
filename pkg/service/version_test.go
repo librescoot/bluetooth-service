@@ -306,3 +306,105 @@ func stringContains(s, substr string) bool {
 	}
 	return false
 }
+
+func TestFirmwareVersion_Compare(t *testing.T) {
+	tests := []struct {
+		name  string
+		v1    FirmwareVersion
+		v2    *FirmwareVersion
+		want  int
+	}{
+		{
+			name: "equal versions",
+			v1:   FirmwareVersion{Major: 1, Minor: 12, Patch: 0},
+			v2:   &FirmwareVersion{Major: 1, Minor: 12, Patch: 0},
+			want: 0,
+		},
+		{
+			name: "v1 major greater",
+			v1:   FirmwareVersion{Major: 2, Minor: 0, Patch: 0},
+			v2:   &FirmwareVersion{Major: 1, Minor: 12, Patch: 5},
+			want: 1,
+		},
+		{
+			name: "v1 major less",
+			v1:   FirmwareVersion{Major: 1, Minor: 12, Patch: 5},
+			v2:   &FirmwareVersion{Major: 2, Minor: 0, Patch: 0},
+			want: -1,
+		},
+		{
+			name: "v1 minor greater",
+			v1:   FirmwareVersion{Major: 1, Minor: 13, Patch: 0},
+			v2:   &FirmwareVersion{Major: 1, Minor: 12, Patch: 5},
+			want: 1,
+		},
+		{
+			name: "v1 minor less",
+			v1:   FirmwareVersion{Major: 1, Minor: 11, Patch: 0},
+			v2:   &FirmwareVersion{Major: 1, Minor: 12, Patch: 0},
+			want: -1,
+		},
+		{
+			name: "v1 patch greater",
+			v1:   FirmwareVersion{Major: 1, Minor: 12, Patch: 5},
+			v2:   &FirmwareVersion{Major: 1, Minor: 12, Patch: 3},
+			want: 1,
+		},
+		{
+			name: "v1 patch less",
+			v1:   FirmwareVersion{Major: 1, Minor: 12, Patch: 3},
+			v2:   &FirmwareVersion{Major: 1, Minor: 12, Patch: 5},
+			want: -1,
+		},
+		{
+			name: "v1 build greater",
+			v1:   FirmwareVersion{Major: 2, Minor: 3, Patch: 4, Build: 2},
+			v2:   &FirmwareVersion{Major: 2, Minor: 3, Patch: 4, Build: 1},
+			want: 1,
+		},
+		{
+			name: "v1 build less",
+			v1:   FirmwareVersion{Major: 2, Minor: 3, Patch: 4, Build: 1},
+			v2:   &FirmwareVersion{Major: 2, Minor: 3, Patch: 4, Build: 2},
+			want: -1,
+		},
+		{
+			name: "equal with build",
+			v1:   FirmwareVersion{Major: 2, Minor: 3, Patch: 4, Build: 2, Suffix: "ls"},
+			v2:   &FirmwareVersion{Major: 2, Minor: 3, Patch: 4, Build: 2, Suffix: "ls"},
+			want: 0,
+		},
+		{
+			name: "suffix ignored in comparison",
+			v1:   FirmwareVersion{Major: 2, Minor: 3, Patch: 4, Build: 2, Suffix: "ls"},
+			v2:   &FirmwareVersion{Major: 2, Minor: 3, Patch: 4, Build: 2, Suffix: "beta"},
+			want: 0,
+		},
+		{
+			name: "compare with nil",
+			v1:   FirmwareVersion{Major: 1, Minor: 0, Patch: 0},
+			v2:   nil,
+			want: 1,
+		},
+		{
+			name: "version with zero build vs positive build",
+			v1:   FirmwareVersion{Major: 2, Minor: 3, Patch: 4, Build: 0},
+			v2:   &FirmwareVersion{Major: 2, Minor: 3, Patch: 4, Build: 1},
+			want: -1,
+		},
+		{
+			name: "realistic example: v2.3.4-2-ls > v2.3.4-1-ls",
+			v1:   FirmwareVersion{Major: 2, Minor: 3, Patch: 4, Build: 2, Suffix: "ls"},
+			v2:   &FirmwareVersion{Major: 2, Minor: 3, Patch: 4, Build: 1, Suffix: "ls"},
+			want: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.v1.Compare(tt.v2); got != tt.want {
+				t.Errorf("FirmwareVersion.Compare() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

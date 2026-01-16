@@ -32,6 +32,10 @@ func (m *mockUSOCK) WriteWithFrameID(frameID byte, data []byte) error {
 	return nil
 }
 
+func (m *mockUSOCK) Close() error {
+	return nil
+}
+
 func (m *mockUSOCK) lastMessage() *mockMessage {
 	if len(m.messages) == 0 {
 		return nil

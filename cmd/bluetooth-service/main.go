@@ -26,6 +26,8 @@ var (
 	redisDB      = flag.Int("redis-db", 0, "Redis database number")
 	logLevel     = flag.Int("log-level", int(logger.LogLevelInfo), "Log level (0=none, 1=error, 2=warning, 3=info, 4=debug)")
 	showVersion  = flag.Bool("version", false, "Print version and exit")
+	firmwareDir  = flag.String("firmware-dir", service.DefaultFirmwareDir, "Directory containing firmware files")
+	autoUpdate   = flag.Bool("auto-update", true, "Automatically update firmware on startup if newer version available")
 )
 
 // Redis keys
@@ -91,6 +93,21 @@ func main() {
 		log.Fatalf("Failed to connect to nRF52 via USOCK: %v", err)
 	}
 	svc.SetUSock(sock)
+
+	// Store serial config for firmware update reconnection
+	svc.SetSerialConfig(*serialDevice, *baudRate, usockHandler)
+	svc.SetAutoUpdate(*autoUpdate)
+
+	// Create and configure firmware updater
+	fwConfig := service.FirmwareUpdateConfig{
+		FirmwareDir:     *firmwareDir,
+		NRFUpdateScript: service.DefaultNRFUpdateScript,
+		SerialDevice:    *serialDevice,
+	}
+	fwUpdater := service.NewFirmwareUpdater(fwConfig, log, ipcClient, svc)
+	svc.SetFirmwareUpdater(fwUpdater)
+
+	log.Infof("Firmware update: auto-update=%v, firmware-dir=%s", *autoUpdate, *firmwareDir)
 
 	sock.SetErrorHandler(func(err error) {
 		log.Errorf("Serial communication error: %v", err)

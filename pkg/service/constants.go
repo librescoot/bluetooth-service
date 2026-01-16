@@ -18,6 +18,12 @@ const (
 	KeyBLECommandList = "scooter:bluetooth"
 )
 
+// Firmware update paths
+const (
+	DefaultFirmwareDir      = "/usr/share/nrf-fw"
+	DefaultNRFUpdateScript  = "/usr/share/nrf-fw/nrfupdate.py"
+)
+
 // Battery state constants
 const (
 	BatteryStateUnknown = 0

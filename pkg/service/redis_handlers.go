@@ -178,6 +178,46 @@ func (s *Service) WatchRedisCommands() {
 	handler := ipc.HandleRequests(s.ipc, KeyBLECommandList, func(command string) error {
 		s.log.Infof("Received command from Redis list %s: %s", KeyBLECommandList, command)
 
+		// Handle firmware-update command separately
+		if command == "firmware-update" {
+			s.log.Infof("Received firmware-update command")
+			fu := s.GetFirmwareUpdater()
+			if fu == nil {
+				s.log.Errorf("Firmware updater not configured")
+				return nil
+			}
+
+			// Get the FirmwareUpdater concrete type to access PerformUpdate
+			updater, ok := fu.(*FirmwareUpdater)
+			if !ok {
+				s.log.Errorf("Firmware updater has unexpected type")
+				return nil
+			}
+
+			// Get latest firmware
+			latestVersion, firmwarePath, err := updater.GetLatestFirmware()
+			if err != nil {
+				s.log.Errorf("Failed to get latest firmware: %v", err)
+				return nil
+			}
+			if latestVersion == nil {
+				s.log.Infof("No firmware files found for force update")
+				return nil
+			}
+
+			s.log.Infof("Force updating to firmware %s", latestVersion)
+
+			// Perform update in goroutine with timeout
+			go func() {
+				if err := updater.PerformUpdate(firmwarePath); err != nil {
+					s.log.Errorf("Force firmware update failed: %v", err)
+				} else {
+					s.log.Infof("Force firmware update completed successfully")
+				}
+			}()
+			return nil
+		}
+
 		var msgType ble.MessageType
 		var subType ble.SubType
 		var valueInt uint16 = 0
