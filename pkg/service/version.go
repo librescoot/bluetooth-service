@@ -13,15 +13,18 @@ const (
 	MinPatch = 0
 )
 
-// FirmwareVersion represents a semantic version number
+// FirmwareVersion represents a semantic version number with optional build and suffix
 type FirmwareVersion struct {
-	Major int
-	Minor int
-	Patch int
-	Raw   string
+	Major  int
+	Minor  int
+	Patch  int
+	Build  int    // Optional build number (e.g., -1 in v2.0.0-1-ls)
+	Suffix string // Optional suffix (e.g., "ls" in v2.0.0-1-ls)
+	Raw    string
 }
 
-// ParseFirmwareVersion parses a version string like "v1.12.0" or "1.12.0"
+// ParseFirmwareVersion parses a version string like "v1.12.0", "1.12.0", or extended
+// formats like "v2.0.0-1-ls" (with optional build number and suffix)
 func ParseFirmwareVersion(versionStr string) (*FirmwareVersion, error) {
 	if versionStr == "" {
 		return nil, fmt.Errorf("version string is empty")
@@ -51,17 +54,45 @@ func ParseFirmwareVersion(versionStr string) (*FirmwareVersion, error) {
 		return nil, fmt.Errorf("invalid minor version: %v", err)
 	}
 
-	// Parse patch version
-	patch, err := strconv.Atoi(parts[2])
+	// Parse patch and optional build/suffix (e.g., "0-1-ls" or "0-ls" or "0-1" or "0")
+	patchParts := strings.Split(parts[2], "-")
+
+	// Parse patch version (first part is always the patch number)
+	patch, err := strconv.Atoi(patchParts[0])
 	if err != nil {
 		return nil, fmt.Errorf("invalid patch version: %v", err)
 	}
 
+	var build int
+	var suffix string
+
+	// Parse optional build number and suffix
+	for i := 1; i < len(patchParts); i++ {
+		part := patchParts[i]
+		if part == "" {
+			continue
+		}
+
+		// Try to parse as build number (numeric)
+		if num, err := strconv.Atoi(part); err == nil && build == 0 {
+			build = num
+		} else {
+			// Non-numeric part is the suffix (append if multiple)
+			if suffix == "" {
+				suffix = part
+			} else {
+				suffix = suffix + "-" + part
+			}
+		}
+	}
+
 	return &FirmwareVersion{
-		Major: major,
-		Minor: minor,
-		Patch: patch,
-		Raw:   raw,
+		Major:  major,
+		Minor:  minor,
+		Patch:  patch,
+		Build:  build,
+		Suffix: suffix,
+		Raw:    raw,
 	}, nil
 }
 
@@ -89,5 +120,12 @@ func (v *FirmwareVersion) IsCompatible() bool {
 
 // String returns a string representation of the version
 func (v *FirmwareVersion) String() string {
-	return fmt.Sprintf("v%d.%d.%d", v.Major, v.Minor, v.Patch)
+	s := fmt.Sprintf("v%d.%d.%d", v.Major, v.Minor, v.Patch)
+	if v.Build > 0 {
+		s += fmt.Sprintf("-%d", v.Build)
+	}
+	if v.Suffix != "" {
+		s += "-" + v.Suffix
+	}
+	return s
 }

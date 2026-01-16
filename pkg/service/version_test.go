@@ -11,6 +11,8 @@ func TestParseFirmwareVersion(t *testing.T) {
 		wantMajor   int
 		wantMinor   int
 		wantPatch   int
+		wantBuild   int
+		wantSuffix  string
 		wantErr     bool
 		errContains string
 	}{
@@ -45,6 +47,56 @@ func TestParseFirmwareVersion(t *testing.T) {
 			wantMinor: 12,
 			wantPatch: 5,
 			wantErr:   false,
+		},
+		{
+			name:       "version with build number",
+			input:      "v2.0.0-1",
+			wantMajor:  2,
+			wantMinor:  0,
+			wantPatch:  0,
+			wantBuild:  1,
+			wantSuffix: "",
+			wantErr:    false,
+		},
+		{
+			name:       "version with suffix only",
+			input:      "v2.0.0-ls",
+			wantMajor:  2,
+			wantMinor:  0,
+			wantPatch:  0,
+			wantBuild:  0,
+			wantSuffix: "ls",
+			wantErr:    false,
+		},
+		{
+			name:       "version with build and suffix",
+			input:      "v2.0.0-1-ls",
+			wantMajor:  2,
+			wantMinor:  0,
+			wantPatch:  0,
+			wantBuild:  1,
+			wantSuffix: "ls",
+			wantErr:    false,
+		},
+		{
+			name:       "version with higher build number",
+			input:      "v1.12.3-42-ls",
+			wantMajor:  1,
+			wantMinor:  12,
+			wantPatch:  3,
+			wantBuild:  42,
+			wantSuffix: "ls",
+			wantErr:    false,
+		},
+		{
+			name:       "version with multi-part suffix",
+			input:      "v2.0.0-1-ls-beta",
+			wantMajor:  2,
+			wantMinor:  0,
+			wantPatch:  0,
+			wantBuild:  1,
+			wantSuffix: "ls-beta",
+			wantErr:    false,
 		},
 		{
 			name:        "empty string",
@@ -112,6 +164,12 @@ func TestParseFirmwareVersion(t *testing.T) {
 			}
 			if got.Patch != tt.wantPatch {
 				t.Errorf("ParseFirmwareVersion() Patch = %v, want %v", got.Patch, tt.wantPatch)
+			}
+			if got.Build != tt.wantBuild {
+				t.Errorf("ParseFirmwareVersion() Build = %v, want %v", got.Build, tt.wantBuild)
+			}
+			if got.Suffix != tt.wantSuffix {
+				t.Errorf("ParseFirmwareVersion() Suffix = %v, want %v", got.Suffix, tt.wantSuffix)
 			}
 			if got.Raw != tt.input {
 				t.Errorf("ParseFirmwareVersion() Raw = %v, want %v", got.Raw, tt.input)
@@ -203,6 +261,26 @@ func TestFirmwareVersion_String(t *testing.T) {
 			name:    "zero version",
 			version: FirmwareVersion{Major: 0, Minor: 0, Patch: 0},
 			want:    "v0.0.0",
+		},
+		{
+			name:    "version with build number",
+			version: FirmwareVersion{Major: 2, Minor: 0, Patch: 0, Build: 1},
+			want:    "v2.0.0-1",
+		},
+		{
+			name:    "version with suffix only",
+			version: FirmwareVersion{Major: 2, Minor: 0, Patch: 0, Suffix: "ls"},
+			want:    "v2.0.0-ls",
+		},
+		{
+			name:    "version with build and suffix",
+			version: FirmwareVersion{Major: 2, Minor: 0, Patch: 0, Build: 1, Suffix: "ls"},
+			want:    "v2.0.0-1-ls",
+		},
+		{
+			name:    "version with multi-part suffix",
+			version: FirmwareVersion{Major: 1, Minor: 12, Patch: 3, Build: 42, Suffix: "ls-beta"},
+			want:    "v1.12.3-42-ls-beta",
 		},
 	}
 
