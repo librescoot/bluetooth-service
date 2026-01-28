@@ -8,8 +8,8 @@ github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f h1:lO4WD4F/r
 github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f/go.mod h1:cuUVRXasLTGF7a8hSLbxyZXjz+1KgoB3wDUb6vlszIc=
 github.com/fxamacker/cbor/v2 v2.8.0 h1:fFtUGXUzXPHTIUdne5+zzMPTfffl3RD5qYnkY40vtxU=
 github.com/fxamacker/cbor/v2 v2.8.0/go.mod h1:vM4b+DJCtHn+zz7h3FFp/hDAI9WNWCsZj23V5ytsSxQ=
-github.com/librescoot/redis-ipc v0.9.0 h1:zQ0brmDqMVExIDBwXM+Z+ki/ZsrXkXRBz5xCkjP3eQk=
-github.com/librescoot/redis-ipc v0.9.0/go.mod h1:S6CD2Na6Adn4Fs3bsMoPWc3dYi80jGx/lnaTDLjmC+g=
+github.com/librescoot/redis-ipc v0.10.0 h1:rVnu0qxWlejGzvs9YkBSlXroaytAOuHWPXcy7fM3ZUw=
+github.com/librescoot/redis-ipc v0.10.0/go.mod h1:S6CD2Na6Adn4Fs3bsMoPWc3dYi80jGx/lnaTDLjmC+g=
 github.com/redis/go-redis/v9 v9.7.0 h1:HhLSs+B6O021gwzl+locl0zEDnyNkxMtf/Z3NNBMa9E=
 github.com/redis/go-redis/v9 v9.7.0/go.mod h1:f6zhXITC7JUJIlPEiBOTXxJgPLdZcA93GewI7inzyWw=
 github.com/tarm/serial v0.0.0-20180830185346-98f6abe2eb07 h1:UyzmZLoiDWMRywV4DUYb9Fbt8uiOSooupjTq10vpvnU=
