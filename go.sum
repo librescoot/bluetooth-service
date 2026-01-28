@@ -10,6 +10,8 @@ github.com/fxamacker/cbor/v2 v2.8.0 h1:fFtUGXUzXPHTIUdne5+zzMPTfffl3RD5qYnkY40vt
 github.com/fxamacker/cbor/v2 v2.8.0/go.mod h1:vM4b+DJCtHn+zz7h3FFp/hDAI9WNWCsZj23V5ytsSxQ=
 github.com/librescoot/redis-ipc v0.10.0 h1:rVnu0qxWlejGzvs9YkBSlXroaytAOuHWPXcy7fM3ZUw=
 github.com/librescoot/redis-ipc v0.10.0/go.mod h1:S6CD2Na6Adn4Fs3bsMoPWc3dYi80jGx/lnaTDLjmC+g=
+github.com/librescoot/redis-ipc v0.10.1 h1:DRmZEQiFucmN5c+NiORrjTDH4cE5xRyYlBZPmoNksWQ=
+github.com/librescoot/redis-ipc v0.10.1/go.mod h1:4mRG3+cC+llhsjwyRvNT5bF+bsn0ueaKFf70eqq0IzQ=
 github.com/redis/go-redis/v9 v9.7.0 h1:HhLSs+B6O021gwzl+locl0zEDnyNkxMtf/Z3NNBMa9E=
 github.com/redis/go-redis/v9 v9.7.0/go.mod h1:f6zhXITC7JUJIlPEiBOTXxJgPLdZcA93GewI7inzyWw=
 github.com/redis/go-redis/v9 v9.7.3 h1:YpPyAayJV+XErNsatSElgRZZVCwXX9QzkKYNvO7x0wM=
