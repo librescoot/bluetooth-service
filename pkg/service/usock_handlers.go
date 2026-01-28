@@ -17,8 +17,7 @@ func (s *Service) HandleUSockMessage(frameID byte, payload *usock.Payload) {
 	var msgData map[uint16]interface{}
 	err := cbor.Unmarshal(payload.Data, &msgData)
 	if err != nil {
-		s.log.Errorf("Failed to decode CBOR message: %v", err)
-		s.log.Debugf("Raw payload: %x", payload.Data)
+		s.log.Errorf("Failed to decode CBOR message: %v (raw: %x)", err, payload.Data)
 		return
 	}
 
