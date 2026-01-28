@@ -319,9 +319,6 @@ func (u *USOCK) processByte(b byte) {
 		u.buffer = append(u.buffer, b)
 		u.state = StateHeaderCRC1
 
-		// Calculate header CRC over the entire header at once
-		u.frame.HeaderCRC = calculateCRC16(u.buffer, 0)
-
 		// Validate payload length
 		if u.frame.PayloadLen > MaxPayloadLength {
 			u.log.Debugf("RX Error: Invalid payload length: %d (max: %d)",
@@ -356,8 +353,6 @@ func (u *USOCK) processByte(b byte) {
 		// Check if we've received the entire payload
 		if uint16(len(u.frame.Payload)) >= u.frame.PayloadLen {
 			u.state = StatePayloadCRC1
-			// Calculate payload CRC over the entire payload at once
-			u.frame.PayloadCRC = calculateCRC16(u.buffer, 0)
 		}
 	case StatePayloadCRC1:
 		u.frame.PayloadCRC = uint16(b)
