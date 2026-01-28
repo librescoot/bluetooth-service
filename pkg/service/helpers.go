@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/fxamacker/cbor/v2"
 	"github.com/librescoot/bluetooth-service/pkg/ble"
@@ -151,32 +152,28 @@ func convertToInt(value interface{}) (int, bool) {
 	case int32:
 		return int(v), true
 	case int64:
-		if v <= int64(^uint(0)>>1) && v >= int64(int(^uint(0)>>1)*-1-1) {
+		if v >= math.MinInt && v <= math.MaxInt {
 			return int(v), true
 		}
-		// log.Printf("Integer value %d out of range for int type", v)
 		return 0, false
 	case uint:
-		if uint64(v) <= uint64(^uint(0)>>1) {
+		if uint64(v) <= math.MaxInt {
 			return int(v), true
 		}
-		// log.Printf("Unsigned integer value %d out of range for int type", v)
 		return 0, false
 	case uint8:
 		return int(v), true
 	case uint16:
 		return int(v), true
 	case uint32:
-		if uint64(v) <= uint64(^uint(0)>>1) {
+		if uint64(v) <= math.MaxInt {
 			return int(v), true
 		}
-		// log.Printf("Unsigned integer value %d out of range for int type", v)
 		return 0, false
 	case uint64:
-		if v <= uint64(^uint(0)>>1) {
+		if v <= math.MaxInt {
 			return int(v), true
 		}
-		// log.Printf("Unsigned integer value %d out of range for int type", v)
 		return 0, false
 	default:
 		// log.Printf("Value is not a convertible integer type: %T", value)
