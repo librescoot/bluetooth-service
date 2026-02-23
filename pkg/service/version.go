@@ -15,16 +15,19 @@ const (
 
 // FirmwareVersion represents a semantic version number with optional build and suffix
 type FirmwareVersion struct {
-	Major  int
-	Minor  int
-	Patch  int
-	Build  int    // Optional build number (e.g., -1 in v2.0.0-1-ls)
-	Suffix string // Optional suffix (e.g., "ls" in v2.0.0-1-ls)
-	Raw    string
+	Major         int
+	Minor         int
+	Patch         int
+	Build         int    // Optional build number (e.g., -1 in v2.0.0-1-ls)
+	Suffix        string // Optional suffix (e.g., "ls" in v2.0.0-1-ls)
+	BuildMetadata string // Semver build metadata after "+" (e.g., "alarm" in v1.12.0+alarm); ignored in comparisons
+	Raw           string
 }
 
-// ParseFirmwareVersion parses a version string like "v1.12.0", "1.12.0", or extended
-// formats like "v2.0.0-1-ls" (with optional build number and suffix)
+// ParseFirmwareVersion parses a version string like "v1.12.0", "1.12.0", extended
+// formats like "v2.0.0-1-ls" (with optional build number and suffix), or semver
+// build metadata format like "v1.12.0+alarm". Build metadata after "+" is stored
+// but ignored in version comparisons per the semver spec.
 func ParseFirmwareVersion(versionStr string) (*FirmwareVersion, error) {
 	if versionStr == "" {
 		return nil, fmt.Errorf("version string is empty")
@@ -35,6 +38,13 @@ func ParseFirmwareVersion(versionStr string) (*FirmwareVersion, error) {
 
 	// Remove 'v' prefix if present
 	versionStr = strings.TrimPrefix(versionStr, "v")
+
+	// Strip semver build metadata ("+..."); per semver spec it is ignored in comparisons
+	var buildMetadata string
+	if idx := strings.IndexByte(versionStr, '+'); idx >= 0 {
+		buildMetadata = versionStr[idx+1:]
+		versionStr = versionStr[:idx]
+	}
 
 	// Split into components
 	parts := strings.Split(versionStr, ".")
@@ -87,12 +97,13 @@ func ParseFirmwareVersion(versionStr string) (*FirmwareVersion, error) {
 	}
 
 	return &FirmwareVersion{
-		Major:  major,
-		Minor:  minor,
-		Patch:  patch,
-		Build:  build,
-		Suffix: suffix,
-		Raw:    raw,
+		Major:         major,
+		Minor:         minor,
+		Patch:         patch,
+		Build:         build,
+		Suffix:        suffix,
+		BuildMetadata: buildMetadata,
+		Raw:           raw,
 	}, nil
 }
 
@@ -118,7 +129,8 @@ func (v *FirmwareVersion) IsCompatible() bool {
 	return v.Patch >= MinPatch
 }
 
-// String returns a string representation of the version
+// String returns a string representation of the version.
+// Build metadata (if present) is appended with "+" per semver spec.
 func (v *FirmwareVersion) String() string {
 	s := fmt.Sprintf("v%d.%d.%d", v.Major, v.Minor, v.Patch)
 	if v.Build > 0 {
@@ -127,12 +139,30 @@ func (v *FirmwareVersion) String() string {
 	if v.Suffix != "" {
 		s += "-" + v.Suffix
 	}
+	if v.BuildMetadata != "" {
+		s += "+" + v.BuildMetadata
+	}
 	return s
+}
+
+// IsNewerThan returns true if this version should replace the installed version.
+// A higher base version always triggers an update. When the base version is equal,
+// an update is also triggered if the build metadata differs — e.g. the device
+// reports v1.12.0 but the available firmware is v1.12.0+alarm.
+func (v *FirmwareVersion) IsNewerThan(installed *FirmwareVersion) bool {
+	cmp := v.Compare(installed)
+	if cmp > 0 {
+		return true
+	}
+	if cmp == 0 {
+		return v.BuildMetadata != installed.BuildMetadata
+	}
+	return false
 }
 
 // Compare compares this version with another version.
 // Returns -1 if v < other, 0 if v == other, 1 if v > other.
-// Comparison order: Major > Minor > Patch > Build
+// Comparison order: Major > Minor > Patch > Build. Suffix and BuildMetadata are ignored.
 func (v *FirmwareVersion) Compare(other *FirmwareVersion) int {
 	if other == nil {
 		return 1

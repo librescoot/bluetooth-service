@@ -6,15 +6,16 @@ import (
 
 func TestParseFirmwareVersion(t *testing.T) {
 	tests := []struct {
-		name        string
-		input       string
-		wantMajor   int
-		wantMinor   int
-		wantPatch   int
-		wantBuild   int
-		wantSuffix  string
-		wantErr     bool
-		errContains string
+		name          string
+		input         string
+		wantMajor     int
+		wantMinor     int
+		wantPatch     int
+		wantBuild     int
+		wantSuffix    string
+		wantBuildMeta string
+		wantErr       bool
+		errContains   string
 	}{
 		{
 			name:      "valid version with v prefix",
@@ -117,6 +118,44 @@ func TestParseFirmwareVersion(t *testing.T) {
 			errContains: "invalid version format",
 		},
 		{
+			name:          "semver build metadata only",
+			input:         "v1.12.0+alarm",
+			wantMajor:     1,
+			wantMinor:     12,
+			wantPatch:     0,
+			wantBuildMeta: "alarm",
+			wantErr:       false,
+		},
+		{
+			name:          "semver build metadata without v prefix",
+			input:         "1.12.0+alarm",
+			wantMajor:     1,
+			wantMinor:     12,
+			wantPatch:     0,
+			wantBuildMeta: "alarm",
+			wantErr:       false,
+		},
+		{
+			name:          "semver build metadata with pre-release suffix",
+			input:         "v2.0.0-1-ls+build42",
+			wantMajor:     2,
+			wantMinor:     0,
+			wantPatch:     0,
+			wantBuild:     1,
+			wantSuffix:    "ls",
+			wantBuildMeta: "build42",
+			wantErr:       false,
+		},
+		{
+			name:          "semver build metadata with dot-separated identifiers",
+			input:         "v1.12.0+exp.sha.5114f85",
+			wantMajor:     1,
+			wantMinor:     12,
+			wantPatch:     0,
+			wantBuildMeta: "exp.sha.5114f85",
+			wantErr:       false,
+		},
+		{
 			name:        "invalid major version",
 			input:       "vX.12.0",
 			wantErr:     true,
@@ -170,6 +209,9 @@ func TestParseFirmwareVersion(t *testing.T) {
 			}
 			if got.Suffix != tt.wantSuffix {
 				t.Errorf("ParseFirmwareVersion() Suffix = %v, want %v", got.Suffix, tt.wantSuffix)
+			}
+			if got.BuildMetadata != tt.wantBuildMeta {
+				t.Errorf("ParseFirmwareVersion() BuildMetadata = %v, want %v", got.BuildMetadata, tt.wantBuildMeta)
 			}
 			if got.Raw != tt.input {
 				t.Errorf("ParseFirmwareVersion() Raw = %v, want %v", got.Raw, tt.input)
@@ -281,6 +323,16 @@ func TestFirmwareVersion_String(t *testing.T) {
 			name:    "version with multi-part suffix",
 			version: FirmwareVersion{Major: 1, Minor: 12, Patch: 3, Build: 42, Suffix: "ls-beta"},
 			want:    "v1.12.3-42-ls-beta",
+		},
+		{
+			name:    "version with build metadata",
+			version: FirmwareVersion{Major: 1, Minor: 12, Patch: 0, BuildMetadata: "alarm"},
+			want:    "v1.12.0+alarm",
+		},
+		{
+			name:    "version with suffix and build metadata",
+			version: FirmwareVersion{Major: 2, Minor: 0, Patch: 0, Build: 1, Suffix: "ls", BuildMetadata: "build42"},
+			want:    "v2.0.0-1-ls+build42",
 		},
 	}
 
@@ -398,12 +450,90 @@ func TestFirmwareVersion_Compare(t *testing.T) {
 			v2:   &FirmwareVersion{Major: 2, Minor: 3, Patch: 4, Build: 1, Suffix: "ls"},
 			want: 1,
 		},
+		{
+			name: "build metadata ignored: v1.12.0+alarm == v1.12.0",
+			v1:   FirmwareVersion{Major: 1, Minor: 12, Patch: 0, BuildMetadata: "alarm"},
+			v2:   &FirmwareVersion{Major: 1, Minor: 12, Patch: 0},
+			want: 0,
+		},
+		{
+			name: "build metadata ignored: v1.12.0+alarm == v1.12.0+other",
+			v1:   FirmwareVersion{Major: 1, Minor: 12, Patch: 0, BuildMetadata: "alarm"},
+			v2:   &FirmwareVersion{Major: 1, Minor: 12, Patch: 0, BuildMetadata: "other"},
+			want: 0,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := tt.v1.Compare(tt.v2); got != tt.want {
 				t.Errorf("FirmwareVersion.Compare() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFirmwareVersion_IsNewerThan(t *testing.T) {
+	tests := []struct {
+		name      string
+		available FirmwareVersion
+		installed FirmwareVersion
+		want      bool
+	}{
+		{
+			name:      "newer base version triggers update",
+			available: FirmwareVersion{Major: 1, Minor: 13, Patch: 0},
+			installed: FirmwareVersion{Major: 1, Minor: 12, Patch: 0},
+			want:      true,
+		},
+		{
+			name:      "same version, no update",
+			available: FirmwareVersion{Major: 1, Minor: 12, Patch: 0},
+			installed: FirmwareVersion{Major: 1, Minor: 12, Patch: 0},
+			want:      false,
+		},
+		{
+			name:      "older base version, no update",
+			available: FirmwareVersion{Major: 1, Minor: 11, Patch: 0},
+			installed: FirmwareVersion{Major: 1, Minor: 12, Patch: 0},
+			want:      false,
+		},
+		{
+			name:      "same base, metadata added: v1.12.0+alarm available, v1.12.0 installed",
+			available: FirmwareVersion{Major: 1, Minor: 12, Patch: 0, BuildMetadata: "alarm"},
+			installed: FirmwareVersion{Major: 1, Minor: 12, Patch: 0},
+			want:      true,
+		},
+		{
+			name:      "same base, metadata removed: v1.12.0 available, v1.12.0+alarm installed",
+			available: FirmwareVersion{Major: 1, Minor: 12, Patch: 0},
+			installed: FirmwareVersion{Major: 1, Minor: 12, Patch: 0, BuildMetadata: "alarm"},
+			want:      true,
+		},
+		{
+			name:      "same base and metadata, no update",
+			available: FirmwareVersion{Major: 1, Minor: 12, Patch: 0, BuildMetadata: "alarm"},
+			installed: FirmwareVersion{Major: 1, Minor: 12, Patch: 0, BuildMetadata: "alarm"},
+			want:      false,
+		},
+		{
+			name:      "same base, different metadata: v1.12.0+alarm vs v1.12.0+other",
+			available: FirmwareVersion{Major: 1, Minor: 12, Patch: 0, BuildMetadata: "alarm"},
+			installed: FirmwareVersion{Major: 1, Minor: 12, Patch: 0, BuildMetadata: "other"},
+			want:      true,
+		},
+		{
+			name:      "newer base with metadata beats older base without",
+			available: FirmwareVersion{Major: 1, Minor: 13, Patch: 0, BuildMetadata: "alarm"},
+			installed: FirmwareVersion{Major: 1, Minor: 12, Patch: 0},
+			want:      true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.available.IsNewerThan(&tt.installed); got != tt.want {
+				t.Errorf("FirmwareVersion.IsNewerThan() = %v, want %v", got, tt.want)
 			}
 		})
 	}
