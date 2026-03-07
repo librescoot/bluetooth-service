@@ -350,9 +350,13 @@ func (s *Service) UpdateMileage(mileageStr string) error {
 	s.lastMileage = mileageStr
 	s.mu.Unlock()
 
-	mileage := 0
-	if mileageStr != "" {
-		mileage, _ = strconv.Atoi(mileageStr)
+	if mileageStr == "" {
+		return nil
+	}
+	mileage, err := strconv.Atoi(mileageStr)
+	if err != nil {
+		s.log.Warnf("failed to parse mileage value %q: %v", mileageStr, err)
+		return nil
 	}
 	// Pass the relative subtype using 32-bit integer message to match nRF's int32_t
 	if err := writeUARTMessage32(s.usock, ble.TypeScooterInfo, ble.TypeMileage, int32(mileage)); err != nil {
@@ -433,9 +437,13 @@ func (s *Service) UpdateBatteryCycleCount(slot int, cyclesStr string) error {
 		baseSubType = ble.TypeBatterySlot1CycleCount
 	}
 
-	cycles := 0
-	if cyclesStr != "" {
-		cycles, _ = strconv.Atoi(cyclesStr)
+	if cyclesStr == "" {
+		return nil
+	}
+	cycles, err := strconv.Atoi(cyclesStr)
+	if err != nil {
+		s.log.Warnf("failed to parse battery:%d cycle count value %q: %v", slot, cyclesStr, err)
+		return nil
 	}
 	// Pass the relative subtype
 	if err := writeUARTMessage(s.usock, ble.TypeBattery, baseSubType, uint16(cycles)); err != nil {
@@ -452,9 +460,13 @@ func (s *Service) UpdateBatteryRemainingCharge(slot int, chargeStr string) error
 		baseSubType = ble.TypeBatterySlot1Charge
 	}
 
-	charge := 0
-	if chargeStr != "" {
-		charge, _ = strconv.Atoi(chargeStr)
+	if chargeStr == "" {
+		return nil
+	}
+	charge, err := strconv.Atoi(chargeStr)
+	if err != nil {
+		s.log.Warnf("failed to parse battery:%d charge value %q: %v", slot, chargeStr, err)
+		return nil
 	}
 	// Pass the relative subtype
 	if err := writeUARTMessage(s.usock, ble.TypeBattery, baseSubType, uint16(charge)); err != nil {
