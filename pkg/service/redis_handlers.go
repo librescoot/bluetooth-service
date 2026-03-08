@@ -342,6 +342,14 @@ func (s *Service) UpdateHandlebarLock(stateStr string) error {
 
 // UpdateMileage sends the current mileage to nRF52
 func (s *Service) UpdateMileage(mileageStr string) error {
+	s.mu.Lock()
+	if mileageStr == s.lastMileage {
+		s.mu.Unlock()
+		return nil
+	}
+	s.lastMileage = mileageStr
+	s.mu.Unlock()
+
 	mileage := 0
 	if mileageStr != "" {
 		mileage, _ = strconv.Atoi(mileageStr)

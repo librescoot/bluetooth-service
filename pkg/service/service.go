@@ -39,6 +39,7 @@ type Service struct {
 	usockHandler    func(*usock.Payload)
 	firmwareUpdater firmwareUpdaterInterface
 	autoUpdate      bool
+	lastMileage     string // last mileage value sent to nRF (for dedup)
 	mu              sync.RWMutex
 
 	// Subscription management
