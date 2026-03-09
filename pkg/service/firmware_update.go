@@ -201,14 +201,17 @@ func (fu *FirmwareUpdater) CheckAndUpdate(currentVersionStr string) (bool, error
 		return false, nil
 	}
 
-	// Compare versions
-	if latestVersion.Compare(currentVersion) <= 0 {
+	if !latestVersion.IsNewerThan(currentVersion) {
 		fu.log.Infof("Current firmware %s is up to date (latest: %s)", currentVersion, latestVersion)
 		fu.setStatus("idle")
 		return false, nil
 	}
 
-	fu.log.Infof("Newer firmware available: %s (current: %s)", latestVersion, currentVersion)
+	if latestVersion.Compare(currentVersion) > 0 {
+		fu.log.Infof("Newer firmware available: %s (current: %s)", latestVersion, currentVersion)
+	} else {
+		fu.log.Infof("Firmware build metadata changed: %s (current: %s)", latestVersion, currentVersion)
+	}
 
 	// Perform the update
 	if err := fu.PerformUpdate(firmwarePath); err != nil {
