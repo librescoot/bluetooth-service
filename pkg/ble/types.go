@@ -23,6 +23,7 @@ const (
 	TypeBatteryInfo                   MessageType = 0x0060     // BLE_SCOOTER_SERVICE_CB_BATTERY
 	TypePowerMux                      MessageType = 0x0100     // BLE_SCOOTER_SERVICE_POWER_MUX_STATE
 	TypeAccelerometer                 MessageType = 0x0200     // BLE_SCOOTER_SERVICE_ACCELEROMETER
+	TypeExtended                      MessageType = 0x0400     // BLE_SCOOTER_SERVICE_EXTENDED
 )
 
 // SubType represents the sub-type of a message
@@ -121,6 +122,14 @@ const (
 	// Accelerometer sub-types
 	TypeAccelerometerWakeUpSuspend     SubType = 1 // BLE_SCOOTER_SERVICE_ACCELEROMETER_WAKE_UP_SUSPEND
 	TypeAccelerometerWakeUpHibernation SubType = 2 // BLE_SCOOTER_SERVICE_ACCELEROMETER_WAKE_UP_HIBERNATION
+
+	// Extended service sub-types
+	TypeExtendedCommand  SubType = 1 // BLE_SCOOTER_SERVICE_EXTENDED_COMMAND
+	TypeExtendedResponse SubType = 2 // BLE_SCOOTER_SERVICE_EXTENDED_RESPONSE
+
+	// Scooter info sub-types (additional)
+	TypeNavigationActive SubType = 4 // BLE_SCOOTER_SERVICE_NAVIGATION_ACTIVE
+	TypeUMSStatus        SubType = 5 // BLE_SCOOTER_SERVICE_UMS_STATUS
 )
 
 // BLECommand represents BLE control commands

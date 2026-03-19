@@ -168,8 +168,10 @@ func (s *Service) HandleUSockMessage(frameID byte, payload *usock.Payload) {
 				s.handlePowerMuxMessage(relativeSubType, value)
 			case ble.TypePowerManagementHibernationReq: // Direct hibernation request (0x0803)
 				s.handlePowerManagementMessage(ble.TypePowerManagementHibernationRequest, value)
-			case ble.TypeAccelerometer: // Add case for Accelerometer
+			case ble.TypeAccelerometer:
 				s.handleAccelerometerMessage(relativeSubType, value)
+			case ble.TypeExtended:
+				s.handleExtendedCommandMessage(msgType, absSubTypeKey, value)
 			case 0x0000: // Handle generic event messages
 				s.handleEventMessage(msgType, absSubTypeKey, value)
 			default:
