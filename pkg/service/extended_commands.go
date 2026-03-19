@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	ipc "github.com/librescoot/redis-ipc"
+
 	"github.com/librescoot/bluetooth-service/pkg/ble"
 )
 
@@ -266,9 +268,22 @@ func (s *Service) handleUSBCommand(cmd string) {
 }
 
 // handleKeycardCommand processes keycard management commands.
-// Note: keycard-service currently has no Redis command interface.
-// These commands are forwarded to a Redis list for future processing.
+// Commands are forwarded to the scooter:keycard Redis list for
+// processing by keycard-service.
 func (s *Service) handleKeycardCommand(cmd string) {
 	s.log.Infof("Received keycard command: %s", cmd)
-	s.sendExtendedResponse("keycard:error:not yet implemented")
+
+	switch {
+	case cmd == "list", cmd == "count",
+		strings.HasPrefix(cmd, "add:"),
+		strings.HasPrefix(cmd, "remove:"):
+		if err := ipc.SendRequest(s.ipc, "scooter:keycard", cmd); err != nil {
+			s.log.Errorf("Failed to forward keycard command: %v", err)
+			s.sendExtendedResponse("keycard:error:redis")
+			return
+		}
+		// Response comes asynchronously via keycard hash subscription
+	default:
+		s.sendExtendedResponse("keycard:error:unknown command")
+	}
 }

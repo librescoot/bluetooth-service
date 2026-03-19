@@ -28,6 +28,7 @@ func (s *Service) SubscribeToRedisChannels() {
 		KeyBLEPairingPin,   // "ble" - Keep for pin removal notification
 		KeyNavigation,      // "navigation"
 		KeyUSB,             // "usb"
+		KeyKeycard,         // "keycard"
 	}
 
 	// Ensure only unique keys are subscribed
@@ -186,6 +187,11 @@ func (s *Service) SubscribeToRedisChannels() {
 							}
 						} else {
 							s.log.Debugf("Unhandled field '%s' for channel '%s'", field, chName)
+						}
+
+					case KeyKeycard:
+						if field == "command-result" && value != "" {
+							s.sendExtendedResponse("keycard:" + value)
 						}
 
 					default:

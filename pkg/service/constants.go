@@ -18,6 +18,7 @@ const (
 	KeyBLECommandList = "scooter:bluetooth"
 	KeyNavigation     = "navigation"
 	KeyUSB            = "usb"
+	KeyKeycard        = "keycard"
 )
 
 // Firmware update paths
