@@ -37,6 +37,8 @@ func (s *Service) handleExtendedCommandMessage(msgType ble.MessageType, absSubTy
 		s.handleTimeCommand(strings.TrimPrefix(cmdStr, "time:"))
 	} else if strings.HasPrefix(cmdStr, "config:") {
 		s.handleConfigCommand(strings.TrimPrefix(cmdStr, "config:"))
+	} else if strings.HasPrefix(cmdStr, "status:") {
+		s.handleStatusQuery(strings.TrimPrefix(cmdStr, "status:"))
 	} else {
 		s.log.Warnf("Unknown extended command prefix: %s", cmdStr)
 		s.sendExtendedResponse("error:unknown command")
@@ -382,5 +384,29 @@ func (s *Service) handleConfigCommand(cmd string) {
 
 	default:
 		s.sendExtendedResponse("config:error:unknown setting")
+	}
+}
+
+// handleStatusQuery processes read-only status queries.
+func (s *Service) handleStatusQuery(key string) {
+	key = strings.TrimSpace(key)
+
+	switch key {
+	case "maps-available":
+		val, err := s.ipc.HGet("settings", "maps-available")
+		if err != nil || val == "" {
+			val = "false"
+		}
+		s.sendExtendedResponse(fmt.Sprintf("status:maps-available:%s", val))
+
+	case "navigation-available":
+		val, err := s.ipc.HGet("settings", "navigation-available")
+		if err != nil || val == "" {
+			val = "false"
+		}
+		s.sendExtendedResponse(fmt.Sprintf("status:navigation-available:%s", val))
+
+	default:
+		s.sendExtendedResponse("status:error:unknown key")
 	}
 }
