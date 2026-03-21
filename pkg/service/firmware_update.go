@@ -260,7 +260,7 @@ func (fu *FirmwareUpdater) PerformUpdate(firmwarePath string) error {
 
 	// Step 6: Wait for nRF to reboot
 	fu.log.Infof("Waiting for nRF to reboot...")
-	time.Sleep(15 * time.Second)
+	time.Sleep(20 * time.Second)
 
 	// Step 7: Reconnect
 	fu.log.Infof("Reconnecting to nRF...")
