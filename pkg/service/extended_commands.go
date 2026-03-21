@@ -1,0 +1,289 @@
+package service
+
+import (
+	"fmt"
+	"strings"
+
+	ipc "github.com/librescoot/redis-ipc"
+
+	"github.com/librescoot/bluetooth-service/pkg/ble"
+)
+
+// handleExtendedCommandMessage handles commands from the EXTENDED service (0x0400).
+// Commands arrive as strings from the phone app via nRF, prefixed by topic.
+func (s *Service) handleExtendedCommandMessage(msgType ble.MessageType, absSubTypeKey uint16, value interface{}) {
+	cmdStr, ok := value.(string)
+	if !ok {
+		if cmdBytes, ok := value.([]byte); ok {
+			cmdStr = string(cmdBytes)
+		} else {
+			s.log.Warnf("Extended command value is not a string: %T", value)
+			return
+		}
+	}
+
+	s.log.Infof("Received extended command: %s", cmdStr)
+
+	if strings.HasPrefix(cmdStr, "nav:") {
+		s.handleNavCommand(strings.TrimPrefix(cmdStr, "nav:"))
+	} else if strings.HasPrefix(cmdStr, "keycard:") {
+		s.handleKeycardCommand(strings.TrimPrefix(cmdStr, "keycard:"))
+	} else if strings.HasPrefix(cmdStr, "usb:") {
+		s.handleUSBCommand(strings.TrimPrefix(cmdStr, "usb:"))
+	} else {
+		s.log.Warnf("Unknown extended command prefix: %s", cmdStr)
+		s.sendExtendedResponse("error:unknown command")
+	}
+}
+
+// sendExtendedResponse sends a response string back to the nRF for the
+// EXTENDED_RESPONSE characteristic.
+func (s *Service) sendExtendedResponse(response string) {
+	if err := writeUARTMessageString(s.usock, ble.TypeExtended, ble.TypeExtendedResponse, response); err != nil {
+		s.log.Errorf("Failed to send extended response: %v", err)
+	}
+}
+
+// handleNavCommand processes navigation commands.
+func (s *Service) handleNavCommand(cmd string) {
+	if strings.HasPrefix(cmd, "dest ") {
+		// "dest lat,lon" or "dest lat,lon,name"
+		payload := strings.TrimPrefix(cmd, "dest ")
+		parts := strings.SplitN(payload, ",", 3)
+		if len(parts) < 2 {
+			s.sendExtendedResponse("nav:error:invalid destination format")
+			return
+		}
+
+		lat := strings.TrimSpace(parts[0])
+		lon := strings.TrimSpace(parts[1])
+
+		hash := s.ipc.Hash(KeyNavigation)
+		if err := hash.Set("latitude", lat); err != nil {
+			s.log.Errorf("Failed to set navigation latitude: %v", err)
+			s.sendExtendedResponse("nav:error:redis")
+			return
+		}
+		if err := hash.Set("longitude", lon); err != nil {
+			s.log.Errorf("Failed to set navigation longitude: %v", err)
+			s.sendExtendedResponse("nav:error:redis")
+			return
+		}
+		// Legacy format
+		coords := lat + "," + lon
+		if err := hash.Set("destination", coords); err != nil {
+			s.log.Errorf("Failed to set navigation destination: %v", err)
+		}
+
+		if len(parts) == 3 {
+			name := strings.TrimSpace(parts[2])
+			if err := hash.Set("address", name); err != nil {
+				s.log.Errorf("Failed to set navigation address: %v", err)
+			}
+		}
+
+		s.log.Infof("Set navigation destination: %s", payload)
+		s.sendExtendedResponse("nav:ok")
+
+	} else if cmd == "clear" {
+		hash := s.ipc.Hash(KeyNavigation)
+		for _, field := range []string{"latitude", "longitude", "destination", "address", "timestamp"} {
+			if err := hash.Delete(field); err != nil {
+				s.log.Errorf("Failed to clear navigation field %s: %v", field, err)
+			}
+		}
+		s.log.Infof("Cleared navigation destination")
+		s.sendExtendedResponse("nav:ok")
+
+	} else if strings.HasPrefix(cmd, "fav:") {
+		s.handleNavFavouriteCommand(strings.TrimPrefix(cmd, "fav:"))
+	} else {
+		s.sendExtendedResponse("nav:error:unknown command")
+	}
+}
+
+// handleNavFavouriteCommand processes navigation favourite sub-commands.
+func (s *Service) handleNavFavouriteCommand(cmd string) {
+	if strings.HasPrefix(cmd, "add ") {
+		// "add lat,lon,name"
+		payload := strings.TrimPrefix(cmd, "add ")
+		parts := strings.SplitN(payload, ",", 3)
+		if len(parts) < 3 {
+			s.sendExtendedResponse("nav:error:invalid favourite format (need lat,lon,name)")
+			return
+		}
+		lat := strings.TrimSpace(parts[0])
+		lon := strings.TrimSpace(parts[1])
+		name := strings.TrimSpace(parts[2])
+
+		id, err := s.addSavedLocation(lat, lon, name)
+		if err != nil {
+			s.log.Errorf("Failed to add saved location: %v", err)
+			s.sendExtendedResponse(fmt.Sprintf("nav:error:%v", err))
+			return
+		}
+		s.log.Infof("Added saved location %d: %s,%s %s", id, lat, lon, name)
+		s.sendExtendedResponse(fmt.Sprintf("nav:fav:added:%d", id))
+
+	} else if strings.HasPrefix(cmd, "delete ") {
+		id := strings.TrimPrefix(cmd, "delete ")
+		if err := s.deleteSavedLocation(id); err != nil {
+			s.sendExtendedResponse(fmt.Sprintf("nav:error:%v", err))
+			return
+		}
+		s.sendExtendedResponse("nav:ok")
+
+	} else if strings.HasPrefix(cmd, "navigate ") {
+		id := strings.TrimPrefix(cmd, "navigate ")
+		if err := s.navigateToSavedLocation(id); err != nil {
+			s.sendExtendedResponse(fmt.Sprintf("nav:error:%v", err))
+			return
+		}
+		s.sendExtendedResponse("nav:ok")
+
+	} else if cmd == "list" {
+		s.listSavedLocations()
+	} else {
+		s.sendExtendedResponse("nav:error:unknown favourite command")
+	}
+}
+
+// addSavedLocation adds a new saved location to Redis settings.
+// Returns the assigned ID.
+func (s *Service) addSavedLocation(lat, lon, name string) (int, error) {
+	// Find next available ID by scanning existing entries
+	settings := s.ipc.Hash("settings")
+	id := 0
+	for {
+		existing, err := s.ipc.HGet("settings", fmt.Sprintf("dashboard.saved-locations.%d.latitude", id))
+		if err != nil || existing == "" {
+			break
+		}
+		id++
+	}
+
+	prefix := fmt.Sprintf("dashboard.saved-locations.%d", id)
+	if err := settings.Set(prefix+".latitude", lat); err != nil {
+		return 0, fmt.Errorf("failed to set latitude: %w", err)
+	}
+	if err := settings.Set(prefix+".longitude", lon); err != nil {
+		return 0, fmt.Errorf("failed to set longitude: %w", err)
+	}
+	if err := settings.Set(prefix+".label", name); err != nil {
+		return 0, fmt.Errorf("failed to set label: %w", err)
+	}
+
+	return id, nil
+}
+
+// deleteSavedLocation removes a saved location by ID.
+func (s *Service) deleteSavedLocation(id string) error {
+	settings := s.ipc.Hash("settings")
+	prefix := fmt.Sprintf("dashboard.saved-locations.%s", id)
+	for _, field := range []string{".latitude", ".longitude", ".label", ".created-at", ".last-used-at"} {
+		if err := settings.Delete(prefix + field); err != nil {
+			s.log.Warnf("Failed to delete %s%s: %v", prefix, field, err)
+		}
+	}
+	s.log.Infof("Deleted saved location %s", id)
+	return nil
+}
+
+// navigateToSavedLocation sets the navigation destination from a saved location.
+func (s *Service) navigateToSavedLocation(id string) error {
+	prefix := fmt.Sprintf("dashboard.saved-locations.%s", id)
+	lat, err := s.ipc.HGet("settings", prefix+".latitude")
+	if err != nil || lat == "" {
+		return fmt.Errorf("saved location %s not found", id)
+	}
+	lon, err := s.ipc.HGet("settings", prefix+".longitude")
+	if err != nil || lon == "" {
+		return fmt.Errorf("saved location %s missing longitude", id)
+	}
+
+	hash := s.ipc.Hash(KeyNavigation)
+	if err := hash.Set("latitude", lat); err != nil {
+		return fmt.Errorf("failed to set latitude: %w", err)
+	}
+	if err := hash.Set("longitude", lon); err != nil {
+		return fmt.Errorf("failed to set longitude: %w", err)
+	}
+	if err := hash.Set("destination", lat+","+lon); err != nil {
+		return fmt.Errorf("failed to set destination: %w", err)
+	}
+
+	s.log.Infof("Navigating to saved location %s: %s,%s", id, lat, lon)
+	return nil
+}
+
+// listSavedLocations sends all saved locations as a sequence of responses.
+func (s *Service) listSavedLocations() {
+	count := 0
+	var entries []string
+
+	for id := 0; ; id++ {
+		prefix := fmt.Sprintf("dashboard.saved-locations.%d", id)
+		lat, err := s.ipc.HGet("settings", prefix+".latitude")
+		if err != nil || lat == "" {
+			// Check a few more in case of gaps
+			if id < 100 {
+				continue
+			}
+			break
+		}
+		lon, _ := s.ipc.HGet("settings", prefix+".longitude")
+		label, _ := s.ipc.HGet("settings", prefix+".label")
+		entries = append(entries, fmt.Sprintf("nav:fav:%d:%s,%s,%s", id, lat, lon, label))
+		count++
+	}
+
+	s.sendExtendedResponse(fmt.Sprintf("nav:fav:count:%d", count))
+	for _, entry := range entries {
+		s.sendExtendedResponse(entry)
+	}
+}
+
+// handleUSBCommand processes USB mode commands.
+func (s *Service) handleUSBCommand(cmd string) {
+	switch cmd {
+	case "ums":
+		if err := s.ipc.Hash(KeyUSB).Set("mode", "ums"); err != nil {
+			s.log.Errorf("Failed to set USB mode to UMS: %v", err)
+			s.sendExtendedResponse("usb:error:redis")
+			return
+		}
+		s.log.Infof("Set USB mode: ums")
+		s.sendExtendedResponse("usb:ok")
+	case "normal":
+		if err := s.ipc.Hash(KeyUSB).Set("mode", "normal"); err != nil {
+			s.log.Errorf("Failed to set USB mode to normal: %v", err)
+			s.sendExtendedResponse("usb:error:redis")
+			return
+		}
+		s.log.Infof("Set USB mode: normal")
+		s.sendExtendedResponse("usb:ok")
+	default:
+		s.sendExtendedResponse("usb:error:unknown mode")
+	}
+}
+
+// handleKeycardCommand processes keycard management commands.
+// Commands are forwarded to the scooter:keycard Redis list for
+// processing by keycard-service.
+func (s *Service) handleKeycardCommand(cmd string) {
+	s.log.Infof("Received keycard command: %s", cmd)
+
+	switch {
+	case cmd == "list", cmd == "count",
+		strings.HasPrefix(cmd, "add:"),
+		strings.HasPrefix(cmd, "remove:"):
+		if err := ipc.SendRequest(s.ipc, "scooter:keycard", cmd); err != nil {
+			s.log.Errorf("Failed to forward keycard command: %v", err)
+			s.sendExtendedResponse("keycard:error:redis")
+			return
+		}
+		// Response comes asynchronously via keycard hash subscription
+	default:
+		s.sendExtendedResponse("keycard:error:unknown command")
+	}
+}

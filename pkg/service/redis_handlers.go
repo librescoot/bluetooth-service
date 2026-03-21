@@ -26,6 +26,9 @@ func (s *Service) SubscribeToRedisChannels() {
 		KeyMileage,         // "engine-ecu"
 		KeyFirmwareVersion, // "system"
 		KeyBLEPairingPin,   // "ble" - Keep for pin removal notification
+		KeyNavigation,      // "navigation"
+		KeyUSB,             // "usb"
+		KeyKeycard,         // "keycard"
 	}
 
 	// Ensure only unique keys are subscribed
@@ -157,6 +160,38 @@ func (s *Service) SubscribeToRedisChannels() {
 							}
 						} else {
 							s.log.Debugf("Unhandled field '%s' for channel '%s'", field, chName)
+						}
+
+					case KeyNavigation:
+						if field == "destination" || field == "latitude" {
+							// Derive active status: destination is set if latitude is non-empty
+							active := uint16(0)
+							if value != "" {
+								active = 1
+							}
+							if err := writeUARTMessage(s.usock, ble.TypeScooterInfo, ble.TypeNavigationActive, active); err != nil {
+								s.log.Errorf("Error sending navigation active update: %v", err)
+							}
+						} else {
+							s.log.Debugf("Unhandled field '%s' for channel '%s'", field, chName)
+						}
+
+					case KeyUSB:
+						if field == "mode" {
+							var mode uint16
+							if value == "ums" {
+								mode = 1
+							}
+							if err := writeUARTMessage(s.usock, ble.TypeScooterInfo, ble.TypeUMSStatus, mode); err != nil {
+								s.log.Errorf("Error sending UMS status update: %v", err)
+							}
+						} else {
+							s.log.Debugf("Unhandled field '%s' for channel '%s'", field, chName)
+						}
+
+					case KeyKeycard:
+						if field == "command-result" && value != "" {
+							s.sendExtendedResponse("keycard:" + value)
 						}
 
 					default:

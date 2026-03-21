@@ -16,6 +16,9 @@ const (
 	KeyCBBatteryFault  = "cb-battery:fault" // For PROTSTATUS and BATTSTATUS faults
 
 	KeyBLECommandList = "scooter:bluetooth"
+	KeyNavigation     = "navigation"
+	KeyUSB            = "usb"
+	KeyKeycard        = "keycard"
 )
 
 // Firmware update paths
