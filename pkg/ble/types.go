@@ -80,6 +80,7 @@ const (
 	// Scooter info sub-types
 	TypeSoftwareVersion SubType = 1 // BLE_SCOOTER_SERVICE_SOFTWARE_VERSION
 	TypeMileage         SubType = 2 // BLE_SCOOTER_SERVICE_MILEAGE
+	TypeSystemTime      SubType = 3 // BLE_SCOOTER_SERVICE_SYSTEM_TIME
 
 	// Power management sub-types
 	TypePowerManagementState              SubType = 1 // BLE_SCOOTER_SERVICE_POWER_MANAGEMENT_STATE

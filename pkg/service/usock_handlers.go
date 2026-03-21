@@ -297,8 +297,18 @@ func (s *Service) handleScooterInfoMessage(msgType ble.MessageType, absSubTypeKe
 
 	expectedMileageSubType := uint16(ble.TypeScooterInfo) + uint16(ble.TypeMileage)
 	expectedVersionSubType := uint16(ble.TypeScooterInfo) + uint16(ble.TypeSoftwareVersion)
+	expectedSystemTimeSubType := uint16(ble.TypeScooterInfo) + uint16(ble.TypeSystemTime)
 
 	switch absSubTypeKey {
+	case expectedSystemTimeSubType:
+		if timeStr, ok := convertToString(value); ok {
+			s.log.Infof("Received system time from BLE: %s", timeStr)
+			if err := s.setSystemTime(timeStr); err != nil {
+				s.log.Errorf("Failed to set system time: %v", err)
+			}
+		} else {
+			s.log.Warnf("Could not decode system time value: %v", value)
+		}
 	case expectedMileageSubType:
 		// Try string first, then fallback to int if needed
 		if mileageStr, ok := convertToString(value); ok {

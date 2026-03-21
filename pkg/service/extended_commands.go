@@ -2,7 +2,10 @@ package service
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
+	"syscall"
+	"time"
 
 	ipc "github.com/librescoot/redis-ipc"
 
@@ -30,6 +33,10 @@ func (s *Service) handleExtendedCommandMessage(msgType ble.MessageType, absSubTy
 		s.handleKeycardCommand(strings.TrimPrefix(cmdStr, "keycard:"))
 	} else if strings.HasPrefix(cmdStr, "usb:") {
 		s.handleUSBCommand(strings.TrimPrefix(cmdStr, "usb:"))
+	} else if strings.HasPrefix(cmdStr, "time:") {
+		s.handleTimeCommand(strings.TrimPrefix(cmdStr, "time:"))
+	} else if strings.HasPrefix(cmdStr, "config:") {
+		s.handleConfigCommand(strings.TrimPrefix(cmdStr, "config:"))
 	} else {
 		s.log.Warnf("Unknown extended command prefix: %s", cmdStr)
 		s.sendExtendedResponse("error:unknown command")
@@ -285,5 +292,95 @@ func (s *Service) handleKeycardCommand(cmd string) {
 		// Response comes asynchronously via keycard hash subscription
 	default:
 		s.sendExtendedResponse("keycard:error:unknown command")
+	}
+}
+
+// handleTimeCommand processes time-setting commands.
+func (s *Service) handleTimeCommand(cmd string) {
+	if strings.HasPrefix(cmd, "set ") {
+		timestamp := strings.TrimSpace(strings.TrimPrefix(cmd, "set "))
+		if err := s.setSystemTime(timestamp); err != nil {
+			s.sendExtendedResponse(fmt.Sprintf("time:error:%v", err))
+			return
+		}
+		s.sendExtendedResponse("time:ok")
+	} else {
+		s.sendExtendedResponse("time:error:unknown command")
+	}
+}
+
+// setSystemTime parses a Unix timestamp string and sets the system clock.
+func (s *Service) setSystemTime(timestampStr string) error {
+	timestamp, err := strconv.ParseInt(strings.TrimSpace(timestampStr), 10, 64)
+	if err != nil {
+		return fmt.Errorf("invalid timestamp: %w", err)
+	}
+	tv := syscall.Timeval{Sec: timestamp}
+	if err := syscall.Settimeofday(&tv); err != nil {
+		return fmt.Errorf("failed to set time: %w", err)
+	}
+	s.log.Infof("System time set to %s", time.Unix(timestamp, 0).UTC().Format(time.RFC3339))
+	return nil
+}
+
+// handleConfigCommand processes configuration commands.
+// Supported: config:apn <value>, config:hibernate-timer <seconds>,
+// config:update-channel <channel>
+func (s *Service) handleConfigCommand(cmd string) {
+	parts := strings.SplitN(cmd, " ", 2)
+	if len(parts) < 2 {
+		s.sendExtendedResponse("config:error:missing value")
+		return
+	}
+	key := parts[0]
+	value := strings.TrimSpace(parts[1])
+
+	settings := s.ipc.Hash("settings")
+
+	switch key {
+	case "apn":
+		if err := settings.Set("cellular.apn", value); err != nil {
+			s.log.Errorf("Failed to set cellular APN: %v", err)
+			s.sendExtendedResponse("config:error:redis")
+			return
+		}
+		s.log.Infof("Set cellular APN: %s", value)
+		s.sendExtendedResponse("config:ok")
+
+	case "hibernate-timer":
+		if _, err := strconv.Atoi(value); err != nil {
+			s.sendExtendedResponse("config:error:invalid number")
+			return
+		}
+		if err := settings.Set("hibernation-timer", value); err != nil {
+			s.log.Errorf("Failed to set hibernation timer: %v", err)
+			s.sendExtendedResponse("config:error:redis")
+			return
+		}
+		s.log.Infof("Set hibernation timer: %s seconds", value)
+		s.sendExtendedResponse("config:ok")
+
+	case "update-channel":
+		switch value {
+		case "stable", "testing", "nightly":
+		default:
+			s.sendExtendedResponse("config:error:invalid channel (stable/testing/nightly)")
+			return
+		}
+		if err := settings.Set("updates.mdb.channel", value); err != nil {
+			s.log.Errorf("Failed to set MDB update channel: %v", err)
+			s.sendExtendedResponse("config:error:redis")
+			return
+		}
+		if err := settings.Set("updates.dbc.channel", value); err != nil {
+			s.log.Errorf("Failed to set DBC update channel: %v", err)
+			s.sendExtendedResponse("config:error:redis")
+			return
+		}
+		s.log.Infof("Set update channel: %s", value)
+		s.sendExtendedResponse("config:ok")
+
+	default:
+		s.sendExtendedResponse("config:error:unknown setting")
 	}
 }
