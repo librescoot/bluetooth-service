@@ -2,9 +2,9 @@ package service
 
 import (
 	"fmt"
+	"os/exec"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	ipc "github.com/librescoot/redis-ipc"
@@ -317,11 +317,12 @@ func (s *Service) setSystemTime(timestampStr string) error {
 	if err != nil {
 		return fmt.Errorf("invalid timestamp: %w", err)
 	}
-	tv := syscall.Timeval{Sec: timestamp}
-	if err := syscall.Settimeofday(&tv); err != nil {
-		return fmt.Errorf("failed to set time: %w", err)
+	t := time.Unix(timestamp, 0).UTC()
+	cmd := exec.Command("date", "-u", "-s", t.Format("2006-01-02 15:04:05"))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to set time: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
-	s.log.Infof("System time set to %s", time.Unix(timestamp, 0).UTC().Format(time.RFC3339))
+	s.log.Infof("System time set to %s", t.Format(time.RFC3339))
 	return nil
 }
 
