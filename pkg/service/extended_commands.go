@@ -396,14 +396,14 @@ func (s *Service) handleStatusQuery(key string) {
 
 	switch key {
 	case "maps-available":
-		val, err := s.ipc.HGet("settings", "maps-available")
+		val, err := s.ipc.HGet("dashboard", "maps-available")
 		if err != nil || val == "" {
 			val = "false"
 		}
 		s.sendExtendedResponse(fmt.Sprintf("status:maps-available:%s", val))
 
 	case "navigation-available":
-		val, err := s.ipc.HGet("settings", "navigation-available")
+		val, err := s.ipc.HGet("dashboard", "navigation-available")
 		if err != nil || val == "" {
 			val = "false"
 		}
