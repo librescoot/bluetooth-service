@@ -549,6 +549,15 @@ func (s *Service) UpdatePowerManagementState(stateStr string) error {
 	case "reboot-imminent":
 		stateInt = 1
 		s.log.Debugf(" Reboot-imminent state detected, sending 'running' state to nRF.")
+	case "suspending-pending":
+		stateInt = 3
+		s.log.Debugf(" %s state detected, sending suspending-imminent to nRF for user feedback.", stateStr)
+	case "hibernating-pending", "hibernating-manual-pending", "hibernating-timer-pending":
+		stateInt = 4
+		s.log.Debugf(" %s state detected, sending hibernating-imminent to nRF for user feedback.", stateStr)
+	case "reboot-pending":
+		stateInt = 1
+		s.log.Debugf(" %s state detected, sending running to nRF.", stateStr)
 	default:
 		s.log.Warnf("Unknown power management state string: %s. Sending default (running).", stateStr)
 		stateInt = 1

@@ -479,6 +479,11 @@ func TestUpdatePowerManagementState(t *testing.T) {
 		{"hibernating-timer-imminent state", "hibernating-timer-imminent", 4, false},
 		{"reboot state", "reboot", 5, false},
 		{"reboot-imminent state", "reboot-imminent", 1, false},
+		{"suspending-pending state", "suspending-pending", 3, false},
+		{"hibernating-pending state", "hibernating-pending", 4, false},
+		{"hibernating-manual-pending state", "hibernating-manual-pending", 4, false},
+		{"hibernating-timer-pending state", "hibernating-timer-pending", 4, false},
+		{"reboot-pending state", "reboot-pending", 1, false},
 		{"empty defaults to running", "", 1, false},
 		{"unknown defaults to running", "unknown", 1, false},
 	}
