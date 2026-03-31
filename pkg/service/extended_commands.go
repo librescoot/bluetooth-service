@@ -39,6 +39,8 @@ func (s *Service) handleExtendedCommandMessage(msgType ble.MessageType, absSubTy
 		s.handleConfigCommand(strings.TrimPrefix(cmdStr, "config:"))
 	} else if strings.HasPrefix(cmdStr, "status:") {
 		s.handleStatusQuery(strings.TrimPrefix(cmdStr, "status:"))
+	} else if strings.HasPrefix(cmdStr, "cap:") {
+		s.handleCapabilityQuery(strings.TrimPrefix(cmdStr, "cap:"))
 	} else {
 		s.log.Warnf("Unknown extended command prefix: %s", cmdStr)
 		s.sendExtendedResponse("error:unknown command")
@@ -412,4 +414,44 @@ func (s *Service) handleStatusQuery(key string) {
 	default:
 		s.sendExtendedResponse("status:error:unknown key")
 	}
+}
+
+// capabilityMap maps each command category to its supported commands.
+var capabilityMap = map[string][]string{
+	"nav":     {"dest", "clear", "fav:add", "fav:delete", "fav:navigate", "fav:list"},
+	"keycard": {"list", "count", "add", "remove"},
+	"usb":     {"ums", "normal"},
+	"time":    {"set"},
+	"config":  {"apn", "hibernate-timer", "update-channel"},
+	"status":  {"maps-available", "navigation-available"},
+	"cap":     {"list"},
+}
+
+// handleCapabilityQuery responds with the list of supported extended command features.
+// "cap:list" returns all category names.
+// "cap:<category>" returns the commands supported by that category.
+func (s *Service) handleCapabilityQuery(cmd string) {
+	cmd = strings.TrimSpace(cmd)
+
+	if cmd == "list" {
+		categories := make([]string, 0, len(capabilityMap))
+		for cat := range capabilityMap {
+			categories = append(categories, cat)
+		}
+		s.sendExtendedResponse(fmt.Sprintf("cap:count:%d", len(categories)))
+		for _, cat := range categories {
+			s.sendExtendedResponse(fmt.Sprintf("cap:%s", cat))
+		}
+		return
+	}
+
+	if commands, ok := capabilityMap[cmd]; ok {
+		s.sendExtendedResponse(fmt.Sprintf("cap:%s:count:%d", cmd, len(commands)))
+		for _, c := range commands {
+			s.sendExtendedResponse(fmt.Sprintf("cap:%s:%s", cmd, c))
+		}
+		return
+	}
+
+	s.sendExtendedResponse("cap:error:unknown command")
 }
