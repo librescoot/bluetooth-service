@@ -367,6 +367,24 @@ func (s *Service) handleConfigCommand(cmd string) {
 		s.log.Infof("Set hibernation timer: %s seconds", value)
 		s.sendExtendedResponse("config:ok")
 
+	case "auto-standby-seconds":
+		seconds, err := strconv.Atoi(value)
+		if err != nil {
+			s.sendExtendedResponse("config:error:invalid number")
+			return
+		}
+		if seconds < 0 || seconds > 3600 {
+			s.sendExtendedResponse("config:error:out of range (0-3600)")
+			return
+		}
+		if err := settings.Set("scooter.auto-standby-seconds", value); err != nil {
+			s.log.Errorf("Failed to set auto-standby-seconds: %v", err)
+			s.sendExtendedResponse("config:error:redis")
+			return
+		}
+		s.log.Infof("Set auto-standby-seconds: %d seconds", seconds)
+		s.sendExtendedResponse("config:ok")
+
 	case "update-channel":
 		switch value {
 		case "stable", "testing", "nightly":
@@ -422,7 +440,7 @@ var capabilityMap = map[string][]string{
 	"keycard": {"list", "count", "add", "remove"},
 	"usb":     {"ums", "normal"},
 	"time":    {"set"},
-	"config":  {"apn", "hibernate-timer", "update-channel"},
+	"config":  {"apn", "hibernate-timer", "update-channel", "auto-standby-seconds"},
 	"status":  {"maps-available", "navigation-available"},
 	"cap":     {"list"},
 }
