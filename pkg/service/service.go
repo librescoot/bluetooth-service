@@ -3,6 +3,7 @@ package service
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	ipc "github.com/librescoot/redis-ipc"
 
@@ -46,6 +47,12 @@ type Service struct {
 	subStopCh chan struct{}
 	subWg     sync.WaitGroup
 	subMu     sync.Mutex
+
+	// Extended response rate limiting: the nRF SoftDevice's HVN TX queue
+	// is 1 deep, so back-to-back notifications get dropped. Pace consecutive
+	// extended responses to give the BLE link time to drain.
+	extRespMu       sync.Mutex
+	lastExtRespTime time.Time
 }
 
 // Fault codes for bluetooth service

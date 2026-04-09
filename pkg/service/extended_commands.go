@@ -47,12 +47,30 @@ func (s *Service) handleExtendedCommandMessage(msgType ble.MessageType, absSubTy
 	}
 }
 
+// extRespMinInterval is the minimum spacing between consecutive extended
+// responses. The nRF SoftDevice's BLE_GATTS_HVN_TX_QUEUE_SIZE_DEFAULT is 1,
+// so back-to-back notifications get silently dropped (NRF_ERROR_RESOURCES,
+// return value ignored in ble_scooter_param_write). 100 ms exceeds the
+// configured MAX_CONN_INTERVAL of 75 ms, ensuring the previous notification
+// has been transmitted before we queue the next one. This matters for
+// multi-response commands like nav:fav:list, keycard:list, and cap:list.
+const extRespMinInterval = 100 * time.Millisecond
+
 // sendExtendedResponse sends a response string back to the nRF for the
-// EXTENDED_RESPONSE characteristic.
+// EXTENDED_RESPONSE characteristic. Calls are serialized and paced by
+// extRespMinInterval to avoid overflowing the nRF notification queue.
 func (s *Service) sendExtendedResponse(response string) {
+	s.extRespMu.Lock()
+	defer s.extRespMu.Unlock()
+
+	if elapsed := time.Since(s.lastExtRespTime); elapsed < extRespMinInterval {
+		time.Sleep(extRespMinInterval - elapsed)
+	}
+
 	if err := writeUARTMessageString(s.usock, ble.TypeExtended, ble.TypeExtendedResponse, response); err != nil {
 		s.log.Errorf("Failed to send extended response: %v", err)
 	}
+	s.lastExtRespTime = time.Now()
 }
 
 // handleNavCommand processes navigation commands.
