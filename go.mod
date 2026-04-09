@@ -4,7 +4,7 @@ go 1.24.0
 
 require (
 	github.com/fxamacker/cbor/v2 v2.9.0
-	github.com/librescoot/redis-ipc v0.10.3
+	github.com/librescoot/redis-ipc v0.11.2
 	github.com/tarm/serial v0.0.0-20180830185346-98f6abe2eb07
 )
 

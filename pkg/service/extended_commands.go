@@ -250,16 +250,15 @@ func (s *Service) listSavedLocations() {
 	count := 0
 	var entries []string
 
-	for id := 0; ; id++ {
+	misses := 0
+	for id := 0; misses < 5; id++ {
 		prefix := fmt.Sprintf("dashboard.saved-locations.%d", id)
 		lat, err := s.ipc.HGet("settings", prefix+".latitude")
 		if err != nil || lat == "" {
-			// Check a few more in case of gaps
-			if id < 100 {
-				continue
-			}
-			break
+			misses++
+			continue
 		}
+		misses = 0
 		lon, _ := s.ipc.HGet("settings", prefix+".longitude")
 		label, _ := s.ipc.HGet("settings", prefix+".label")
 		entries = append(entries, fmt.Sprintf("nav:fav:%d:%s,%s,%s", id, lat, lon, label))
