@@ -73,9 +73,10 @@ const (
 	// TypeBatterySlot1ManufacDate   SubType = 17
 
 	// Vehicle state sub-types
-	TypeVehicleStateState     SubType = 1 // BLE_SCOOTER_SERVICE_SCOOTER_STATE_STATE
-	TypeVehicleStateSeatbox   SubType = 2 // BLE_SCOOTER_SERVICE_SCOOTER_STATE_SEATBOX
-	TypeVehicleStateHandlebar SubType = 3 // BLE_SCOOTER_SERVICE_SCOOTER_STATE_HANDLEBAR
+	TypeVehicleStateState       SubType = 1 // BLE_SCOOTER_SERVICE_SCOOTER_STATE_STATE
+	TypeVehicleStateSeatbox     SubType = 2 // BLE_SCOOTER_SERVICE_SCOOTER_STATE_SEATBOX
+	TypeVehicleStateHandlebar   SubType = 3 // BLE_SCOOTER_SERVICE_SCOOTER_STATE_HANDLEBAR
+	TypeExternalTemperature     SubType = 4 // BLE_SCOOTER_SERVICE_SCOOTER_STATE_TEMPERATURE (NTCALUG01A thermistor, tenths of °C)
 
 	// Scooter info sub-types
 	TypeSoftwareVersion SubType = 1 // BLE_SCOOTER_SERVICE_SOFTWARE_VERSION
@@ -96,8 +97,8 @@ const (
 
 	// Aux battery sub-types
 	TypeAuxBatteryVoltage       SubType = 1 // BLE_SCOOTER_SERVICE_AUX_BATTERY_VOLTAGE
-	TypeAuxBatteryCharge        SubType = 4 // BLE_SCOOTER_SERVICE_AUX_BATTERY_CHARGE
 	TypeAuxBatteryChargerStatus SubType = 3 // BLE_SCOOTER_SERVICE_AUX_BATTERY_CHARGER_STATUS
+	TypeAuxBatteryCharge        SubType = 4 // BLE_SCOOTER_SERVICE_AUX_BATTERY_CHARGE
 
 	// Battery Info (CB Battery) sub-types based on ble_service_cb_battery_t
 	TypeBatteryInfoCharge           SubType = 1  // BLE_SCOOTER_SERVICE_CB_BATTERY_CHARGE

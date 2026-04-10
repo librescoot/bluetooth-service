@@ -286,6 +286,16 @@ func (s *Service) handleVehicleStateMessage(subType ble.SubType, value interface
 			s.log.Warnf("Could not decode handlebar lock state value: %v", value)
 		}
 
+	case ble.TypeExternalTemperature:
+		if temp, ok := convertToInt(value); ok {
+			s.log.Debugf("Received external temperature: %d (tenths of °C)", temp)
+			if err := s.ipc.Hash("scooter").Set("temperature", fmt.Sprintf("%d", temp)); err != nil {
+				s.log.Errorf("Failed to update external temperature in Redis: %v", err)
+			}
+		} else {
+			s.log.Warnf("Could not decode external temperature value: %v", value)
+		}
+
 	default:
 		s.log.Warnf("Unknown vehicle state message relative subtype: %v", subType)
 	}
