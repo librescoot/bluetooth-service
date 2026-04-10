@@ -116,8 +116,13 @@ func (s *Service) handleNavCommand(cmd string) {
 
 	} else if cmd == "clear" {
 		hash := s.ipc.Hash(KeyNavigation)
+		// Set fields to empty strings instead of deleting them.
+		// HDEL publishes the field name, but consumers (redis-ipc HashWatcher,
+		// scootui-qt HiredisWorker) do HGET after the notification and silently
+		// discard redis.Nil / REDIS_REPLY_NIL results, so the clear is never
+		// propagated. Setting to "" triggers normal change-detection paths.
 		for _, field := range []string{"latitude", "longitude", "destination", "address", "timestamp"} {
-			if err := hash.Delete(field); err != nil {
+			if err := hash.Set(field, ""); err != nil {
 				s.log.Errorf("Failed to clear navigation field %s: %v", field, err)
 			}
 		}
