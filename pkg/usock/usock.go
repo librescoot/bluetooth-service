@@ -58,6 +58,7 @@ type USOCK struct {
 	errorHandler func(error)
 	log         *logger.Logger
 	stopChan    chan struct{}
+	stopOnce    sync.Once
 	wg          sync.WaitGroup
 	state       State
 	frame       Frame
@@ -104,7 +105,7 @@ func New(devicePath string, baudRate int, handler func(*Payload), log *logger.Lo
 		Size:        8,
 		Parity:      serial.ParityNone,
 		StopBits:    serial.Stop1,
-		ReadTimeout: 0,
+		ReadTimeout: 500 * time.Millisecond,
 	}
 
 	// Open the port
@@ -243,11 +244,15 @@ func (u *USOCK) SetErrorHandler(handler func(error)) {
 	u.errorHandler = handler
 }
 
-// Close closes the USOCK connection
+// Close closes the USOCK connection. Idempotent — safe to call multiple times.
 func (u *USOCK) Close() error {
-	close(u.stopChan)
-	u.wg.Wait()
-	return u.port.Close()
+	var err error
+	u.stopOnce.Do(func() {
+		close(u.stopChan)
+		err = u.port.Close()
+		u.wg.Wait()
+	})
+	return err
 }
 
 // readLoop continuously reads from the serial port
@@ -265,9 +270,13 @@ func (u *USOCK) readLoop() {
 			// Use blocking read with no timeout
 			n, err := u.port.Read(buf)
 			if err != nil {
+				select {
+				case <-u.stopChan:
+					return
+				default:
+				}
 				if err != io.EOF {
 					u.log.Errorf("Error reading from serial port: %v", err)
-					// Notify error handler if set
 					u.mu.Lock()
 					if u.errorHandler != nil {
 						go u.errorHandler(fmt.Errorf("serial read error: %v", err))
