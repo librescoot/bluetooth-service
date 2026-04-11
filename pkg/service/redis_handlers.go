@@ -49,157 +49,124 @@ func (s *Service) SubscribeToRedisChannels() {
 			watcher := s.ipc.NewHashWatcher(chName)
 
 			watcher.OnAny(func(field, value string) error {
-				s.log.Debugf("Received Redis message on channel %s: %s", chName, field)
-
 				switch chName {
-					case KeyVehicle:
-						switch field {
-						case "state":
-							if err := s.UpdateVehicleState(value); err != nil {
-								s.log.Errorf("Error sending vehicle state update triggered by Redis: %v", err)
-							}
-						case "seatbox:lock":
-							if err := s.UpdateSeatboxLock(value); err != nil {
-								s.log.Errorf("Error sending seatbox lock update triggered by Redis: %v", err)
-							}
-						case "handlebar:lock-sensor":
-							if err := s.UpdateHandlebarLock(value); err != nil {
-								s.log.Errorf("Error sending handlebar lock update triggered by Redis: %v", err)
-							}
-						default:
-							s.log.Debugf("Unhandled field '%s' for channel '%s'", field, chName)
+				case KeyVehicle:
+					switch field {
+					case "state":
+						if err := s.UpdateVehicleState(value); err != nil {
+							s.log.Errorf("Error sending vehicle state update triggered by Redis: %v", err)
 						}
-
-					case KeyBatterySlot0:
-						switch field {
-						case "state":
-							if err := s.UpdateBatteryActiveStatus(0, value); err != nil {
-								s.log.Errorf("Error sending battery:0 state update triggered by Redis: %v", err)
-							}
-						case "present":
-							if err := s.UpdateBatteryPresentStatus(0, value); err != nil {
-								s.log.Errorf("Error sending battery:0 presence update triggered by Redis: %v", err)
-							}
-						case "charge":
-							if err := s.UpdateBatteryRemainingCharge(0, value); err != nil {
-								s.log.Errorf("Error sending battery:0 charge update triggered by Redis: %v", err)
-							}
-						case "cycle-count":
-							if err := s.UpdateBatteryCycleCount(0, value); err != nil {
-								s.log.Errorf("Error sending battery:0 cycle count update triggered by Redis: %v", err)
-							}
-						case "temperature-state":
-							// Silently ignore temperature-state updates
-							s.log.Debugf("Ignoring temperature-state update for battery:0")
-						default:
-							s.log.Debugf("Unhandled field '%s' for channel '%s'", field, chName)
+					case "seatbox:lock":
+						if err := s.UpdateSeatboxLock(value); err != nil {
+							s.log.Errorf("Error sending seatbox lock update triggered by Redis: %v", err)
 						}
-
-					case KeyBatterySlot1:
-						switch field {
-						case "state":
-							if err := s.UpdateBatteryActiveStatus(1, value); err != nil {
-								s.log.Errorf("Error sending battery:1 state update triggered by Redis: %v", err)
-							}
-						case "present":
-							if err := s.UpdateBatteryPresentStatus(1, value); err != nil {
-								s.log.Errorf("Error sending battery:1 presence update triggered by Redis: %v", err)
-							}
-						case "charge":
-							if err := s.UpdateBatteryRemainingCharge(1, value); err != nil {
-								s.log.Errorf("Error sending battery:1 charge update triggered by Redis: %v", err)
-							}
-						case "cycle-count":
-							if err := s.UpdateBatteryCycleCount(1, value); err != nil {
-								s.log.Errorf("Error sending battery:1 cycle count update triggered by Redis: %v", err)
-							}
-						case "temperature-state":
-							// Silently ignore temperature-state updates
-							s.log.Debugf("Ignoring temperature-state update for battery:1")
-						default:
-							s.log.Debugf("Unhandled field '%s' for channel '%s'", field, chName)
+					case "handlebar:lock-sensor":
+						if err := s.UpdateHandlebarLock(value); err != nil {
+							s.log.Errorf("Error sending handlebar lock update triggered by Redis: %v", err)
 						}
-
-					case KeyPowerManager:
-						if field == "state" {
-							if err := s.UpdatePowerManagementState(value); err != nil {
-								s.log.Errorf("Error sending power management state update triggered by Redis: %v", err)
-							}
-						} else {
-							s.log.Debugf("Unhandled field '%s' for channel '%s'", field, chName)
-						}
-
-					case KeyMileage:
-						if field == "odometer" {
-							if err := s.UpdateMileage(value); err != nil {
-								s.log.Errorf("Error sending mileage update triggered by Redis: %v", err)
-							}
-						} else {
-							s.log.Debugf("Unhandled field '%s' for channel '%s'", field, chName)
-						}
-
-					case KeyFirmwareVersion:
-						if field == "mdb-version" {
-							if err := s.UpdateFirmwareVersion(value); err != nil {
-								s.log.Errorf("Error sending firmware version update triggered by Redis: %v", err)
-							}
-						} else {
-							s.log.Debugf("Unhandled field '%s' for channel '%s'", field, chName)
-						}
-
-					case KeyBLEPairingPin:
-						if field == "pin-code" {
-							// value parameter contains the current pin code value
-							if value == "" {
-								s.log.Debugf("Pin code removed notification received for channel '%s'. Sending removal command.", chName)
-								if err := writeUARTMessage(s.usock, ble.TypeBLEPairingPinRemove, 0, 1); err != nil {
-									s.log.Errorf("Error sending pairing pin removal command: %v", err)
-								}
-							} else {
-								s.log.Debugf("Pin code set/updated notification received for channel '%s'. No action needed.", chName)
-							}
-						} else {
-							s.log.Debugf("Unhandled field '%s' for channel '%s'", field, chName)
-						}
-
-					case KeyNavigation:
-						if field == "destination" || field == "latitude" {
-							// Derive active status: destination is set if latitude is non-empty
-							active := uint16(0)
-							if value != "" {
-								active = 1
-							}
-							if err := writeUARTMessage(s.usock, ble.TypeScooterInfo, ble.TypeNavigationActive, active); err != nil {
-								s.log.Errorf("Error sending navigation active update: %v", err)
-							}
-						} else {
-							s.log.Debugf("Unhandled field '%s' for channel '%s'", field, chName)
-						}
-
-					case KeyUSB:
-						if field == "mode" {
-							var mode uint16
-							if value == "ums" {
-								mode = 1
-							}
-							if err := writeUARTMessage(s.usock, ble.TypeScooterInfo, ble.TypeUMSStatus, mode); err != nil {
-								s.log.Errorf("Error sending UMS status update: %v", err)
-							}
-						} else {
-							s.log.Debugf("Unhandled field '%s' for channel '%s'", field, chName)
-						}
-
-					case KeyKeycard:
-						if field == "command-result" && value != "" {
-							s.sendExtendedResponse("keycard:" + value)
-						}
-
-					default:
-						s.log.Warnf("Unhandled Redis channel in subscription: %s", chName)
 					}
 
-					return nil
-				})
+				case KeyBatterySlot0:
+					switch field {
+					case "state":
+						if err := s.UpdateBatteryActiveStatus(0, value); err != nil {
+							s.log.Errorf("Error sending battery:0 state update triggered by Redis: %v", err)
+						}
+					case "present":
+						if err := s.UpdateBatteryPresentStatus(0, value); err != nil {
+							s.log.Errorf("Error sending battery:0 presence update triggered by Redis: %v", err)
+						}
+					case "charge":
+						if err := s.UpdateBatteryRemainingCharge(0, value); err != nil {
+							s.log.Errorf("Error sending battery:0 charge update triggered by Redis: %v", err)
+						}
+					case "cycle-count":
+						if err := s.UpdateBatteryCycleCount(0, value); err != nil {
+							s.log.Errorf("Error sending battery:0 cycle count update triggered by Redis: %v", err)
+						}
+					}
+
+				case KeyBatterySlot1:
+					switch field {
+					case "state":
+						if err := s.UpdateBatteryActiveStatus(1, value); err != nil {
+							s.log.Errorf("Error sending battery:1 state update triggered by Redis: %v", err)
+						}
+					case "present":
+						if err := s.UpdateBatteryPresentStatus(1, value); err != nil {
+							s.log.Errorf("Error sending battery:1 presence update triggered by Redis: %v", err)
+						}
+					case "charge":
+						if err := s.UpdateBatteryRemainingCharge(1, value); err != nil {
+							s.log.Errorf("Error sending battery:1 charge update triggered by Redis: %v", err)
+						}
+					case "cycle-count":
+						if err := s.UpdateBatteryCycleCount(1, value); err != nil {
+							s.log.Errorf("Error sending battery:1 cycle count update triggered by Redis: %v", err)
+						}
+					}
+
+				case KeyPowerManager:
+					if field == "state" {
+						if err := s.UpdatePowerManagementState(value); err != nil {
+							s.log.Errorf("Error sending power management state update triggered by Redis: %v", err)
+						}
+					}
+
+				case KeyMileage:
+					if field == "odometer" {
+						if err := s.UpdateMileage(value); err != nil {
+							s.log.Errorf("Error sending mileage update triggered by Redis: %v", err)
+						}
+					}
+
+				case KeyFirmwareVersion:
+					if field == "mdb-version" {
+						if err := s.UpdateFirmwareVersion(value); err != nil {
+							s.log.Errorf("Error sending firmware version update triggered by Redis: %v", err)
+						}
+					}
+
+				case KeyBLEPairingPin:
+					if field == "pin-code" && value == "" {
+						if err := writeUARTMessage(s.usock, ble.TypeBLEPairingPinRemove, 0, 1); err != nil {
+							s.log.Errorf("Error sending pairing pin removal command: %v", err)
+						}
+					}
+
+				case KeyNavigation:
+					if field == "destination" || field == "latitude" {
+						active := uint16(0)
+						if value != "" {
+							active = 1
+						}
+						if err := writeUARTMessage(s.usock, ble.TypeScooterInfo, ble.TypeNavigationActive, active); err != nil {
+							s.log.Errorf("Error sending navigation active update: %v", err)
+						}
+					}
+
+				case KeyUSB:
+					if field == "mode" {
+						var mode uint16
+						if value == "ums" {
+							mode = 1
+						}
+						if err := writeUARTMessage(s.usock, ble.TypeScooterInfo, ble.TypeUMSStatus, mode); err != nil {
+							s.log.Errorf("Error sending UMS status update: %v", err)
+						}
+					}
+
+				case KeyKeycard:
+					if field == "command-result" && value != "" {
+						s.sendExtendedResponse("keycard:" + value)
+					}
+
+				default:
+					s.log.Warnf("Unhandled Redis channel in subscription: %s", chName)
+				}
+
+				return nil
+			})
 
 				watcher.StartWithSync() // Fetches initial state and calls handlers
 				defer watcher.Stop()
