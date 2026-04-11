@@ -168,11 +168,11 @@ func (s *Service) SubscribeToRedisChannels() {
 				return nil
 			})
 
-				watcher.StartWithSync() // Fetches initial state and calls handlers
-				defer watcher.Stop()
+			watcher.StartWithSync() // Fetches initial state and calls handlers
+			defer watcher.Stop()
 
-				<-stopCh
-				s.log.Debugf("Stopping subscription for channel %s", chName)
+			<-stopCh
+			s.log.Debugf("Stopping subscription for channel %s", chName)
 		}(channel) // Pass channel name to the goroutine
 	}
 
