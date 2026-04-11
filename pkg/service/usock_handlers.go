@@ -288,8 +288,9 @@ func (s *Service) handleVehicleStateMessage(subType ble.SubType, value interface
 
 	case ble.TypeExternalTemperature:
 		if temp, ok := convertToInt(value); ok {
-			s.log.Debugf("Received external temperature: %d (tenths of °C)", temp)
-			if err := s.ipc.Hash("scooter").Set("temperature", fmt.Sprintf("%d", temp)); err != nil {
+			tempC := float64(temp) / 10.0
+			s.log.Debugf("Received external temperature: %.1f °C", tempC)
+			if err := s.ipc.Hash("scooter").Set("temperature", strconv.FormatFloat(tempC, 'f', 1, 64)); err != nil {
 				s.log.Errorf("Failed to update external temperature in Redis: %v", err)
 			}
 		} else {
