@@ -79,6 +79,13 @@ func (s *Service) SetUSock(sock *usock.USOCK) {
 	s.usock = sock
 }
 
+// GetUSock returns the current USOCK connection for sending messages.
+func (s *Service) GetUSock() usockWriter {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.usock
+}
+
 // SetSerialConfig stores the serial configuration for reconnection
 func (s *Service) SetSerialConfig(device string, baud int, handler func(*usock.Payload)) {
 	s.mu.Lock()
@@ -205,7 +212,6 @@ func (s *Service) RestartSubscriptions() {
 	s.SubscribeToRedisChannels()
 }
 
-
 // setErrorAndSleep sets an error state in Redis and blocks forever to prevent restart loops
 func (s *Service) setErrorAndSleep(errorMsg string) {
 	s.log.Errorf("Fatal error: %s", errorMsg)
@@ -222,4 +228,3 @@ func (s *Service) setErrorAndSleep(errorMsg string) {
 	s.log.Errorf("Blocking forever to prevent restart loop")
 	select {} // Block indefinitely
 }
-

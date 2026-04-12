@@ -1,7 +1,6 @@
 package service
 
 import (
-	"bufio"
 	"bytes"
 	"fmt"
 	"os"
@@ -13,6 +12,7 @@ import (
 
 	ipc "github.com/librescoot/redis-ipc"
 
+	"github.com/librescoot/bluetooth-service/pkg/ble"
 	"github.com/librescoot/bluetooth-service/pkg/logger"
 )
 
@@ -21,6 +21,7 @@ type FirmwareUpdateConfig struct {
 	FirmwareDir     string
 	NRFUpdateScript string
 	SerialDevice    string
+	BaudRate        int
 	MaxDFURetries   int
 	DFURetryDelay   time.Duration
 	DFUCooldown     int
@@ -51,6 +52,9 @@ func NewFirmwareUpdater(config FirmwareUpdateConfig, log *logger.Logger, ipcClie
 	}
 	if config.NRFUpdateScript == "" {
 		config.NRFUpdateScript = DefaultNRFUpdateScript
+	}
+	if config.BaudRate == 0 {
+		config.BaudRate = 115200
 	}
 
 	return &FirmwareUpdater{
@@ -179,7 +183,10 @@ func (fu *FirmwareUpdater) findFirmwarePath(version *FirmwareVersion) (string, e
 	return "", fmt.Errorf("firmware file not found for version %s", versionStr)
 }
 
-// CheckAndUpdate checks for newer firmware and updates if available
+// CheckAndUpdate compares the nRF's running application version against the
+// latest -app- zip in the firmware directory and runs a staged update if they
+// don't match. It's called from the USOCK version-string handler after each
+// reconnect.
 func (fu *FirmwareUpdater) CheckAndUpdate(currentVersionStr string) (bool, error) {
 	fu.setStatus("checking")
 
@@ -189,16 +196,21 @@ func (fu *FirmwareUpdater) CheckAndUpdate(currentVersionStr string) (bool, error
 		return false, fmt.Errorf("failed to parse current version: %w", err)
 	}
 
-	latestVersion, firmwarePath, err := fu.GetLatestFirmware()
+	pair, err := FindLatestZipPair(fu.config.FirmwareDir)
 	if err != nil {
 		fu.setStatus("idle")
-		return false, fmt.Errorf("failed to get latest firmware: %w", err)
+		return false, fmt.Errorf("scanning %s: %w", fu.config.FirmwareDir, err)
 	}
-
-	if latestVersion == nil {
-		fu.log.Infof("No firmware files found in %s", fu.config.FirmwareDir)
+	if pair == nil {
+		fu.log.Infof("No firmware zip pair found in %s", fu.config.FirmwareDir)
 		fu.setStatus("idle")
 		return false, nil
+	}
+
+	latestVersion, err := ParseFirmwareVersion(pair.Version)
+	if err != nil {
+		fu.setStatus("idle")
+		return false, fmt.Errorf("parsing zip pair version %q: %w", pair.Version, err)
 	}
 
 	if !latestVersion.IsNewerThan(currentVersion) {
@@ -207,40 +219,65 @@ func (fu *FirmwareUpdater) CheckAndUpdate(currentVersionStr string) (bool, error
 		return false, nil
 	}
 
-	if latestVersion.Compare(currentVersion) > 0 {
-		fu.log.Infof("Newer firmware available: %s (current: %s)", latestVersion, currentVersion)
-	} else {
-		fu.log.Infof("Firmware build metadata changed: %s (current: %s)", latestVersion, currentVersion)
-	}
-
-	// Perform the update
-	if err := fu.PerformUpdate(firmwarePath); err != nil {
+	fu.log.Infof("Newer firmware available: %s (current: %s)", latestVersion, currentVersion)
+	if err := fu.PerformStagedUpdate(pair); err != nil {
 		return false, err
 	}
-
 	return true, nil
 }
 
-// PerformUpdate performs the firmware update process
-func (fu *FirmwareUpdater) PerformUpdate(firmwarePath string) error {
-	fu.log.Infof("Starting firmware update with %s", firmwarePath)
+// PerformStagedUpdate runs the full two-stage flash flow against the given
+// zip pair: enter DFU, query the installed bootloader version, skip the
+// bootloader stage if it's already at least as new as the target, and flash
+// the remaining stages in order re-entering DFU between each.
+func (fu *FirmwareUpdater) PerformStagedUpdate(pair *ZipPair) error {
+	fu.log.Infof("Starting firmware update to %s", pair.Version)
 	fu.setStatus("updating")
 
-	// Step 1: Stop subscriptions (they will be restarted after reconnect)
+	// Parse target versions from the signed init packets inside the zips.
+	blInfo, err := ParseZipDFUInfo(pair.BLPath)
+	if err != nil {
+		fu.setStatus("failed:manifest")
+		return fmt.Errorf("parsing %s: %w", pair.BLPath, err)
+	}
+	blTarget, ok := blInfo.BootloaderInfo()
+	if !ok {
+		fu.setStatus("failed:manifest")
+		return fmt.Errorf("no bootloader image in %s", pair.BLPath)
+	}
+	appInfo, err := ParseZipDFUInfo(pair.AppPath)
+	if err != nil {
+		fu.setStatus("failed:manifest")
+		return fmt.Errorf("parsing %s: %w", pair.AppPath, err)
+	}
+	appTarget, ok := appInfo.ApplicationInfo()
+	if !ok {
+		fu.setStatus("failed:manifest")
+		return fmt.Errorf("no application image in %s", pair.AppPath)
+	}
+	fu.log.Infof("Target: bootloader_version=%d application_version=%d",
+		blTarget.FwVersion, appTarget.FwVersion)
+
+	// Tell the nRF to stop its autonomous data stream before we hand the
+	// serial line to nrfupdate.py. Otherwise the data stream frames arrive
+	// faster than the 1s read timeout in nrfupdate.py's serial_request(),
+	// and the DFU entry stalls for minutes while bytes keep dripping in.
+	fu.log.Infof("Stopping nRF data stream...")
+	if err := writeUARTMessage(fu.service.GetUSock(), ble.TypeDataStream, ble.TypeDataStreamEnable, 0); err != nil {
+		fu.log.Warnf("Failed to stop data stream (continuing anyway): %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+
 	fu.log.Infof("Stopping Redis subscriptions...")
 	fu.service.StopSubscriptions()
-
-	// Step 2: Close serial connection
 	fu.log.Infof("Closing serial connection...")
 	if err := fu.service.CloseUSock(); err != nil {
 		fu.log.Errorf("Failed to close serial connection: %v", err)
-		// Continue anyway, the update might still work
 	}
-
-	// Step 3: Wait for port release
 	time.Sleep(500 * time.Millisecond)
 
-	// Step 4: Run nrfupdate.py to enter DFU mode
+	// Enter DFU mode for the first time. All plan decisions and flashes
+	// happen while the nRF is in DFU bootloader mode.
 	fu.log.Infof("Entering DFU mode...")
 	if err := fu.enterDFUMode(); err != nil {
 		fu.setStatus("failed:nrfupdate")
@@ -249,7 +286,130 @@ func (fu *FirmwareUpdater) PerformUpdate(firmwarePath string) error {
 		return fmt.Errorf("failed to enter DFU mode: %w", err)
 	}
 
-	// Step 5: Run Nordic DFU tool
+	// Query the currently installed bootloader version. If the query fails,
+	// fall back to "flash the bootloader anyway" — the nordicsemi tool will
+	// still soft-fail on 0x05 if the bootloader is already current, leaving
+	// the app flash to proceed as its own transaction.
+	var currentBL uint32
+	if info, err := QueryDFUFirmwareVersion(fu.config.SerialDevice, fu.config.BaudRate, nrfDFUImageIdxBootloader); err != nil {
+		fu.log.Warnf("Unable to query installed bootloader version: %v. Will attempt BL flash anyway.", err)
+		currentBL = 0
+	} else {
+		currentBL = info.Version
+		fu.log.Infof("Installed bootloader_version=%d (image_type=0x%02x, addr=0x%08x, len=%d)",
+			info.Version, info.ImageType, info.Addr, info.Length)
+	}
+
+	plan := BuildDFUPlan(pair, currentBL, blTarget.FwVersion, appTarget.FwVersion)
+	fu.log.Infof("DFU plan: %s", plan.Summary())
+
+	// Execute each stage. Between stages the nRF reboots out of DFU mode
+	// back into the bootloader, so we re-enter DFU before each subsequent
+	// flash.
+	for i, stage := range plan.Stages {
+		if i > 0 {
+			fu.log.Infof("Re-entering DFU mode for stage %d (%s)...", i+1, stage.Label)
+			if err := fu.enterDFUMode(); err != nil {
+				fu.setStatus("failed:nrfupdate")
+				fu.service.SetFault(FaultFirmwareUpdate)
+				fu.attemptReconnect()
+				return fmt.Errorf("failed to re-enter DFU mode before stage %s: %w", stage.Label, err)
+			}
+		}
+		fu.log.Infof("Flashing stage %d/%d: %s (%s)", i+1, len(plan.Stages), stage.Label, stage.Path)
+		if err := fu.runNordicDFU(stage.Path); err != nil {
+			fu.setStatus("failed:dfu")
+			fu.service.SetFault(FaultFirmwareUpdate)
+			fu.attemptReconnect()
+			return fmt.Errorf("DFU failed on stage %s: %w", stage.Label, err)
+		}
+	}
+
+	// Wait for the nRF to reboot into the freshly-flashed application and
+	// reopen USOCK.
+	fu.log.Infof("Waiting for nRF to reboot...")
+	time.Sleep(20 * time.Second)
+
+	fu.log.Infof("Reconnecting to nRF...")
+	if err := fu.service.ReconnectUSock(); err != nil {
+		fu.setStatus("failed:reconnect")
+		fu.service.SetFault(FaultFirmwareUpdate)
+		return fmt.Errorf("failed to reconnect after update: %w", err)
+	}
+
+	fu.log.Infof("Restarting Redis subscriptions...")
+	fu.service.SubscribeToRedisChannels()
+
+	fu.service.ClearFault(FaultFirmwareUpdate)
+	fu.setStatus("success")
+	fu.log.Infof("Firmware update to %s completed successfully", pair.Version)
+	return nil
+}
+
+// PerformUpdate is the legacy single-zip entry point. New code should call
+// PerformStagedUpdate with a ZipPair so the bootloader-vs-application split
+// logic runs. This shim exists so the redis force-update command and any
+// out-of-tree callers keep working until they're migrated.
+func (fu *FirmwareUpdater) PerformUpdate(firmwarePath string) error {
+	// If the caller handed us one of the new split zips, promote it to a
+	// pair and run the staged flow.
+	base := filepath.Base(firmwarePath)
+	if m := dfuZipPattern.FindStringSubmatch(base); m != nil {
+		prefix, version := m[1], m[3]
+		dir := filepath.Dir(firmwarePath)
+		pair := &ZipPair{
+			Version: version,
+			BLPath:  filepath.Join(dir, prefix+"-bl-"+version+".zip"),
+			AppPath: filepath.Join(dir, prefix+"-app-"+version+".zip"),
+		}
+		if fileExists(pair.BLPath) && fileExists(pair.AppPath) {
+			return fu.PerformStagedUpdate(pair)
+		}
+		fu.log.Warnf("PerformUpdate: %s missing its sibling, falling back to single-zip flash", firmwarePath)
+	}
+
+	// Fallback: the caller passed a zip we can't interpret as a pair (a
+	// legacy -full- zip, for example). Flash it as one shot without version
+	// decisions. This path is only used for backward compatibility and will
+	// be removed once all callers use staged updates.
+	return fu.legacyPerformUpdate(firmwarePath)
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// legacyPerformUpdate is the pre-split flash path: stop subscriptions, enter
+// DFU, flash one zip, reconnect. Used only for force-update commands that
+// haven't been migrated to the staged flow.
+func (fu *FirmwareUpdater) legacyPerformUpdate(firmwarePath string) error {
+	fu.log.Infof("Starting firmware update with %s", firmwarePath)
+	fu.setStatus("updating")
+
+	fu.log.Infof("Stopping nRF data stream...")
+	if err := writeUARTMessage(fu.service.GetUSock(), ble.TypeDataStream, ble.TypeDataStreamEnable, 0); err != nil {
+		fu.log.Warnf("Failed to stop data stream (continuing anyway): %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+
+	fu.log.Infof("Stopping Redis subscriptions...")
+	fu.service.StopSubscriptions()
+
+	fu.log.Infof("Closing serial connection...")
+	if err := fu.service.CloseUSock(); err != nil {
+		fu.log.Errorf("Failed to close serial connection: %v", err)
+	}
+	time.Sleep(500 * time.Millisecond)
+
+	fu.log.Infof("Entering DFU mode...")
+	if err := fu.enterDFUMode(); err != nil {
+		fu.setStatus("failed:nrfupdate")
+		fu.service.SetFault(FaultFirmwareUpdate)
+		fu.attemptReconnect()
+		return fmt.Errorf("failed to enter DFU mode: %w", err)
+	}
+
 	fu.log.Infof("Running Nordic DFU...")
 	if err := fu.runNordicDFU(firmwarePath); err != nil {
 		fu.setStatus("failed:dfu")
@@ -258,11 +418,9 @@ func (fu *FirmwareUpdater) PerformUpdate(firmwarePath string) error {
 		return fmt.Errorf("DFU failed: %w", err)
 	}
 
-	// Step 6: Wait for nRF to reboot
 	fu.log.Infof("Waiting for nRF to reboot...")
 	time.Sleep(20 * time.Second)
 
-	// Step 7: Reconnect
 	fu.log.Infof("Reconnecting to nRF...")
 	if err := fu.service.ReconnectUSock(); err != nil {
 		fu.setStatus("failed:reconnect")
@@ -270,7 +428,6 @@ func (fu *FirmwareUpdater) PerformUpdate(firmwarePath string) error {
 		return fmt.Errorf("failed to reconnect after update: %w", err)
 	}
 
-	// Step 8: Restart subscriptions (this will sync state via StartWithSync)
 	fu.log.Infof("Restarting Redis subscriptions...")
 	fu.service.SubscribeToRedisChannels()
 
@@ -280,56 +437,27 @@ func (fu *FirmwareUpdater) PerformUpdate(firmwarePath string) error {
 	return nil
 }
 
-// enterDFUMode runs nrfupdate.py to put the nRF into DFU mode
+// enterDFUMode runs nrfupdate.py to put the nRF into DFU mode.
+//
+// The script sends a UART break to wake a potentially-hung nRF, then transmits
+// the USOCK DFU_CMD_START command. The nRF reboots into the DFU bootloader
+// without sending a reply, so we treat a clean subprocess exit as success.
+// The downstream SLIP version query or nordicsemi ping is the real verification
+// that the bootloader is alive.
 func (fu *FirmwareUpdater) enterDFUMode() error {
-	for attempt := 1; attempt <= fu.config.MaxDFURetries; attempt++ {
-		fu.log.Debugf("DFU mode attempt %d/%d", attempt, fu.config.MaxDFURetries)
+	cmd := exec.Command("python3", fu.config.NRFUpdateScript, "-p", fu.config.SerialDevice, "--dfu", "usock")
+	var output bytes.Buffer
+	cmd.Stdout = &output
+	cmd.Stderr = &output
 
-		cmd := exec.Command("python3", fu.config.NRFUpdateScript, "-p", fu.config.SerialDevice, "--dfu", "usock")
-		var output bytes.Buffer
-		// Capture both stdout and stderr since Python scripts may output to either
-		cmd.Stdout = &output
-		cmd.Stderr = &output
-
-		err := cmd.Run()
-		outputStr := output.String()
-
-		if err != nil {
-			fu.log.Debugf("nrfupdate.py attempt %d failed: %v, output: %s", attempt, err, outputStr)
-			time.Sleep(fu.config.DFURetryDelay)
-			continue
-		}
-
-		fu.log.Debugf("nrfupdate.py attempt %d output: %s", attempt, outputStr)
-
-		// Check if we got a response after "Rx:"
-		if hasValidDFUResponse(outputStr) {
-			fu.log.Infof("DFU mode entered successfully")
-			return nil
-		}
-
-		fu.log.Debugf("No valid DFU response on attempt %d", attempt)
-		time.Sleep(fu.config.DFURetryDelay)
+	err := cmd.Run()
+	if err != nil {
+		fu.log.Errorf("nrfupdate.py failed: %v, output: %s", err, output.String())
+		return fmt.Errorf("nrfupdate.py: %w", err)
 	}
 
-	return fmt.Errorf("failed to enter DFU mode after %d attempts", fu.config.MaxDFURetries)
-}
-
-// hasValidDFUResponse checks if the nrfupdate.py output contains a valid DFU response
-func hasValidDFUResponse(output string) bool {
-	scanner := bufio.NewScanner(strings.NewReader(output))
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if strings.HasPrefix(line, "Rx:") {
-			// Check if there's content after "Rx:"
-			rxContent := strings.TrimPrefix(line, "Rx:")
-			rxContent = strings.TrimSpace(rxContent)
-			if rxContent != "" {
-				return true
-			}
-		}
-	}
-	return false
+	fu.log.Infof("DFU entry command sent (%s)", strings.TrimSpace(output.String()))
+	return nil
 }
 
 // runNordicDFU runs the Nordic DFU tool
