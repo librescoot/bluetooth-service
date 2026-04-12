@@ -326,7 +326,7 @@ func (s *Service) handleScooterInfoMessage(msgType ble.MessageType, absSubTypeKe
 			// Convert string to int
 			if mileage, err := strconv.Atoi(mileageStr); err == nil {
 				s.log.Debugf("Received mileage (string): %d", mileage)
-			if err := s.ipc.Hash(KeyMileage).Set("odometer", fmt.Sprintf("%d", mileage)); err != nil {
+				if err := s.ipc.Hash(KeyMileage).Set("odometer", fmt.Sprintf("%d", mileage)); err != nil {
 					s.log.Errorf("Failed to update mileage in Redis: %v", err)
 				}
 			} else {
@@ -344,7 +344,7 @@ func (s *Service) handleScooterInfoMessage(msgType ble.MessageType, absSubTypeKe
 	case expectedVersionSubType:
 		if versionStr, ok := convertToString(value); ok {
 			s.log.Debugf("Received software version: %s", versionStr)
-				if err := s.ipc.Hash(KeyFirmwareVersion).Set("mdb-version", versionStr); err != nil {
+			if err := s.ipc.Hash(KeyFirmwareVersion).Set("mdb-version", versionStr); err != nil {
 				s.log.Errorf("Failed to update software version in Redis: %v", err)
 			}
 		} else {
@@ -366,7 +366,7 @@ func (s *Service) handleBLEVersionMessage(msgType ble.MessageType, absSubTypeKey
 			s.log.Infof("Detected firmware version: %s", versionStr)
 
 			// Write version to Redis immediately (before compatibility check)
-				if err := s.ipc.Hash(KeyFirmwareVersion).Set("nrf-fw-version", versionStr); err != nil {
+			if err := s.ipc.Hash(KeyFirmwareVersion).Set("nrf-fw-version", versionStr); err != nil {
 				s.log.Errorf("Failed to update BLE version in Redis: %v", err)
 			}
 
@@ -430,12 +430,12 @@ func (s *Service) handleBLEDebugMessage(msgType ble.MessageType, absSubTypeKey u
 			if reasonOk && countOk {
 				s.log.Debugf("Received nRF Reset Info: Reason=0x%X, Count=%d", reason, count)
 				// Store reason and count in Redis
-					if err := s.ipc.Hash(KeyPowerManager).Set("nrf-reset-count", fmt.Sprintf("%d", count)); err != nil {
+				if err := s.ipc.Hash(KeyPowerManager).Set("nrf-reset-count", fmt.Sprintf("%d", count)); err != nil {
 					s.log.Errorf("Failed to write nrf-reset-count to Redis: %v", err)
 				}
 				// Publish reason
-				
-			if err := s.ipc.Hash(KeyPowerManager).Set("nrf-reset-reason", fmt.Sprintf("%d", reason)); err != nil {
+
+				if err := s.ipc.Hash(KeyPowerManager).Set("nrf-reset-reason", fmt.Sprintf("%d", reason)); err != nil {
 					s.log.Errorf("Failed to write/publish nrf-reset-reason to Redis: %v", err)
 				}
 				// Send ACK back to nRF
@@ -465,7 +465,7 @@ func (s *Service) handleDataStreamMessage(subType ble.SubType, value interface{}
 		if enabled, ok := convertToInt(value); ok {
 			enabledBool := enabled != 0
 			s.log.Debugf("Received data stream enable status update: %t", enabledBool)
-				if err := s.ipc.Hash("aux-battery").Set("data-stream-enable", fmt.Sprintf("%d", enabled)); err != nil {
+			if err := s.ipc.Hash("aux-battery").Set("data-stream-enable", fmt.Sprintf("%d", enabled)); err != nil {
 				s.log.Errorf("Failed to write data-stream-enable to Redis: %v", err)
 			}
 		} else {
@@ -493,7 +493,7 @@ func (s *Service) handleAuxBatteryMessage(subType ble.SubType, value interface{}
 	case ble.TypeAuxBatteryVoltage:
 		if voltage, ok := convertToInt(value); ok {
 			s.log.Debugf("Received aux battery voltage: %d", voltage)
-				if err := s.ipc.Hash("aux-battery").Set("voltage", fmt.Sprintf("%d", voltage)); err != nil { // Don't publish voltage often
+			if err := s.ipc.Hash("aux-battery").Set("voltage", fmt.Sprintf("%d", voltage)); err != nil { // Don't publish voltage often
 				s.log.Errorf("Failed to update aux battery voltage in Redis: %v", err)
 			}
 		} else {
@@ -503,7 +503,7 @@ func (s *Service) handleAuxBatteryMessage(subType ble.SubType, value interface{}
 	case ble.TypeAuxBatteryCharge:
 		if charge, ok := convertToInt(value); ok {
 			s.log.Debugf("Received aux battery charge: %d %%", charge)
-				if err := s.ipc.Hash("aux-battery").Set("charge", fmt.Sprintf("%d", charge)); err != nil { // Don't publish charge often
+			if err := s.ipc.Hash("aux-battery").Set("charge", fmt.Sprintf("%d", charge)); err != nil { // Don't publish charge often
 				s.log.Errorf("Failed to update aux battery charge in Redis: %v", err)
 			}
 		} else {
@@ -513,7 +513,7 @@ func (s *Service) handleAuxBatteryMessage(subType ble.SubType, value interface{}
 	case ble.TypeAuxBatteryChargerStatus:
 		if statusStr, ok := convertToString(value); ok {
 			s.log.Debugf("Received aux battery charger status: %s", statusStr)
-				if err := s.ipc.Hash("aux-battery").Set("charge-status", statusStr); err != nil { // Don't publish status often
+			if err := s.ipc.Hash("aux-battery").Set("charge-status", statusStr); err != nil { // Don't publish status often
 				s.log.Errorf("Failed to update aux battery charger status in Redis: %v", err)
 			}
 		} else {
@@ -581,6 +581,13 @@ func (s *Service) handlePowerManagementMessage(subType ble.SubType, value interf
 		} else {
 			s.log.Warnf("Could not decode hibernation request value: %v", value)
 		}
+	case ble.TypePowerManagementRebootRequest:
+		s.log.Infof("Received reboot request from nRF")
+		if err := ipc.SendRequest(s.ipc, "scooter:power", "reboot"); err != nil {
+			s.log.Errorf("Failed to forward reboot request: %v", err)
+		} else {
+			s.log.Debugf("Forwarded reboot request to scooter:power")
+		}
 	default:
 		s.log.Warnf("Unknown power management message relative subtype: %v", subType)
 	}
@@ -597,7 +604,7 @@ func (s *Service) handleBLEParamMessage(msgType ble.MessageType, absSubTypeKey u
 	case expectedMACSubType: // 0xA081
 		if macAddrStr, ok := convertToString(value); ok {
 			s.log.Debugf("Received BLE MAC address: %s", macAddrStr)
-				if err := s.ipc.Hash(KeyBLEStatus).Set("mac-address", macAddrStr); err != nil {
+			if err := s.ipc.Hash(KeyBLEStatus).Set("mac-address", macAddrStr); err != nil {
 				s.log.Errorf("Failed to update BLE MAC address in Redis: %v", err)
 			}
 		} else {
@@ -608,7 +615,7 @@ func (s *Service) handleBLEParamMessage(msgType ble.MessageType, absSubTypeKey u
 		// This subtype carries the PIN code as a string.
 		if strValue, ok := convertToString(value); ok {
 			s.log.Debugf("Received BLE Pairing PIN for display: %s", strValue)
-				if err := s.ipc.Hash(KeyBLEPairingPin).Set("pin-code", strValue); err != nil {
+			if err := s.ipc.Hash(KeyBLEPairingPin).Set("pin-code", strValue); err != nil {
 				s.log.Errorf("Failed to update and publish BLE pairing PIN in Redis: %v", err)
 			}
 		} else {
@@ -633,7 +640,7 @@ func (s *Service) handleBLEParamMessage(msgType ble.MessageType, absSubTypeKey u
 		if msgType == ble.TypeBLEParam {
 			if statusStr, ok := convertToString(value); ok {
 				s.log.Debugf("Received BLE Status update: %s", statusStr)
-					if err := s.ipc.Hash(KeyBLEStatus).Set("connection-status", statusStr); err != nil {
+				if err := s.ipc.Hash(KeyBLEStatus).Set("connection-status", statusStr); err != nil {
 					s.log.Errorf("Failed to write BLE status to Redis: %v", err)
 				}
 			} else {
@@ -931,16 +938,16 @@ func (s *Service) handleBatteryInfoMessage(subType ble.SubType, value interface{
 	if processedStandard && redisField != "" {
 		var err error
 		if isInt {
-				err = s.ipc.Hash(redisKey).Set(redisField, fmt.Sprintf("%d", valueInt))
+			err = s.ipc.Hash(redisKey).Set(redisField, fmt.Sprintf("%d", valueInt))
 		} else if isString {
-				err = s.ipc.Hash(redisKey).Set(redisField, valueStr)
+			err = s.ipc.Hash(redisKey).Set(redisField, valueStr)
 		} else if isBool {
 			// Convert bool to "true"/"false" string for Redis consistency
 			strVal := "false"
 			if redisValue.(bool) {
 				strVal = "true"
 			}
-				err = s.ipc.Hash(redisKey).Set(redisField, strVal)
+			err = s.ipc.Hash(redisKey).Set(redisField, strVal)
 		} // No else needed, already checked processedStandard
 
 		if err != nil {
@@ -991,7 +998,7 @@ func (s *Service) handleEventMessage(msgType ble.MessageType, absSubTypeKey uint
 		if strings.HasPrefix(eventStr, "navi:start ") {
 			coords := strings.TrimPrefix(eventStr, "navi:start ")
 			// Use WriteAndPublishString to atomically HSET and PUBLISH
-				err := s.ipc.Hash("navigation").Set("destination", coords)
+			err := s.ipc.Hash("navigation").Set("destination", coords)
 			if err != nil {
 				s.log.Errorf("Failed to set navigation destination: %v", err)
 			} else {
@@ -1004,7 +1011,7 @@ func (s *Service) handleEventMessage(msgType ble.MessageType, absSubTypeKey uint
 		if strings.HasPrefix(eventStr, "apn ") {
 			apnValue := strings.TrimPrefix(eventStr, "apn ")
 			// Use WriteAndPublishString to atomically HSET and PUBLISH
-				err := s.ipc.Hash("settings").Set("cellular.apn", apnValue)
+			err := s.ipc.Hash("settings").Set("cellular.apn", apnValue)
 			if err != nil {
 				s.log.Errorf("Failed to set cellular APN: %v", err)
 			} else {
@@ -1016,7 +1023,7 @@ func (s *Service) handleEventMessage(msgType ble.MessageType, absSubTypeKey uint
 		// Check if it's a USB mode event
 		if eventStr == "usb:ums" {
 			// Set USB mode to UMS and publish
-				err := s.ipc.Hash("usb").Set("mode", "ums")
+			err := s.ipc.Hash("usb").Set("mode", "ums")
 			if err != nil {
 				s.log.Errorf("Failed to set USB mode to UMS: %v", err)
 			} else {
@@ -1027,7 +1034,7 @@ func (s *Service) handleEventMessage(msgType ble.MessageType, absSubTypeKey uint
 
 		if eventStr == "usb:normal" {
 			// Set USB mode to normal and publish
-				err := s.ipc.Hash("usb").Set("mode", "normal")
+			err := s.ipc.Hash("usb").Set("mode", "normal")
 			if err != nil {
 				s.log.Errorf("Failed to set USB mode to normal: %v", err)
 			} else {
@@ -1068,7 +1075,7 @@ func (s *Service) handlePowerMuxMessage(subType ble.SubType, value interface{}) 
 	s.log.Debugf("Received PowerMux update: selected-input=%s (raw value: %d)", selectedInput, powerMuxState)
 
 	// Publish the string value to Redis
-			err := s.ipc.Hash("power-mux").Set("selected-input", selectedInput)
+	err := s.ipc.Hash("power-mux").Set("selected-input", selectedInput)
 	if err != nil {
 		s.log.Errorf("Error publishing PowerMux state to Redis: %v", err)
 	}
@@ -1098,14 +1105,14 @@ func (s *Service) handleAccelerometerMessage(subType ble.SubType, value interfac
 	case ble.TypeAccelerometerWakeUpSuspend:
 		s.log.Debugf("Received accelerometer wake-up from suspend mode")
 		// Publish to bmx:interrupt channel to wake up alarm-service
-			if _, err := s.ipc.Publish("bmx:interrupt", "wake-suspend"); err != nil {
+		if _, err := s.ipc.Publish("bmx:interrupt", "wake-suspend"); err != nil {
 			s.log.Errorf("Failed to publish accelerometer wake interrupt: %v", err)
 		}
 
 	case ble.TypeAccelerometerWakeUpHibernation:
 		s.log.Debugf("Received accelerometer wake-up from hibernation mode")
 		// Publish to bmx:interrupt channel to wake up alarm-service
-			if _, err := s.ipc.Publish("bmx:interrupt", "wake-hibernation"); err != nil {
+		if _, err := s.ipc.Publish("bmx:interrupt", "wake-hibernation"); err != nil {
 			s.log.Errorf("Failed to publish accelerometer wake interrupt: %v", err)
 		}
 

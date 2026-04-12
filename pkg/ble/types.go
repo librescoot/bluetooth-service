@@ -73,10 +73,10 @@ const (
 	// TypeBatterySlot1ManufacDate   SubType = 17
 
 	// Vehicle state sub-types
-	TypeVehicleStateState       SubType = 1 // BLE_SCOOTER_SERVICE_SCOOTER_STATE_STATE
-	TypeVehicleStateSeatbox     SubType = 2 // BLE_SCOOTER_SERVICE_SCOOTER_STATE_SEATBOX
-	TypeVehicleStateHandlebar   SubType = 3 // BLE_SCOOTER_SERVICE_SCOOTER_STATE_HANDLEBAR
-	TypeExternalTemperature     SubType = 4 // BLE_SCOOTER_SERVICE_SCOOTER_STATE_TEMPERATURE (NTCALUG01A thermistor, tenths of °C)
+	TypeVehicleStateState     SubType = 1 // BLE_SCOOTER_SERVICE_SCOOTER_STATE_STATE
+	TypeVehicleStateSeatbox   SubType = 2 // BLE_SCOOTER_SERVICE_SCOOTER_STATE_SEATBOX
+	TypeVehicleStateHandlebar SubType = 3 // BLE_SCOOTER_SERVICE_SCOOTER_STATE_HANDLEBAR
+	TypeExternalTemperature   SubType = 4 // BLE_SCOOTER_SERVICE_SCOOTER_STATE_TEMPERATURE (NTCALUG01A thermistor, tenths of °C)
 
 	// Scooter info sub-types
 	TypeSoftwareVersion SubType = 1 // BLE_SCOOTER_SERVICE_SOFTWARE_VERSION
@@ -87,6 +87,7 @@ const (
 	TypePowerManagementState              SubType = 1 // BLE_SCOOTER_SERVICE_POWER_MANAGEMENT_STATE
 	TypePowerManagementPowerRequest       SubType = 2 // BLE_SCOOTER_SERVICE_POWER_MANAGEMENT_POWER_REQUEST
 	TypePowerManagementHibernationRequest SubType = 3 // BLE_SCOOTER_SERVICE_POWER_MANAGEMENT_HIBERNATION_REQUEST
+	TypePowerManagementRebootRequest      SubType = 4 // BLE_SCOOTER_SERVICE_POWER_MANAGEMENT_REBOOT_REQUEST
 
 	// BLE debug sub-types
 	TypeBLEDebugResetAck SubType = 3 // BLE_SCOOTER_SERVICE_DEBUG_RESET_ACK
