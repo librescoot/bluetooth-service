@@ -39,6 +39,8 @@ func (s *Service) handleExtendedCommandMessage(msgType ble.MessageType, absSubTy
 		s.handleConfigCommand(strings.TrimPrefix(cmdStr, "config:"))
 	} else if strings.HasPrefix(cmdStr, "status:") {
 		s.handleStatusQuery(strings.TrimPrefix(cmdStr, "status:"))
+	} else if strings.HasPrefix(cmdStr, "alarm:") {
+		s.handleAlarmCommand(strings.TrimPrefix(cmdStr, "alarm:"))
 	} else if strings.HasPrefix(cmdStr, "cap:") {
 		s.handleCapabilityQuery(strings.TrimPrefix(cmdStr, "cap:"))
 	} else {
@@ -321,6 +323,27 @@ func (s *Service) handleKeycardCommand(cmd string) {
 	}
 }
 
+// handleAlarmCommand processes alarm commands by forwarding them to the
+// scooter:alarm Redis queue for processing by the alarm service.
+func (s *Service) handleAlarmCommand(cmd string) {
+	s.log.Infof("Received alarm command: %s", cmd)
+
+	switch {
+	case cmd == "enable", cmd == "disable",
+		cmd == "arm", cmd == "disarm",
+		cmd == "start", cmd == "stop",
+		strings.HasPrefix(cmd, "start:"):
+		if err := ipc.SendRequest(s.ipc, "scooter:alarm", cmd); err != nil {
+			s.log.Errorf("Failed to forward alarm command: %v", err)
+			s.sendExtendedResponse("alarm:error:redis")
+			return
+		}
+		s.sendExtendedResponse("alarm:ok")
+	default:
+		s.sendExtendedResponse("alarm:error:unknown command")
+	}
+}
+
 // handleTimeCommand processes time-setting commands.
 func (s *Service) handleTimeCommand(cmd string) {
 	if strings.HasPrefix(cmd, "set ") {
@@ -464,6 +487,7 @@ var capabilityMap = map[string][]string{
 	"time":    {"set"},
 	"config":  {"apn", "hibernate-timer", "update-channel", "auto-standby-seconds"},
 	"status":  {"maps-available", "navigation-available"},
+	"alarm":   {"enable", "disable", "arm", "disarm", "start", "stop"},
 	"cap":     {"list"},
 }
 
