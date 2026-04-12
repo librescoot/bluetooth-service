@@ -248,8 +248,8 @@ func TestUpdateMileage(t *testing.T) {
 
 func TestUpdateFirmwareVersion(t *testing.T) {
 	tests := []struct {
-		name     string
-		version  string
+		name    string
+		version string
 	}{
 		{"semantic version", "1.2.3"},
 		{"version with v prefix", "v1.0.0"},

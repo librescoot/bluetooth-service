@@ -97,10 +97,10 @@ func TestVehicleStateToInt(t *testing.T) {
 
 func TestConvertToInt(t *testing.T) {
 	tests := []struct {
-		name      string
-		value     interface{}
-		expected  int
-		shouldOk  bool
+		name     string
+		value    interface{}
+		expected int
+		shouldOk bool
 	}{
 		{"int value", int(42), 42, true},
 		{"int8 value", int8(42), 42, true},
@@ -134,10 +134,10 @@ func TestConvertToInt(t *testing.T) {
 
 func TestConvertToString(t *testing.T) {
 	tests := []struct {
-		name      string
-		value     interface{}
-		expected  string
-		shouldOk  bool
+		name     string
+		value    interface{}
+		expected string
+		shouldOk bool
 	}{
 		{"string value", "hello", "hello", true},
 		{"empty string", "", "", true},
@@ -163,10 +163,10 @@ func TestConvertToString(t *testing.T) {
 
 func TestConvertToBytes(t *testing.T) {
 	tests := []struct {
-		name      string
-		value     interface{}
-		expected  []byte
-		shouldOk  bool
+		name     string
+		value    interface{}
+		expected []byte
+		shouldOk bool
 	}{
 		{"byte slice", []byte{1, 2, 3}, []byte{1, 2, 3}, true},
 		{"empty byte slice", []byte{}, []byte{}, true},

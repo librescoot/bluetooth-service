@@ -53,17 +53,17 @@ type Payload struct {
 
 // USOCK represents a UART socket connection to the nRF52
 type USOCK struct {
-	port        *serial.Port
-	handler     func(*Payload)
+	port         *serial.Port
+	handler      func(*Payload)
 	errorHandler func(error)
-	log         *logger.Logger
-	stopChan    chan struct{}
-	stopOnce    sync.Once
-	wg          sync.WaitGroup
-	state       State
-	frame       Frame
-	buffer      []byte
-	mu          sync.Mutex
+	log          *logger.Logger
+	stopChan     chan struct{}
+	stopOnce     sync.Once
+	wg           sync.WaitGroup
+	state        State
+	frame        Frame
+	buffer       []byte
+	mu           sync.Mutex
 }
 
 // CRC-16/ARC lookup table

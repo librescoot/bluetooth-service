@@ -23,8 +23,8 @@ const (
 
 // Firmware update paths
 const (
-	DefaultFirmwareDir      = "/usr/share/nrf-fw"
-	DefaultNRFUpdateScript  = "/usr/share/nrf-fw/nrfupdate.py"
+	DefaultFirmwareDir     = "/usr/share/nrf-fw"
+	DefaultNRFUpdateScript = "/usr/share/nrf-fw/nrfupdate.py"
 )
 
 // Battery state constants

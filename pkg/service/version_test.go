@@ -361,10 +361,10 @@ func stringContains(s, substr string) bool {
 
 func TestFirmwareVersion_Compare(t *testing.T) {
 	tests := []struct {
-		name  string
-		v1    FirmwareVersion
-		v2    *FirmwareVersion
-		want  int
+		name string
+		v1   FirmwareVersion
+		v2   *FirmwareVersion
+		want int
 	}{
 		{
 			name: "equal versions",
