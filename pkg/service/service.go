@@ -53,6 +53,11 @@ type Service struct {
 	// extended responses to give the BLE link time to drain.
 	extRespMu       sync.Mutex
 	lastExtRespTime time.Time
+
+	// Set when an LTC control command originated from a BLE extended
+	// command, so the USOCK response handler knows to relay the result
+	// back as an extended response.
+	ltcBLEPending bool
 }
 
 // Fault codes for bluetooth service

@@ -41,6 +41,8 @@ func (s *Service) handleExtendedCommandMessage(msgType ble.MessageType, absSubTy
 		s.handleStatusQuery(strings.TrimPrefix(cmdStr, "status:"))
 	} else if strings.HasPrefix(cmdStr, "alarm:") {
 		s.handleAlarmCommand(strings.TrimPrefix(cmdStr, "alarm:"))
+	} else if strings.HasPrefix(cmdStr, "ltc:") {
+		s.handleLTCCommand(strings.TrimPrefix(cmdStr, "ltc:"))
 	} else if strings.HasPrefix(cmdStr, "cap:") {
 		s.handleCapabilityQuery(strings.TrimPrefix(cmdStr, "cap:"))
 	} else {
@@ -479,6 +481,44 @@ func (s *Service) handleStatusQuery(key string) {
 	}
 }
 
+// handleLTCCommand processes LTC4020 aux charger control commands.
+// The command is forwarded to the nRF via USOCK; the response comes back
+// asynchronously and is relayed by handleLTCControlMessage.
+func (s *Service) handleLTCCommand(cmd string) {
+	s.log.Infof("Received LTC command: %s", cmd)
+
+	var subType ble.SubType
+	var value uint16
+
+	switch cmd {
+	case "enable":
+		subType = ble.TypeLTCControlSet
+		value = 1
+	case "disable":
+		subType = ble.TypeLTCControlSet
+		value = 0
+	case "force-enable":
+		subType = ble.TypeLTCControlForceSet
+		value = 1
+	case "force-disable":
+		subType = ble.TypeLTCControlForceSet
+		value = 0
+	case "status":
+		subType = ble.TypeLTCControlStatus
+		value = 0
+	default:
+		s.sendExtendedResponse("ltc:error:unknown command")
+		return
+	}
+
+	s.ltcBLEPending = true
+	if err := writeUARTMessage(s.usock, ble.TypeLTCControl, subType, value); err != nil {
+		s.ltcBLEPending = false
+		s.log.Errorf("Failed to send LTC command to nRF: %v", err)
+		s.sendExtendedResponse("ltc:error:send failed")
+	}
+}
+
 // capabilityMap maps each command category to its supported commands.
 var capabilityMap = map[string][]string{
 	"nav":     {"dest", "clear", "fav:add", "fav:delete", "fav:navigate", "fav:list"},
@@ -488,6 +528,7 @@ var capabilityMap = map[string][]string{
 	"config":  {"apn", "hibernate-timer", "update-channel", "auto-standby-seconds"},
 	"status":  {"maps-available", "navigation-available"},
 	"alarm":   {"enable", "disable", "arm", "disarm", "start", "stop"},
+	"ltc":     {"enable", "disable", "force-enable", "force-disable", "status"},
 	"cap":     {"list"},
 }
 

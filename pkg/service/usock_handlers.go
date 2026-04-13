@@ -168,6 +168,8 @@ func (s *Service) HandleUSockMessage(frameID byte, payload *usock.Payload) {
 				s.handlePowerMuxMessage(relativeSubType, value)
 			case ble.TypePowerManagementHibernationReq: // Direct hibernation request (0x0803)
 				s.handlePowerManagementMessage(ble.TypePowerManagementHibernationRequest, value)
+			case ble.TypeLTCControl:
+				s.handleLTCControlMessage(relativeSubType, value)
 			case ble.TypeAccelerometer:
 				s.handleAccelerometerMessage(relativeSubType, value)
 			case ble.TypeExtended:
@@ -1118,5 +1120,60 @@ func (s *Service) handleAccelerometerMessage(subType ble.SubType, value interfac
 
 	default:
 		s.log.Warnf("Unknown accelerometer message relative subtype: %v", subType)
+	}
+}
+
+// handleLTCControlMessage handles LTC4020 aux charger control responses from the nRF.
+// The nRF responds with a result code: 0=success, -1=unsafe, -2=invalid for
+// Set/ForceSet commands, or the current enabled state (0/1) for Status queries.
+func (s *Service) handleLTCControlMessage(subType ble.SubType, value interface{}) {
+	result, ok := convertToInt(value)
+	if !ok {
+		s.log.Warnf("Could not decode LTC control response value: %v (%T)", value, value)
+		return
+	}
+
+	switch subType {
+	case ble.TypeLTCControlSet:
+		s.log.Infof("LTC safe-set response: %d", result)
+		if s.ltcBLEPending {
+			s.ltcBLEPending = false
+			s.sendLTCExtendedResponse(result)
+		}
+
+	case ble.TypeLTCControlForceSet:
+		s.log.Infof("LTC force-set response: %d", result)
+		if s.ltcBLEPending {
+			s.ltcBLEPending = false
+			s.sendLTCExtendedResponse(result)
+		}
+
+	case ble.TypeLTCControlStatus:
+		state := "off"
+		if result != 0 {
+			state = "on"
+		}
+		s.log.Infof("LTC charger status: %s", state)
+		if s.ltcBLEPending {
+			s.ltcBLEPending = false
+			s.sendExtendedResponse(fmt.Sprintf("ltc:status:%s", state))
+		}
+
+	default:
+		s.log.Warnf("Unknown LTC control relative subtype: %v", subType)
+	}
+}
+
+// sendLTCExtendedResponse translates an nRF result code to an extended response string.
+func (s *Service) sendLTCExtendedResponse(result int) {
+	switch result {
+	case 0:
+		s.sendExtendedResponse("ltc:ok")
+	case -1:
+		s.sendExtendedResponse("ltc:error:unsafe")
+	case -2:
+		s.sendExtendedResponse("ltc:error:invalid")
+	default:
+		s.sendExtendedResponse(fmt.Sprintf("ltc:error:%d", result))
 	}
 }

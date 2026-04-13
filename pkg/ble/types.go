@@ -22,6 +22,7 @@ const (
 	TypeAuxBattery                    MessageType = 0x0040     // BLE_SCOOTER_SERVICE_AUX_BATTERY
 	TypeBatteryInfo                   MessageType = 0x0060     // BLE_SCOOTER_SERVICE_CB_BATTERY
 	TypePowerMux                      MessageType = 0x0100     // BLE_SCOOTER_SERVICE_POWER_MUX_STATE
+	TypeLTCControl                    MessageType = 0x0120     // BLE_SCOOTER_SERVICE_LTC_CONTROL
 	TypeAccelerometer                 MessageType = 0x0200     // BLE_SCOOTER_SERVICE_ACCELEROMETER
 	TypeExtended                      MessageType = 0x0400     // BLE_SCOOTER_SERVICE_EXTENDED
 )
@@ -121,6 +122,11 @@ const (
 	TypeBatteryInfoPresent          SubType = 17 // BLE_SCOOTER_SERVICE_CB_BATTERY_PRESENT
 	TypeBatteryInfoChargeStatus     SubType = 18 // BLE_SCOOTER_SERVICE_CB_BATTERY_CHARGE_STATUS
 	// Note: Subtypes used here are relative to TypeBatteryInfo (0x0060)
+
+	// LTC control sub-types (LTC4020 aux charger)
+	TypeLTCControlSet      SubType = 1 // BLE_SCOOTER_SERVICE_LTC_CONTROL_SET
+	TypeLTCControlForceSet SubType = 2 // BLE_SCOOTER_SERVICE_LTC_CONTROL_FORCE_SET
+	TypeLTCControlStatus   SubType = 3 // BLE_SCOOTER_SERVICE_LTC_CONTROL_STATUS
 
 	// Accelerometer sub-types
 	TypeAccelerometerWakeUpSuspend     SubType = 1 // BLE_SCOOTER_SERVICE_ACCELEROMETER_WAKE_UP_SUSPEND

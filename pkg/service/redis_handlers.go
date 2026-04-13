@@ -251,6 +251,26 @@ func (s *Service) WatchRedisCommands() {
 			subType = 0
 			valueInt = 1
 			s.log.Debugf("Mapping list command 'remove' to TypeBLEPairingPinRemove")
+		case "ltc-enable":
+			msgType = ble.TypeLTCControl
+			subType = ble.TypeLTCControlSet
+			valueInt = 1
+		case "ltc-disable":
+			msgType = ble.TypeLTCControl
+			subType = ble.TypeLTCControlSet
+			valueInt = 0
+		case "ltc-force-enable":
+			msgType = ble.TypeLTCControl
+			subType = ble.TypeLTCControlForceSet
+			valueInt = 1
+		case "ltc-force-disable":
+			msgType = ble.TypeLTCControl
+			subType = ble.TypeLTCControlForceSet
+			valueInt = 0
+		case "ltc-status":
+			msgType = ble.TypeLTCControl
+			subType = ble.TypeLTCControlStatus
+			valueInt = 0
 		default:
 			s.log.Warnf("Unknown command received from Redis list: %s", command)
 			return nil // Not an error, just unknown command
