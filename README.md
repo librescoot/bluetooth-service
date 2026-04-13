@@ -98,6 +98,40 @@ Log levels:
 - **3=INFO**: Informational messages, warnings, and errors (default)
 - **4=DEBUG**: Detailed debug messages and all above
 
+## BLE Interface
+
+### Power Requests
+
+The nRF52's `REQUESTS_POWER` characteristic (write) accepts UTF-8 string commands:
+
+| Command | Effect |
+|---------|--------|
+| `wakeup` | Exit hibernation mode |
+| `hibernate` | Request hibernation via iMX6 pm-service |
+| `reboot` | Soft reboot — forwarded to iMX6 pm-service |
+| `hard-reboot` | Power-cycle all rails via nRF52 hard reboot FSM (cuts power, waits, restores) |
+
+`hard-reboot` is only accepted during normal operation (stand-by, suspend, parked, ready-to-drive). It's rejected during active hibernation entry or if a hard reboot is already in progress.
+
+### Extended Commands
+
+The extended command characteristic (write, service 0x0400) accepts topic-prefixed string commands. Responses come back on the response characteristic (notify, same service).
+
+Available command topics:
+
+| Topic | Commands | Redis target |
+|-------|----------|-------------|
+| `nav` | `dest <lat>,<lon>[,<name>]`, `clear`, `fav:add`, `fav:delete`, `fav:navigate`, `fav:list` | `navigation` hash |
+| `keycard` | `list`, `count`, `add`, `remove` | `scooter:keycard` queue |
+| `usb` | `ums`, `normal` | `usb` hash |
+| `time` | `set <unix_timestamp>` | timedatectl |
+| `config` | `apn`, `hibernate-timer`, `update-channel`, `auto-standby-seconds` | `settings` hash |
+| `status` | `maps-available`, `navigation-available` | various hashes |
+| `alarm` | `enable`, `disable`, `arm`, `disarm`, `start`, `stop` | `scooter:alarm` queue |
+| `cap` | `list`, `<topic>` | (local) |
+
+Responses follow the format `<topic>:ok`, `<topic>:error:<reason>`, or `<topic>:<data>`.
+
 ## Fault Tracking
 
 The service reports faults via the FaultSet API to the `ble:fault` Redis key:
