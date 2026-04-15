@@ -45,6 +45,10 @@ func (s *Service) handleExtendedCommandMessage(msgType ble.MessageType, absSubTy
 		s.handleLTCCommand(strings.TrimPrefix(cmdStr, "ltc:"))
 	} else if strings.HasPrefix(cmdStr, "cap:") {
 		s.handleCapabilityQuery(strings.TrimPrefix(cmdStr, "cap:"))
+	} else if strings.HasPrefix(cmdStr, "get:") {
+		s.handleSettingsGet(strings.TrimPrefix(cmdStr, "get:"))
+	} else if strings.HasPrefix(cmdStr, "set:") {
+		s.handleSettingsSet(strings.TrimPrefix(cmdStr, "set:"))
 	} else {
 		s.log.Warnf("Unknown extended command prefix: %s", cmdStr)
 		s.sendExtendedResponse("error:unknown command")
@@ -530,6 +534,8 @@ var capabilityMap = map[string][]string{
 	"alarm":   {"enable", "disable", "arm", "disarm", "start", "stop"},
 	"ltc":     {"enable", "disable", "force-enable", "force-disable", "status"},
 	"cap":     {"list"},
+	"get":     {"<key>", "list", "list:<prefix>"},
+	"set":     {"<key>:<value>"},
 }
 
 // handleCapabilityQuery responds with the list of supported extended command features.
@@ -559,4 +565,107 @@ func (s *Service) handleCapabilityQuery(cmd string) {
 	}
 
 	s.sendExtendedResponse("cap:error:unknown command")
+}
+
+// handleSettingsGet processes generic settings reads.
+//
+//	get:<key>         → get:<key>:<value>   (value empty if unset)
+//	get:list          → get:count:<n> then N × get:<key>
+//	get:list:<prefix> → same, filtered by prefix match on the key
+func (s *Service) handleSettingsGet(cmd string) {
+	cmd = strings.TrimSpace(cmd)
+
+	if cmd == "list" || strings.HasPrefix(cmd, "list:") {
+		var prefix string
+		if strings.HasPrefix(cmd, "list:") {
+			prefix = strings.TrimPrefix(cmd, "list:")
+		}
+		schema, err := s.getSettingsSchema()
+		if err != nil {
+			s.log.Warnf("settings schema unavailable: %v", err)
+			s.sendExtendedResponse("get:error:schema unavailable")
+			return
+		}
+		keys := make([]string, 0, len(schema))
+		for k := range schema {
+			if prefix == "" || strings.HasPrefix(k, prefix) {
+				keys = append(keys, k)
+			}
+		}
+		s.sendExtendedResponse(fmt.Sprintf("get:count:%d", len(keys)))
+		for _, k := range keys {
+			s.sendExtendedResponse(fmt.Sprintf("get:%s", k))
+		}
+		return
+	}
+
+	key := cmd
+	if key == "" {
+		s.sendExtendedResponse("get:error:missing key")
+		return
+	}
+	schema, err := s.getSettingsSchema()
+	if err != nil {
+		s.log.Warnf("settings schema unavailable: %v", err)
+		s.sendExtendedResponse("get:error:schema unavailable")
+		return
+	}
+	if _, ok := schema[key]; !ok {
+		s.sendExtendedResponse("get:error:unknown key")
+		return
+	}
+	value, err := s.ipc.HGet("settings", key)
+	if err != nil {
+		s.log.Errorf("Failed to HGET settings %s: %v", key, err)
+		s.sendExtendedResponse("get:error:redis")
+		return
+	}
+	s.sendExtendedResponse(fmt.Sprintf("get:%s:%s", key, value))
+}
+
+// handleSettingsSet processes generic settings writes.
+//
+//	set:<key>:<value> → set:ok:<key> on success, set:error:<reason> otherwise
+//
+// Value is everything after the first colon in the body; colons in the
+// value (URLs, etc.) are preserved.
+func (s *Service) handleSettingsSet(cmd string) {
+	key, value, ok := splitSetPayload(cmd)
+	if !ok {
+		s.sendExtendedResponse("set:error:format (expected set:<key>:<value>)")
+		return
+	}
+
+	schema, err := s.getSettingsSchema()
+	if err != nil {
+		s.log.Warnf("settings schema unavailable: %v", err)
+		s.sendExtendedResponse("set:error:schema unavailable")
+		return
+	}
+	spec, ok := schema[key]
+	if !ok {
+		s.sendExtendedResponse("set:error:unknown key")
+		return
+	}
+	if spec.ReadOnly {
+		s.sendExtendedResponse("set:error:read-only")
+		return
+	}
+	if msg := validateSettingValue(spec, value); msg != "" {
+		s.sendExtendedResponse(fmt.Sprintf("set:error:%s", msg))
+		return
+	}
+
+	if err := s.ipc.HSet("settings", key, value); err != nil {
+		s.log.Errorf("Failed to HSET settings %s: %v", key, err)
+		s.sendExtendedResponse("set:error:redis")
+		return
+	}
+	if _, err := s.ipc.Publish("settings", key); err != nil {
+		// Write landed; consumers just won't react until the next
+		// settings-service replay. Not fatal.
+		s.log.Warnf("Failed to PUBLISH settings %s: %v", key, err)
+	}
+	s.log.Infof("Set %s=%s via BLE", key, value)
+	s.sendExtendedResponse(fmt.Sprintf("set:ok:%s", key))
 }
