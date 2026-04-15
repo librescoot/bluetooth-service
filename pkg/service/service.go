@@ -58,6 +58,13 @@ type Service struct {
 	// command, so the USOCK response handler knows to relay the result
 	// back as an extended response.
 	ltcBLEPending bool
+
+	// Cached copy of the settings schema (Redis key `settings:schema`)
+	// for the generic get:/set: extended commands. Lazy-loaded on first
+	// use so bluetooth-service starting before settings-service still
+	// recovers.
+	schemaMu    sync.RWMutex
+	schemaCache map[string]settingSchema
 }
 
 // Fault codes for bluetooth service
