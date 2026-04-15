@@ -384,7 +384,7 @@ func (s *Service) UpdateMileage(mileageStr string) error {
 	if err := writeUARTMessage32(s.usock, ble.TypeScooterInfo, ble.TypeMileage, int32(mileage)); err != nil {
 		return fmt.Errorf("failed to send mileage: %v", err)
 	}
-	s.log.Infof("Sent mileage: %d", mileage)
+	s.log.Debugf("Sent mileage: %d", mileage)
 	return nil
 }
 

@@ -181,7 +181,7 @@ func (s *Service) HandleUSockMessage(frameID byte, payload *usock.Payload) {
 			}
 		}
 	} else {
-		s.log.Infof("Received message type 0x%04x with empty parameter map (might be ACK)", msgType)
+		s.log.Debugf("Received message type 0x%04x with empty parameter map (might be ACK)", msgType)
 		// Handle parameterless messages if needed (e.g., some specific ACKs not caught earlier)
 	}
 }
