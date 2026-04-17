@@ -210,12 +210,13 @@ func TestUpdateMileage(t *testing.T) {
 		name          string
 		mileage       string
 		expectedValue int32
+		expectSend    bool
 	}{
-		{"zero mileage", "0", 0},
-		{"positive mileage", "12345", 12345},
-		{"large mileage", "999999", 999999},
-		{"empty string defaults to 0", "", 0},
-		{"invalid string defaults to 0", "abc", 0},
+		{"zero mileage", "0", 0, true},
+		{"positive mileage", "12345", 12345, true},
+		{"large mileage", "999999", 999999, true},
+		{"empty string does not send", "", 0, false},
+		{"invalid string does not send", "abc", 0, false},
 	}
 
 	for _, tt := range tests {
@@ -227,6 +228,13 @@ func TestUpdateMileage(t *testing.T) {
 			err := svc.UpdateMileage(tt.mileage)
 			if err != nil {
 				t.Fatalf("UpdateMileage(%q) returned error: %v", tt.mileage, err)
+			}
+
+			if !tt.expectSend {
+				if mock.messageCount() != 0 {
+					t.Errorf("Expected no message for %q, got %d", tt.mileage, mock.messageCount())
+				}
+				return
 			}
 
 			msg, err := decodeCBORMessage32(mock.lastMessage().data)
@@ -381,12 +389,13 @@ func TestUpdateBatteryCycleCount(t *testing.T) {
 		cycles        string
 		expectedValue uint16
 		expectedType  ble.SubType
+		expectSend    bool
 	}{
-		{"slot 0 zero cycles", 0, "0", 0, ble.TypeBatterySlot0CycleCount},
-		{"slot 0 some cycles", 0, "42", 42, ble.TypeBatterySlot0CycleCount},
-		{"slot 0 many cycles", 0, "999", 999, ble.TypeBatterySlot0CycleCount},
-		{"slot 0 empty defaults to 0", 0, "", 0, ble.TypeBatterySlot0CycleCount},
-		{"slot 1 cycles", 1, "123", 123, ble.TypeBatterySlot1CycleCount},
+		{"slot 0 zero cycles", 0, "0", 0, ble.TypeBatterySlot0CycleCount, true},
+		{"slot 0 some cycles", 0, "42", 42, ble.TypeBatterySlot0CycleCount, true},
+		{"slot 0 many cycles", 0, "999", 999, ble.TypeBatterySlot0CycleCount, true},
+		{"slot 0 empty does not send", 0, "", 0, ble.TypeBatterySlot0CycleCount, false},
+		{"slot 1 cycles", 1, "123", 123, ble.TypeBatterySlot1CycleCount, true},
 	}
 
 	for _, tt := range tests {
@@ -398,6 +407,13 @@ func TestUpdateBatteryCycleCount(t *testing.T) {
 			err := svc.UpdateBatteryCycleCount(tt.slot, tt.cycles)
 			if err != nil {
 				t.Fatalf("UpdateBatteryCycleCount(%d, %q) returned error: %v", tt.slot, tt.cycles, err)
+			}
+
+			if !tt.expectSend {
+				if mock.messageCount() != 0 {
+					t.Errorf("Expected no message, got %d", mock.messageCount())
+				}
+				return
 			}
 
 			msg, err := decodeCBORMessage(mock.lastMessage().data)
@@ -424,12 +440,13 @@ func TestUpdateBatteryRemainingCharge(t *testing.T) {
 		charge        string
 		expectedValue uint16
 		expectedType  ble.SubType
+		expectSend    bool
 	}{
-		{"slot 0 zero charge", 0, "0", 0, ble.TypeBatterySlot0Charge},
-		{"slot 0 half charge", 0, "50", 50, ble.TypeBatterySlot0Charge},
-		{"slot 0 full charge", 0, "100", 100, ble.TypeBatterySlot0Charge},
-		{"slot 0 empty defaults to 0", 0, "", 0, ble.TypeBatterySlot0Charge},
-		{"slot 1 charge", 1, "75", 75, ble.TypeBatterySlot1Charge},
+		{"slot 0 zero charge", 0, "0", 0, ble.TypeBatterySlot0Charge, true},
+		{"slot 0 half charge", 0, "50", 50, ble.TypeBatterySlot0Charge, true},
+		{"slot 0 full charge", 0, "100", 100, ble.TypeBatterySlot0Charge, true},
+		{"slot 0 empty does not send", 0, "", 0, ble.TypeBatterySlot0Charge, false},
+		{"slot 1 charge", 1, "75", 75, ble.TypeBatterySlot1Charge, true},
 	}
 
 	for _, tt := range tests {
@@ -441,6 +458,13 @@ func TestUpdateBatteryRemainingCharge(t *testing.T) {
 			err := svc.UpdateBatteryRemainingCharge(tt.slot, tt.charge)
 			if err != nil {
 				t.Fatalf("UpdateBatteryRemainingCharge(%d, %q) returned error: %v", tt.slot, tt.charge, err)
+			}
+
+			if !tt.expectSend {
+				if mock.messageCount() != 0 {
+					t.Errorf("Expected no message, got %d", mock.messageCount())
+				}
+				return
 			}
 
 			msg, err := decodeCBORMessage(mock.lastMessage().data)
@@ -499,17 +523,13 @@ func TestUpdatePowerManagementState(t *testing.T) {
 				t.Fatalf("UpdatePowerManagementState(%q) returned error: %v", tt.state, err)
 			}
 
-			// For hibernating states, check first message (state message)
-			// For other states, check last message (only message)
-			var msgData []byte
-			if tt.multipleMessages {
-				if len(mock.messages) == 0 {
-					t.Fatalf("Expected messages but got none")
-				}
-				msgData = mock.messages[0].data // First message is the state
-			} else {
-				msgData = mock.lastMessage().data
+			// State message is always the first one written. Hibernating and
+			// running/suspending-imminent states send a trailing data-stream
+			// command after the state message.
+			if len(mock.messages) == 0 {
+				t.Fatalf("Expected messages but got none")
 			}
+			msgData := mock.messages[0].data
 
 			msg, err := decodeCBORMessage(msgData)
 			if err != nil {
@@ -528,6 +548,72 @@ func TestUpdatePowerManagementState(t *testing.T) {
 			// Verify hibernating states send multiple messages
 			if tt.multipleMessages && mock.messageCount() < 2 {
 				t.Errorf("Expected multiple messages for state %q, got %d", tt.state, mock.messageCount())
+			}
+		})
+	}
+}
+
+// TestUpdatePowerManagementStateDataStreamGating verifies the data-stream
+// toggles sent alongside the power-management state message. nRF UART traffic
+// aborts MDB suspend, so the stream must go off before suspend and on again on
+// resume. See bluetooth-service#11.
+func TestUpdatePowerManagementStateDataStreamGating(t *testing.T) {
+	tests := []struct {
+		name                string
+		state               string
+		expectDataStreamMsg bool
+		expectEnable        uint16
+	}{
+		{"running enables stream", "running", true, 1},
+		{"suspending-imminent disables stream", "suspending-imminent", true, 0},
+		{"suspending-pending does not toggle", "suspending-pending", false, 0},
+		{"suspending does not toggle", "suspending", false, 0},
+		{"reboot-imminent does not toggle", "reboot-imminent", false, 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := &mockUSOCK{}
+			log := logger.NewLogger(nil, logger.LogLevelNone)
+			svc := &Service{usock: mock, log: log}
+
+			if err := svc.UpdatePowerManagementState(tt.state); err != nil {
+				t.Fatalf("UpdatePowerManagementState(%q) returned error: %v", tt.state, err)
+			}
+
+			var dsMsg *mockMessage
+			for i := range mock.messages {
+				decoded, err := decodeCBORMessage(mock.messages[i].data)
+				if err != nil {
+					continue
+				}
+				if _, ok := decoded[uint16(ble.TypeDataStream)]; ok {
+					dsMsg = &mock.messages[i]
+					break
+				}
+			}
+
+			if !tt.expectDataStreamMsg {
+				if dsMsg != nil {
+					t.Errorf("State %q: expected no data-stream toggle, got one", tt.state)
+				}
+				return
+			}
+
+			if dsMsg == nil {
+				t.Fatalf("State %q: expected data-stream toggle, got none", tt.state)
+			}
+
+			decoded, err := decodeCBORMessage(dsMsg.data)
+			if err != nil {
+				t.Fatalf("Failed to decode data-stream message: %v", err)
+			}
+			inner := decoded[uint16(ble.TypeDataStream)]
+			key := uint16(ble.TypeDataStream) + uint16(ble.TypeDataStreamEnable)
+			if val, ok := inner[key]; !ok {
+				t.Errorf("State %q: data-stream enable key %d not in message", tt.state, key)
+			} else if val != tt.expectEnable {
+				t.Errorf("State %q: data-stream enable = %d, want %d", tt.state, val, tt.expectEnable)
 			}
 		})
 	}

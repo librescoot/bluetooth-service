@@ -142,6 +142,7 @@ func main() {
 
 	<-sigCh
 	log.Infof("Shutting down...")
+	svc.ShutdownNRF52()
 	svc.Stop()
 	svc.Wait()
 }

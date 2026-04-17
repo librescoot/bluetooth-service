@@ -556,6 +556,24 @@ func (s *Service) UpdatePowerManagementState(stateStr string) error {
 	}
 	s.log.Infof("Sent power management state: %d (from %s)", stateInt, stateStr)
 
+	// Gate the realtime data stream around suspend. nRF UART traffic wakes the
+	// MDB from suspend-to-RAM, so the stream must be off before we suspend and
+	// on again once we resume. See bluetooth-service#11.
+	switch stateStr {
+	case "suspending-imminent":
+		if err := writeUARTMessage(s.usock, ble.TypeDataStream, ble.TypeDataStreamEnable, 0); err != nil {
+			s.log.Warnf("failed to disable data stream before suspend: %v", err)
+		} else {
+			s.log.Infof("Disabled data stream before suspend")
+		}
+	case "running":
+		if err := writeUARTMessage(s.usock, ble.TypeDataStream, ble.TypeDataStreamEnable, 1); err != nil {
+			s.log.Warnf("failed to re-enable data stream on running: %v", err)
+		} else {
+			s.log.Infof("Enabled data stream on running")
+		}
+	}
+
 	// Handle hibernation level separately if needed
 	if stateStr == "hibernating-l2" {
 		level := uint16(ble.HibernationLevelL2)

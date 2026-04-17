@@ -62,6 +62,23 @@ func (s *Service) InitializeNRF52() error {
 	return nil
 }
 
+// ShutdownNRF52 tells the nRF to stop its autonomous data stream before
+// bluetooth-service exits. Without this, a restart of bluetooth-service
+// leaves the stream running into nothing, and if the MDB suspends while
+// bluetooth-service is down the UART frames will abort suspend.
+func (s *Service) ShutdownNRF52() {
+	if s.usock == nil {
+		return
+	}
+	if err := writeUARTMessage(s.usock, ble.TypeDataStream, ble.TypeDataStreamEnable, 0); err != nil {
+		s.log.Warnf("failed to disable data stream on shutdown: %v", err)
+		return
+	}
+	s.log.Infof("Disabled nRF data stream on shutdown")
+	// Give the nRF a moment to process before we close the serial port.
+	time.Sleep(50 * time.Millisecond)
+}
+
 // RestartAdvertisingWithoutWhitelist sends command to restart advertising without whitelist
 func (s *Service) RestartAdvertisingWithoutWhitelist() error {
 	if err := writeUARTMessage(s.usock, ble.TypeBLECommand, ble.SubType(ble.BLECommandAdvRestartNoWhitelist), 0); err != nil {
