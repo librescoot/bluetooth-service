@@ -410,7 +410,7 @@ func (s *Service) handleConfigCommand(cmd string) {
 			s.sendExtendedResponse("config:error:invalid number")
 			return
 		}
-		if err := settings.Set("hibernation-timer", value); err != nil {
+		if err := settings.Set("pm.hibernation-timer", value); err != nil {
 			s.log.Errorf("Failed to set hibernation timer: %v", err)
 			s.sendExtendedResponse("config:error:redis")
 			return
