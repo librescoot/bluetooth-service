@@ -56,6 +56,10 @@ func (s *Service) SubscribeToRedisChannels() {
 						if err := s.UpdateVehicleState(value); err != nil {
 							s.log.Errorf("Error sending vehicle state update triggered by Redis: %v", err)
 						}
+					case "hop-on-active":
+						if err := s.UpdateHopOnActive(value); err != nil {
+							s.log.Errorf("Error re-publishing vehicle state after hop-on-active change: %v", err)
+						}
 					case "seatbox:lock":
 						if err := s.UpdateSeatboxLock(value); err != nil {
 							s.log.Errorf("Error sending seatbox lock update triggered by Redis: %v", err)
@@ -289,21 +293,59 @@ func (s *Service) WatchRedisCommands() {
 	s.log.Infof("Stopping Redis command watcher.")
 }
 
-// UpdateVehicleState sends the current vehicle state to nRF52
+// UpdateVehicleState sends the current vehicle state to nRF52.
+//
+// While vehicle[hop-on-active]=true, the underlying state (published as
+// "parked" for the dashboard's sake, see vehicle-service
+// fsm_actions.stateIDToSystemState) is overridden to 0/STANDBY so the
+// mobile app sees the scooter as locked and offers an unlock affordance.
 func (s *Service) UpdateVehicleState(stateStr string) error {
 	if stateStr == "" {
 		s.log.Warnf(" empty vehicle state value. Sending default (stand-by).")
 		stateStr = "stand-by" // Default if empty
 	}
 
+	s.mu.Lock()
+	s.lastVehicleState = stateStr
+	hopOn := s.hopOnActive
+	s.mu.Unlock()
+
 	state := vehicleStateToInt(stateStr)
+	if hopOn {
+		state = 0 // STANDBY
+	}
 
 	// Pass the relative subtype
 	if err := writeUARTMessage(s.usock, ble.TypeVehicleState, ble.TypeVehicleStateState, uint16(state)); err != nil {
 		return fmt.Errorf("failed to send vehicle state: %v", err)
 	}
-	s.log.Infof("Sent vehicle state: %d (from %s)", state, stateStr)
+	if hopOn {
+		s.log.Infof("Sent vehicle state: %d (from %s, hop-on override)", state, stateStr)
+	} else {
+		s.log.Infof("Sent vehicle state: %d (from %s)", state, stateStr)
+	}
 	return nil
+}
+
+// UpdateHopOnActive updates the cached hop-on-active flag and re-sends the
+// current vehicle state so the override (to STANDBY) is applied or lifted
+// immediately when hop-on is engaged or released.
+func (s *Service) UpdateHopOnActive(value string) error {
+	active := value == "true"
+	s.mu.Lock()
+	changed := s.hopOnActive != active
+	s.hopOnActive = active
+	stateStr := s.lastVehicleState
+	s.mu.Unlock()
+
+	if !changed {
+		return nil
+	}
+	if stateStr == "" {
+		// No state seen yet; the next UpdateVehicleState will pick up the flag.
+		return nil
+	}
+	return s.UpdateVehicleState(stateStr)
 }
 
 // UpdateSeatboxLock sends the current seatbox lock state to nRF52
