@@ -525,14 +525,14 @@ func (s *Service) handleLTCCommand(cmd string) {
 // capabilityMap maps each command category to its supported commands.
 var capabilityMap = map[string][]string{
 	"nav":     {"dest", "clear", "fav:add", "fav:delete", "fav:navigate", "fav:list"},
-	"keycard": {"list", "count", "add", "remove"},
+	"keycard": {"list", "count", "add:<uid>", "remove:<uid>"},
 	"usb":     {"ums", "normal"},
 	"time":    {"set"},
 	"config":  {"apn", "hibernate-timer", "update-channel", "auto-standby-seconds"},
 	"status":  {"maps-available", "navigation-available"},
-	"alarm":   {"enable", "disable", "arm", "disarm", "start", "stop"},
+	"alarm":   {"enable", "disable", "arm", "disarm", "start", "start:<seconds>", "stop"},
 	"ltc":     {"enable", "disable", "force-enable", "force-disable", "status"},
-	"cap":     {"list"},
+	"cap":     {"list", "<category>"},
 	"get":     {"<key>", "list", "list:<prefix>"},
 	"set":     {"<key>:<value>"},
 }
