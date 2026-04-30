@@ -1,8 +1,8 @@
-# LibreScoot Bluetooth Service
+# Librescoot Bluetooth Service
 
-[![CC BY-NC-SA 4.0][cc-by-nc-sa-shield]][cc-by-nc-sa]
+The Librescoot Bluetooth Service acts as a communication bridge between an nRF52 microcontroller and a Redis-based backend system. It facilitates control and monitoring of vehicle components through BLE connectivity, including lock/unlock commands, battery status, and mileage synchronization.
 
-The LibreScoot Bluetooth Service acts as a communication bridge between an nRF52 microcontroller and a Redis-based backend system. It facilitates control and monitoring of vehicle components through BLE connectivity, including lock/unlock commands, battery status, and mileage synchronization.
+Part of the [Librescoot](https://librescoot.org/) open-source platform.
 
 ## Features
 
@@ -143,14 +143,14 @@ The service reports faults via the FaultSet API to the `ble:fault` Redis key:
 
 ## License
 
-This work is licensed under a
+This project is dual-licensed. The source code is available under the
 [Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License][cc-by-nc-sa].
+The maintainers reserve the right to grant separate licenses for commercial distribution; please contact the maintainers to discuss commercial licensing.
 
 [![CC BY-NC-SA 4.0][cc-by-nc-sa-image]][cc-by-nc-sa]
 
 [cc-by-nc-sa]: http://creativecommons.org/licenses/by-nc-sa/4.0/
 [cc-by-nc-sa-image]: https://licensebuttons.net/l/by-nc-sa/4.0/88x31.png
-[cc-by-nc-sa-shield]: https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg
 
 ## Contributing
 
@@ -158,4 +158,4 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ---
 
-Made with ❤️ by the LibreScoot community
+Made with ❤️ by the Librescoot community
