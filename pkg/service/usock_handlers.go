@@ -1099,27 +1099,65 @@ func (s *Service) writeFaultToRedis(key, source string, code int, message, fault
 	}
 }
 
+// accelerometerWakePayload maps an incoming ACCELEROMETER message to the
+// `bmx:interrupt` payload alarm-service expects ("wake-suspend" /
+// "wake-hibernation"), or returns ok=false if the message is not a wake
+// notification.
+//
+// Two on-the-wire encodings are recognized:
+//
+//   - The expected encoding: outer message id 0x0200 (TypeAccelerometer),
+//     inner param key 0x0201 (WakeUpSuspend) or 0x0202 (WakeUpHibernation),
+//     value carrying any payload.
+//   - A legacy encoding observed on nRF52 firmware <= v2.3.0-ls: outer id and
+//     inner key both 0x0200 (relative subtype 0), with the intended subtype
+//     constant (0x0201/0x0202) sitting in the value field. See librescoot-0vb4.
+//
+// fromQuirk reports whether the legacy encoding was taken so the caller can
+// log it loudly until the firmware is updated.
+func accelerometerWakePayload(subType ble.SubType, value interface{}) (payload string, fromQuirk bool, ok bool) {
+	switch subType {
+	case ble.TypeAccelerometerWakeUpSuspend:
+		return "wake-suspend", false, true
+	case ble.TypeAccelerometerWakeUpHibernation:
+		return "wake-hibernation", false, true
+	}
+
+	if subType != 0 {
+		return "", false, false
+	}
+
+	raw, intOk := convertToInt(value)
+	if !intOk {
+		return "", false, false
+	}
+	switch uint16(raw) {
+	case uint16(ble.TypeAccelerometer) + uint16(ble.TypeAccelerometerWakeUpSuspend): // 0x0201
+		return "wake-suspend", true, true
+	case uint16(ble.TypeAccelerometer) + uint16(ble.TypeAccelerometerWakeUpHibernation): // 0x0202
+		return "wake-hibernation", true, true
+	}
+	return "", false, false
+}
+
 // handleAccelerometerMessage handles accelerometer wake-up messages from nRF52
 func (s *Service) handleAccelerometerMessage(subType ble.SubType, value interface{}) {
 	s.log.Debugf("Handling accelerometer message with relative subtype: %v", subType)
 
-	switch subType {
-	case ble.TypeAccelerometerWakeUpSuspend:
-		s.log.Debugf("Received accelerometer wake-up from suspend mode")
-		// Publish to bmx:interrupt channel to wake up alarm-service
-		if _, err := s.ipc.Publish("bmx:interrupt", "wake-suspend"); err != nil {
-			s.log.Errorf("Failed to publish accelerometer wake interrupt: %v", err)
-		}
+	payload, fromQuirk, ok := accelerometerWakePayload(subType, value)
+	if !ok {
+		s.log.Warnf("Unknown accelerometer message relative subtype: %v (value=%v)", subType, value)
+		return
+	}
 
-	case ble.TypeAccelerometerWakeUpHibernation:
-		s.log.Debugf("Received accelerometer wake-up from hibernation mode")
-		// Publish to bmx:interrupt channel to wake up alarm-service
-		if _, err := s.ipc.Publish("bmx:interrupt", "wake-hibernation"); err != nil {
-			s.log.Errorf("Failed to publish accelerometer wake interrupt: %v", err)
-		}
+	if fromQuirk {
+		s.log.Warnf("nRF52 firmware quirk: accel wake message subtype=0 value=%v decoded as %s (see librescoot-0vb4)", value, payload)
+	} else {
+		s.log.Debugf("Received accelerometer wake-up: %s", payload)
+	}
 
-	default:
-		s.log.Warnf("Unknown accelerometer message relative subtype: %v", subType)
+	if _, err := s.ipc.Publish("bmx:interrupt", payload); err != nil {
+		s.log.Errorf("Failed to publish accelerometer wake interrupt: %v", err)
 	}
 }
 
