@@ -384,6 +384,28 @@ func (s *Service) handleBLEVersionMessage(msgType ble.MessageType, absSubTypeKey
 			if !fwVersion.IsCompatible() {
 				s.log.Errorf("Firmware version %s incompatible (minimum: v%d.%d.%d)",
 					versionStr, MinMajor, MinMinor, MinPatch)
+
+				// An incompatible version can't run the normal protocol, but the
+				// nRF still accepts the USOCK DFU entry command and the
+				// bootloader is the same across our shipping versions. Try a
+				// synchronous staged update before bricking the service —
+				// otherwise older boxes are stuck unless someone manually
+				// pushes the firmware-update command on the Redis list.
+				if s.GetAutoUpdate() {
+					if fu := s.GetFirmwareUpdater(); fu != nil {
+						s.log.Infof("Attempting upgrade of incompatible firmware %s", versionStr)
+						updated, err := fu.CheckAndUpdate(versionStr)
+						if err != nil {
+							s.log.Errorf("Upgrade of incompatible firmware failed: %v", err)
+						} else if updated {
+							s.log.Infof("Incompatible firmware %s was upgraded successfully", versionStr)
+							return
+						} else {
+							s.log.Warnf("No newer firmware available to upgrade incompatible version %s", versionStr)
+						}
+					}
+				}
+
 				s.setErrorAndSleep(fmt.Sprintf(
 					"Firmware version %s not supported. Minimum required: v%d.%d.%d. Please upgrade firmware.",
 					versionStr, MinMajor, MinMinor, MinPatch))
