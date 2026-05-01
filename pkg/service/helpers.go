@@ -42,12 +42,19 @@ func batteryStateToString(state int) string {
 	}
 }
 
-// Convert string vehicle state to integer
+// Convert string vehicle state to the wire integer expected by mdb-nrf52
+// (see firmware vehicle_data_def.h). "hop-on-learning" collapses to PARKED
+// because the user is actively interacting with the dashboard (it's only
+// "locked-feeling" from the dashboard UI's perspective). "hop-on" gets the
+// dedicated value 6 so the firmware picks the right power-rail rules
+// (POWER_MODE_ACTIVE) while still presenting BLE clients with the
+// "stand-by" state-string (the firmware does that translation locally).
 func vehicleStateToInt(state string) int {
 	switch state {
 	case "stand-by":
 		return 0 // STANDBY
-	case "parked", "waiting-handlebar", "waiting-seatbox", "waiting-hibernation",
+	case "parked", "hop-on-learning",
+		"waiting-handlebar", "waiting-seatbox", "waiting-hibernation",
 		"waiting-hibernation-advanced", "waiting-hibernation-seatbox", "waiting-hibernation-confirm":
 		return 1 // PARKED
 	case "ready-to-drive":
@@ -56,6 +63,8 @@ func vehicleStateToInt(state string) int {
 		return 3 // SHUTTING_DOWN
 	case "updating":
 		return 4 // UPDATING
+	case "hop-on":
+		return 6 // HOP_ON (firmware presents as stand-by to BLE clients)
 	default:
 		// Unknown states (e.g. "init") map to STANDBY
 		return 0

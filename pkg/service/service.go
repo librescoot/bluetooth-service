@@ -43,12 +43,8 @@ type Service struct {
 	lastMileage     string // last mileage value sent to nRF (for dedup)
 	mu              sync.RWMutex
 
-	// Track the most recent raw vehicle state string and the hop-on-active
-	// flag so UpdateVehicleState can override the published state to
-	// stand-by while hop-on is engaged. The override is re-applied when
-	// either input changes.
+	// Track the most recent vehicle state string for diagnostic/log paths.
 	lastVehicleState string
-	hopOnActive      bool
 
 	// Subscription management
 	subStopCh chan struct{}
