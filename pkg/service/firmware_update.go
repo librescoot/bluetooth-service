@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -15,6 +16,58 @@ import (
 	"github.com/librescoot/bluetooth-service/pkg/ble"
 	"github.com/librescoot/bluetooth-service/pkg/logger"
 )
+
+// powerInhibitsHash is the Redis hash pm-service watches for inhibitors that
+// block suspend/hibernate. Shape is the same JSON that update-service writes
+// (see pm-service/internal/inhibitor/redis.go).
+const (
+	powerInhibitsHash = "power:inhibits"
+	dfuInhibitID      = "ble-dfu"
+)
+
+type powerInhibitData struct {
+	ID       string `json:"id"`
+	Who      string `json:"who"`
+	What     string `json:"what"`
+	Why      string `json:"why"`
+	Type     string `json:"type"`
+	Duration int64  `json:"duration"`
+	Created  int64  `json:"created"`
+}
+
+// addDFUInhibit registers a block-type power inhibitor for the duration of a
+// firmware flash. Without it, pm-service has no way to know the UART is busy
+// and the data stream has been stopped (which removes the implicit "UART
+// frames keep us awake" guard added in d0daaa5), and could initiate suspend
+// or hibernate mid-flash.
+func (fu *FirmwareUpdater) addDFUInhibit(why string) {
+	data := powerInhibitData{
+		ID:      dfuInhibitID,
+		Who:     "bluetooth-service",
+		What:    "nrf52-firmware-update",
+		Why:     why,
+		Type:    "block",
+		Created: time.Now().Unix(),
+	}
+	payload, err := json.Marshal(data)
+	if err != nil {
+		fu.log.Warnf("Failed to marshal DFU inhibitor: %v", err)
+		return
+	}
+	if err := fu.ipc.Hash(powerInhibitsHash).Set(dfuInhibitID, string(payload)); err != nil {
+		fu.log.Warnf("Failed to set DFU power inhibitor: %v", err)
+		return
+	}
+	fu.log.Infof("Set power inhibitor %s (%s)", dfuInhibitID, why)
+}
+
+func (fu *FirmwareUpdater) removeDFUInhibit() {
+	if err := fu.ipc.Hash(powerInhibitsHash).Delete(dfuInhibitID); err != nil {
+		fu.log.Warnf("Failed to remove DFU power inhibitor: %v", err)
+		return
+	}
+	fu.log.Infof("Cleared power inhibitor %s", dfuInhibitID)
+}
 
 // FirmwareUpdateConfig holds configuration for firmware updates
 type FirmwareUpdateConfig struct {
@@ -234,6 +287,9 @@ func (fu *FirmwareUpdater) PerformStagedUpdate(pair *ZipPair) error {
 	fu.log.Infof("Starting firmware update to %s", pair.Version)
 	fu.setStatus("updating")
 
+	fu.addDFUInhibit(fmt.Sprintf("flashing nRF52 firmware to %s", pair.Version))
+	defer fu.removeDFUInhibit()
+
 	// Parse target versions from the signed init packets inside the zips.
 	blInfo, err := ParseZipDFUInfo(pair.BLPath)
 	if err != nil {
@@ -386,6 +442,9 @@ func fileExists(path string) bool {
 func (fu *FirmwareUpdater) legacyPerformUpdate(firmwarePath string) error {
 	fu.log.Infof("Starting firmware update with %s", firmwarePath)
 	fu.setStatus("updating")
+
+	fu.addDFUInhibit(fmt.Sprintf("flashing nRF52 firmware from %s", filepath.Base(firmwarePath)))
+	defer fu.removeDFUInhibit()
 
 	fu.log.Infof("Stopping nRF data stream...")
 	if err := writeUARTMessage(fu.service.GetUSock(), ble.TypeDataStream, ble.TypeDataStreamEnable, 0); err != nil {
