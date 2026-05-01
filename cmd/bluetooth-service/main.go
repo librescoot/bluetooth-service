@@ -88,14 +88,17 @@ func main() {
 	usockHandler := func(payload *usock.Payload) {
 		svc.HandleUSockMessage(payload.ID, payload)
 	}
+	usockErrHandler := func(err error) {
+		log.Errorf("Serial communication error: %v", err)
+		svc.SetFault(service.FaultSerialPort)
+	}
 	sock, err := usock.New(*serialDevice, *baudRate, usockHandler, log)
 	if err != nil {
 		log.Fatalf("Failed to connect to nRF52 via USOCK: %v", err)
 	}
 	svc.SetUSock(sock)
 
-	// Store serial config for firmware update reconnection
-	svc.SetSerialConfig(*serialDevice, *baudRate, usockHandler)
+	svc.SetSerialConfig(*serialDevice, *baudRate, usockHandler, usockErrHandler)
 	svc.SetAutoUpdate(*autoUpdate)
 
 	// Create and configure firmware updater
@@ -109,10 +112,7 @@ func main() {
 
 	log.Infof("Firmware update: auto-update=%v, firmware-dir=%s", *autoUpdate, *firmwareDir)
 
-	sock.SetErrorHandler(func(err error) {
-		log.Errorf("Serial communication error: %v", err)
-		svc.SetFault(service.FaultSerialPort)
-	})
+	sock.SetErrorHandler(usockErrHandler)
 
 	defer sock.Close()
 	svc.ClearFault(service.FaultSerialPort)

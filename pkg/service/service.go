@@ -38,6 +38,7 @@ type Service struct {
 	serialDevice    string
 	baudRate        int
 	usockHandler    func(*usock.Payload)
+	usockErrHandler func(error)
 	firmwareUpdater firmwareUpdaterInterface
 	autoUpdate      bool
 	lastMileage     string // last mileage value sent to nRF (for dedup)
@@ -101,13 +102,16 @@ func (s *Service) GetUSock() usockWriter {
 	return s.usock
 }
 
-// SetSerialConfig stores the serial configuration for reconnection
-func (s *Service) SetSerialConfig(device string, baud int, handler func(*usock.Payload)) {
+// SetSerialConfig stores the serial configuration for reconnection.
+// errHandler is reapplied to the new USOCK after a reconnect so serial
+// faults from the post-DFU connection still surface as FaultSerialPort.
+func (s *Service) SetSerialConfig(device string, baud int, handler func(*usock.Payload), errHandler func(error)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.serialDevice = device
 	s.baudRate = baud
 	s.usockHandler = handler
+	s.usockErrHandler = errHandler
 }
 
 // SetFirmwareUpdater sets the firmware updater for the service
@@ -148,7 +152,10 @@ func (s *Service) CloseUSock() error {
 	return nil
 }
 
-// ReconnectUSock reopens the serial connection and re-initializes the nRF
+// ReconnectUSock reopens the serial connection and re-initializes the nRF.
+// Also clears the in-memory dedup caches so that post-DFU state pushes from
+// SubscribeToRedisChannels' StartWithSync are not suppressed against values
+// that were sent to the previous (now replaced) firmware image.
 func (s *Service) ReconnectUSock() error {
 	s.mu.Lock()
 	if s.serialDevice == "" || s.usockHandler == nil {
@@ -158,18 +165,23 @@ func (s *Service) ReconnectUSock() error {
 	device := s.serialDevice
 	baud := s.baudRate
 	handler := s.usockHandler
+	errHandler := s.usockErrHandler
+	s.lastMileage = ""
+	s.lastVehicleState = ""
 	s.mu.Unlock()
 
 	sock, err := usock.New(device, baud, handler, s.log)
 	if err != nil {
 		return fmt.Errorf("failed to reconnect to nRF52: %w", err)
 	}
+	if errHandler != nil {
+		sock.SetErrorHandler(errHandler)
+	}
 
 	s.mu.Lock()
 	s.usock = sock
 	s.mu.Unlock()
 
-	// Re-initialize nRF52
 	if err := s.InitializeNRF52(); err != nil {
 		return fmt.Errorf("failed to re-initialize nRF52: %w", err)
 	}
