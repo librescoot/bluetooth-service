@@ -271,6 +271,10 @@ func (s *Service) WatchRedisCommands() {
 			msgType = ble.TypeLTCControl
 			subType = ble.TypeLTCControlStatus
 			valueInt = 0
+		case "data-stream-sync":
+			msgType = ble.TypeDataStream
+			subType = ble.TypeDataStreamSync
+			valueInt = 1
 		default:
 			s.log.Warnf("Unknown command received from Redis list: %s", command)
 			return nil // Not an error, just unknown command
@@ -579,6 +583,15 @@ func (s *Service) UpdatePowerManagementState(stateStr string) error {
 			s.log.Warnf("failed to re-enable data stream on running: %v", err)
 		} else {
 			s.log.Infof("Enabled data stream on running")
+		}
+		// Force a resync so the firmware re-emits every cached field on the
+		// next 1 s tick. Without this, any cb-battery / aux / scooter-state
+		// change that happened while the stream was disabled stays latched
+		// in the firmware's old_* cache and never reaches Redis.
+		if err := writeUARTMessage(s.usock, ble.TypeDataStream, ble.TypeDataStreamSync, 1); err != nil {
+			s.log.Warnf("failed to sync data stream on running: %v", err)
+		} else {
+			s.log.Infof("Synced data stream on running")
 		}
 	}
 
