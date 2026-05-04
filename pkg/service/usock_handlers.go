@@ -363,7 +363,20 @@ func (s *Service) handleBLEVersionMessage(msgType ble.MessageType, absSubTypeKey
 
 	expectedAbsSubType := uint16(ble.TypeBLEVersion) + uint16(ble.TypeBLEVersionString) // 0xA001
 
-	if absSubTypeKey == expectedAbsSubType {
+	// v1.8.x and earlier emit VERSION_STRING under absolute key 0x0000.
+	// v1.9.0+ emits it under 0xA001. Accept both so older devices can still
+	// be parsed and routed through the auto-upgrade path; require a string
+	// value for the legacy key so any future non-version field under 0x0000
+	// falls through to the Unknown-key warn.
+	const legacyVersionStringKey uint16 = 0x0000
+	isVersionString := absSubTypeKey == expectedAbsSubType
+	if !isVersionString && absSubTypeKey == legacyVersionStringKey {
+		if _, ok := convertToString(value); ok {
+			isVersionString = true
+		}
+	}
+
+	if isVersionString {
 		if versionStr, ok := convertToString(value); ok {
 			s.log.Infof("Detected firmware version: %s", versionStr)
 
