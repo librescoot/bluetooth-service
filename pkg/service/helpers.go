@@ -49,25 +49,27 @@ func batteryStateToString(state int) string {
 // dedicated value 6 so the firmware picks the right power-rail rules
 // (POWER_MODE_ACTIVE) while still presenting BLE clients with the
 // "stand-by" state-string (the firmware does that translation locally).
-func vehicleStateToInt(state string) int {
+//
+// Returns ok=false for unrecognized strings so callers can hold the previous
+// BLE state instead of forwarding a misleading default.
+func vehicleStateToInt(state string) (int, bool) {
 	switch state {
 	case "stand-by":
-		return 0 // STANDBY
+		return 0, true // STANDBY
 	case "parked", "hop-on-learning",
 		"waiting-handlebar", "waiting-seatbox", "waiting-hibernation",
 		"waiting-hibernation-advanced", "waiting-hibernation-seatbox", "waiting-hibernation-confirm":
-		return 1 // PARKED
+		return 1, true // PARKED
 	case "ready-to-drive":
-		return 2 // READY_TO_DRIVE
+		return 2, true // READY_TO_DRIVE
 	case "shutting-down":
-		return 3 // SHUTTING_DOWN
+		return 3, true // SHUTTING_DOWN
 	case "updating":
-		return 4 // UPDATING
+		return 4, true // UPDATING
 	case "hop-on":
-		return 6 // HOP_ON (firmware presents as stand-by to BLE clients)
+		return 6, true // HOP_ON (firmware presents as stand-by to BLE clients)
 	default:
-		// Unknown states (e.g. "init") map to STANDBY
-		return 0
+		return 0, false
 	}
 }
 

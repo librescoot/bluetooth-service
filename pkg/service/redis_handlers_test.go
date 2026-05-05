@@ -73,14 +73,20 @@ func TestUpdateVehicleState(t *testing.T) {
 		name          string
 		state         string
 		expectedValue uint16
+		shouldWrite   bool
 	}{
-		{"stand-by state", "stand-by", 0},
-		{"parked state", "parked", 1},
-		{"ready-to-drive state", "ready-to-drive", 2},
-		{"shutting-down state", "shutting-down", 3},
-		{"updating state", "updating", 4},
-		{"empty string defaults to stand-by", "", 0},
-		{"unknown state defaults to stand-by", "unknown", 0},
+		{"stand-by state", "stand-by", 0, true},
+		{"parked state", "parked", 1, true},
+		{"hop-on state", "hop-on", 6, true},
+		{"hop-on-learning state", "hop-on-learning", 1, true},
+		{"ready-to-drive state", "ready-to-drive", 2, true},
+		{"shutting-down state", "shutting-down", 3, true},
+		{"updating state", "updating", 4, true},
+		// Unrecognized inputs must NOT be written to nRF — sending a
+		// fabricated stand-by would lie to the mobile app and let it fire
+		// commands at a state machine that hasn't reached stand-by yet.
+		{"empty string is dropped", "", 0, false},
+		{"unknown state is dropped", "unknown", 0, false},
 	}
 
 	for _, tt := range tests {
@@ -92,6 +98,14 @@ func TestUpdateVehicleState(t *testing.T) {
 			err := svc.UpdateVehicleState(tt.state)
 			if err != nil {
 				t.Fatalf("UpdateVehicleState(%q) returned error: %v", tt.state, err)
+			}
+
+			if !tt.shouldWrite {
+				if mock.messageCount() != 0 {
+					t.Errorf("UpdateVehicleState(%q) wrote %d messages, want 0",
+						tt.state, mock.messageCount())
+				}
+				return
 			}
 
 			// Verify frame ID

@@ -299,17 +299,27 @@ func (s *Service) WatchRedisCommands() {
 // value 6 (firmware uses POWER_MODE_ACTIVE but presents "stand-by" to BLE
 // clients) and "hop-on-learning" collapses to PARKED on the wire (the user
 // is interacting with the dashboard, externally parked-equivalent).
+//
+// Empty or unrecognized state strings are dropped rather than defaulted to
+// stand-by. Reporting a fake stand-by while vehicle-service is in some
+// transitional or unknown state lies to the mobile app — it would believe
+// the scooter is ready for an unlock and fire one into a closed window.
+// We'd rather hold the previous state on the BLE side until vehicle-service
+// publishes something we recognize.
 func (s *Service) UpdateVehicleState(stateStr string) error {
 	if stateStr == "" {
-		s.log.Warnf(" empty vehicle state value. Sending default (stand-by).")
-		stateStr = "stand-by" // Default if empty
+		s.log.Warnf("empty vehicle state value, not forwarding to nRF")
+		return nil
+	}
+	state, ok := vehicleStateToInt(stateStr)
+	if !ok {
+		s.log.Warnf("unrecognized vehicle state %q, not forwarding to nRF", stateStr)
+		return nil
 	}
 
 	s.mu.Lock()
 	s.lastVehicleState = stateStr
 	s.mu.Unlock()
-
-	state := vehicleStateToInt(stateStr)
 
 	if err := writeUARTMessage(s.usock, ble.TypeVehicleState, ble.TypeVehicleStateState, uint16(state)); err != nil {
 		return fmt.Errorf("failed to send vehicle state: %v", err)

@@ -53,42 +53,49 @@ func TestBatteryStateToString(t *testing.T) {
 
 func TestVehicleStateToInt(t *testing.T) {
 	tests := []struct {
-		name     string
-		state    string
-		expected int
+		name      string
+		state     string
+		expected  int
+		expectOk  bool
 	}{
 		// Stand-by state
-		{"stand-by state", "stand-by", 0},
+		{"stand-by state", "stand-by", 0, true},
 
 		// Parked states (all map to 1)
-		{"parked state", "parked", 1},
-		{"waiting-handlebar state", "waiting-handlebar", 1},
-		{"waiting-seatbox state", "waiting-seatbox", 1},
-		{"waiting-hibernation state", "waiting-hibernation", 1},
-		{"waiting-hibernation-advanced state", "waiting-hibernation-advanced", 1},
-		{"waiting-hibernation-seatbox state", "waiting-hibernation-seatbox", 1},
-		{"waiting-hibernation-confirm state", "waiting-hibernation-confirm", 1},
+		{"parked state", "parked", 1, true},
+		{"waiting-handlebar state", "waiting-handlebar", 1, true},
+		{"waiting-seatbox state", "waiting-seatbox", 1, true},
+		{"waiting-hibernation state", "waiting-hibernation", 1, true},
+		{"waiting-hibernation-advanced state", "waiting-hibernation-advanced", 1, true},
+		{"waiting-hibernation-seatbox state", "waiting-hibernation-seatbox", 1, true},
+		{"waiting-hibernation-confirm state", "waiting-hibernation-confirm", 1, true},
+
+		// Hop-on family
+		{"hop-on state", "hop-on", 6, true},
+		{"hop-on-learning state", "hop-on-learning", 1, true},
 
 		// Ready to drive
-		{"ready-to-drive state", "ready-to-drive", 2},
+		{"ready-to-drive state", "ready-to-drive", 2, true},
 
 		// Shutting down
-		{"shutting-down state", "shutting-down", 3},
+		{"shutting-down state", "shutting-down", 3, true},
 
 		// Updating
-		{"updating state", "updating", 4},
+		{"updating state", "updating", 4, true},
 
-		// Default cases
-		{"init state defaults to stand-by", "init", 0},
-		{"empty string defaults to stand-by", "", 0},
-		{"unknown state defaults to stand-by", "unknown-state", 0},
-		{"mixed case defaults to stand-by", "PARKED", 0},
+		// Unrecognized inputs return ok=false; callers hold previous BLE state.
+		{"empty string is not recognized", "", 0, false},
+		{"unknown state is not recognized", "unknown-state", 0, false},
+		{"mixed case is not recognized", "PARKED", 0, false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := vehicleStateToInt(tt.state)
-			if result != tt.expected {
+			result, ok := vehicleStateToInt(tt.state)
+			if ok != tt.expectOk {
+				t.Errorf("vehicleStateToInt(%q) ok = %v, want %v", tt.state, ok, tt.expectOk)
+			}
+			if ok && result != tt.expected {
 				t.Errorf("vehicleStateToInt(%q) = %d, want %d", tt.state, result, tt.expected)
 			}
 		})
