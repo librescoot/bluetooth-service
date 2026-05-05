@@ -114,9 +114,13 @@ func NewFirmwareUpdater(config FirmwareUpdateConfig, log *logger.Logger, ipcClie
 	}
 }
 
-// setStatus updates the firmware update status in Redis
+// setStatus updates the firmware-update-status field in the ble hash. Uses
+// the synchronous Set option so back-to-back calls (e.g. "checking" then
+// "idle" inside CheckAndUpdate) are seen by Redis in the order issued. The
+// async default would let the second Exec race ahead of the first and leave
+// the field stuck on the earlier value.
 func (fu *FirmwareUpdater) setStatus(status string) {
-	if err := fu.ipc.Hash("ble").Set("firmware-update-status", status); err != nil {
+	if err := fu.ipc.Hash("ble").Set("firmware-update-status", status, ipc.Sync()); err != nil {
 		fu.log.Errorf("Failed to set firmware update status: %v", err)
 	}
 }
