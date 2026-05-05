@@ -280,8 +280,40 @@ func (fu *FirmwareUpdater) CheckAndUpdate(currentVersionStr string) (bool, error
 // bootloader stage if it's already at least as new as the target, and flash
 // the remaining stages in order re-entering DFU between each.
 func (fu *FirmwareUpdater) PerformStagedUpdate(pair *ZipPair) error {
-	fu.log.Infof("Starting firmware update to %s", pair.Version)
-	fu.setStatus("updating")
+	return fu.runStagedUpdate(pair, "updating")
+}
+
+// RecoverFromDFU is the bricked-app recovery entry point. Finds the latest
+// firmware zip pair on disk and runs a staged flash without going through
+// the version-string compare path — the device is assumed to be sitting in
+// DFU mode with no working application, so the BL version probed inside the
+// staged flash is the only identity we have to drive the plan.
+//
+// Safe to call before USOCK has been opened: runStagedUpdate's "stop data
+// stream / close USOCK / stop subs" prelude is a no-op when nothing is
+// running, and the post-flash ReconnectUSock + SubscribeToRedisChannels
+// brings the service up identically to a normal startup.
+func (fu *FirmwareUpdater) RecoverFromDFU() error {
+	pair, err := FindLatestZipPair(fu.config.FirmwareDir)
+	if err != nil {
+		fu.setStatus("idle")
+		return fmt.Errorf("scanning %s: %w", fu.config.FirmwareDir, err)
+	}
+	if pair == nil {
+		fu.setStatus("idle")
+		return fmt.Errorf("no firmware zip pair found in %s", fu.config.FirmwareDir)
+	}
+	fu.log.Warnf("Recovering nRF stuck in DFU mode -> flashing %s", pair.Version)
+	return fu.runStagedUpdate(pair, "recovering")
+}
+
+// runStagedUpdate is the shared implementation behind PerformStagedUpdate
+// (runtime path, initialStatus="updating") and RecoverFromDFU (startup
+// bricked-app path, initialStatus="recovering"). The two paths share every
+// step; only the visible status string for the duration of the flash differs.
+func (fu *FirmwareUpdater) runStagedUpdate(pair *ZipPair, initialStatus string) error {
+	fu.log.Infof("Starting firmware update to %s (status=%s)", pair.Version, initialStatus)
+	fu.setStatus(initialStatus)
 
 	fu.addDFUInhibit(fmt.Sprintf("flashing nRF52 firmware to %s", pair.Version))
 	defer fu.removeDFUInhibit()
@@ -343,7 +375,7 @@ func (fu *FirmwareUpdater) PerformStagedUpdate(pair *ZipPair) error {
 	// still soft-fail on 0x05 if the bootloader is already current, leaving
 	// the app flash to proceed as its own transaction.
 	var currentBL uint32
-	if info, err := QueryDFUFirmwareVersion(fu.config.SerialDevice, fu.config.BaudRate, nrfDFUImageIdxBootloader); err != nil {
+	if info, err := QueryDFUFirmwareVersion(fu.config.SerialDevice, fu.config.BaudRate, nrfDFUImageIdxBootloader, 2*time.Second); err != nil {
 		fu.log.Warnf("Unable to query installed bootloader version: %v. Will attempt BL flash anyway.", err)
 		currentBL = 0
 	} else {

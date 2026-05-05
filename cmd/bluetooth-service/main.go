@@ -92,16 +92,12 @@ func main() {
 		log.Errorf("Serial communication error: %v", err)
 		svc.SetFault(service.FaultSerialPort)
 	}
-	sock, err := usock.New(*serialDevice, *baudRate, usockHandler, log)
-	if err != nil {
-		log.Fatalf("Failed to connect to nRF52 via USOCK: %v", err)
-	}
-	svc.SetUSock(sock)
 
 	svc.SetSerialConfig(*serialDevice, *baudRate, usockHandler, usockErrHandler)
 	svc.SetAutoUpdate(*autoUpdate)
 
-	// Create and configure firmware updater
+	// Create and configure firmware updater (must precede Bootstrap so the
+	// startup DFU probe can hand off to recovery if the nRF is bricked).
 	fwConfig := service.FirmwareUpdateConfig{
 		FirmwareDir:     *firmwareDir,
 		NRFUpdateScript: service.DefaultNRFUpdateScript,
@@ -112,28 +108,15 @@ func main() {
 
 	log.Infof("Firmware update: auto-update=%v, firmware-dir=%s", *autoUpdate, *firmwareDir)
 
-	sock.SetErrorHandler(usockErrHandler)
-
-	defer sock.Close()
-	svc.ClearFault(service.FaultSerialPort)
-	log.Infof("Connected to nRF52 via USOCK")
+	// Probe for DFU mode -> either recover (if nRF is stuck in DFU with no
+	// working app) or open USOCK and run the normal init sequence. Bootstrap
+	// closes the USOCK on shutdown via Stop().
+	if err := svc.Bootstrap(); err != nil {
+		log.Fatalf("Failed to bootstrap service: %v", err)
+	}
 
 	// Start the command watcher goroutine
 	go svc.WatchRedisCommands()
-
-	// Subscribe to Redis Pub/Sub channels for state updates
-	svc.SubscribeToRedisChannels()
-
-	log.Infof("Subscribed to Redis channels")
-
-	log.Infof("Initializing communication with nRF52...")
-	if err := svc.InitializeNRF52(); err != nil {
-		svc.SetFault(service.FaultNRFInit)
-		log.Errorf("Error during nRF52 initialization sequence: %v", err)
-	} else {
-		svc.ClearFault(service.FaultNRFInit)
-		log.Infof("nRF52 initialization sequence sent successfully.")
-	}
 
 	log.Infof("Initial state loaded via StartWithSync callbacks")
 

@@ -45,18 +45,24 @@ type DFUFirmwareVersionInfo struct {
 // QueryDFUFirmwareVersion sends a Nordic DFU serial GET_FIRMWARE_VERSION
 // request for the given image index and returns the parsed response. The nRF
 // must already be in DFU bootloader mode — typically call this right after
-// enterDFUMode() succeeds and before runNordicDFU().
+// enterDFUMode() succeeds and before runNordicDFU(). It also doubles as a
+// startup probe to detect a device stuck in DFU with no working application.
+//
+// readTimeout bounds the wait for a response. A long value (2s+) is fine
+// when DFU entry has just been confirmed; a short value (a few hundred ms)
+// is appropriate for a startup probe where most devices are running an app
+// and will simply discard the SLIP request as non-USOCK noise.
 //
 // The serial device must not be held open by any other process or goroutine
 // when this function runs; it opens, queries, and closes the port on its own.
-func QueryDFUFirmwareVersion(device string, baud int, imageIdx byte) (*DFUFirmwareVersionInfo, error) {
+func QueryDFUFirmwareVersion(device string, baud int, imageIdx byte, readTimeout time.Duration) (*DFUFirmwareVersionInfo, error) {
 	port, err := serial.OpenPort(&serial.Config{
 		Name:        device,
 		Baud:        baud,
 		Size:        8,
 		Parity:      serial.ParityNone,
 		StopBits:    serial.Stop1,
-		ReadTimeout: 2 * time.Second,
+		ReadTimeout: readTimeout,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("opening %s: %w", device, err)

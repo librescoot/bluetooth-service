@@ -25,6 +25,7 @@ type usockCloser interface {
 // FirmwareUpdater interface for firmware update operations
 type firmwareUpdaterInterface interface {
 	CheckAndUpdate(currentVersion string) (bool, error)
+	RecoverFromDFU() error
 }
 
 // Service represents the MDB Bluetooth service
@@ -210,10 +211,98 @@ func (s *Service) ClearAllFaults() {
 	}
 }
 
-// Stop stops the service
+// Stop stops the service: stops Redis subscriptions, closes USOCK, signals
+// other goroutines to exit. Safe to call when subscriptions or USOCK were
+// never started.
 func (s *Service) Stop() {
 	s.StopSubscriptions()
+	if err := s.CloseUSock(); err != nil {
+		s.log.Errorf("Failed to close USOCK during shutdown: %v", err)
+	}
 	close(s.stopCh)
+}
+
+// Bootstrap probes the nRF for DFU mode and either runs bricked-app recovery
+// or normal startup. Should be called once at service startup, after
+// SetSerialConfig and SetFirmwareUpdater.
+//
+// If the bootloader responds to a SLIP version probe within the probe
+// timeout, the device is stuck in DFU with no working application — we run
+// the firmware updater's recovery path, which flashes the latest zip pair
+// and brings up USOCK + subscriptions through ReconnectUSock as a side
+// effect. If recovery fails for any reason we fall back to normal startup
+// and let the service run in degraded mode.
+//
+// Otherwise (probe times out or returns garbage) the device is presumed to
+// be running an application; we open USOCK, subscribe to Redis, and run the
+// nRF init sequence. The probe penalty when no recovery is needed is
+// acceptable for a service that lives forever.
+func (s *Service) Bootstrap() error {
+	const probeTimeout = 500 * time.Millisecond
+
+	s.mu.RLock()
+	device := s.serialDevice
+	baud := s.baudRate
+	fu := s.firmwareUpdater
+	s.mu.RUnlock()
+
+	if device == "" {
+		return fmt.Errorf("Bootstrap: serial config not set; call SetSerialConfig first")
+	}
+
+	if info, err := QueryDFUFirmwareVersion(device, baud, nrfDFUImageIdxBootloader, probeTimeout); err == nil {
+		s.log.Warnf("nRF found in DFU mode at startup (BL version=%d), running recovery", info.Version)
+		if fu == nil {
+			s.log.Errorf("Firmware updater not configured; cannot recover, falling back to normal startup")
+		} else if err := fu.RecoverFromDFU(); err == nil {
+			s.log.Infof("DFU recovery succeeded; service is up via recovery's reconnect path")
+			return nil
+		} else {
+			s.log.Errorf("DFU recovery failed: %v. Falling back to normal startup.", err)
+		}
+	} else {
+		s.log.Debugf("BL probe found no DFU at startup (likely running app): %v", err)
+	}
+
+	return s.startNormally()
+}
+
+// startNormally is the non-recovery half of Bootstrap: opens USOCK, sets the
+// error handler, clears the serial-port fault, subscribes to Redis channels,
+// and runs the nRF init sequence. Sets the FaultNRFInit fault on init
+// failure rather than returning an error, since a bad init shouldn't prevent
+// the rest of the service from running.
+func (s *Service) startNormally() error {
+	s.mu.RLock()
+	device := s.serialDevice
+	baud := s.baudRate
+	handler := s.usockHandler
+	errHandler := s.usockErrHandler
+	s.mu.RUnlock()
+
+	sock, err := usock.New(device, baud, handler, s.log)
+	if err != nil {
+		return fmt.Errorf("failed to open USOCK: %w", err)
+	}
+	if errHandler != nil {
+		sock.SetErrorHandler(errHandler)
+	}
+	s.SetUSock(sock)
+	s.ClearFault(FaultSerialPort)
+	s.log.Infof("Connected to nRF52 via USOCK")
+
+	s.SubscribeToRedisChannels()
+
+	s.log.Infof("Initializing communication with nRF52...")
+	if err := s.InitializeNRF52(); err != nil {
+		s.SetFault(FaultNRFInit)
+		s.log.Errorf("Error during nRF52 initialization sequence: %v", err)
+	} else {
+		s.ClearFault(FaultNRFInit)
+		s.log.Infof("nRF52 initialization sequence sent successfully.")
+	}
+
+	return nil
 }
 
 // Wait waits for all service goroutines to finish
