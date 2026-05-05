@@ -71,13 +71,12 @@ func (fu *FirmwareUpdater) removeDFUInhibit() {
 
 // FirmwareUpdateConfig holds configuration for firmware updates
 type FirmwareUpdateConfig struct {
-	FirmwareDir     string
-	NRFUpdateScript string
-	SerialDevice    string
-	BaudRate        int
-	MaxDFURetries   int
-	DFURetryDelay   time.Duration
-	DFUCooldown     int
+	FirmwareDir      string
+	NRFUpdateScript  string
+	SerialDevice     string
+	BaudRate         int
+	MaxStageAttempts int
+	DFUCooldown      int
 }
 
 // FirmwareUpdater handles nRF firmware updates
@@ -91,11 +90,8 @@ type FirmwareUpdater struct {
 // NewFirmwareUpdater creates a new FirmwareUpdater instance
 func NewFirmwareUpdater(config FirmwareUpdateConfig, log *logger.Logger, ipcClient *ipc.Client, svc *Service) *FirmwareUpdater {
 	// Set defaults
-	if config.MaxDFURetries == 0 {
-		config.MaxDFURetries = 60
-	}
-	if config.DFURetryDelay == 0 {
-		config.DFURetryDelay = time.Second
+	if config.MaxStageAttempts == 0 {
+		config.MaxStageAttempts = 3
 	}
 	if config.DFUCooldown == 0 {
 		config.DFUCooldown = 5
@@ -361,23 +357,15 @@ func (fu *FirmwareUpdater) PerformStagedUpdate(pair *ZipPair) error {
 
 	// Execute each stage. Between stages the nRF reboots out of DFU mode
 	// back into the bootloader, so we re-enter DFU before each subsequent
-	// flash.
+	// flash. Each stage is retried up to MaxStageAttempts times — re-entering
+	// DFU before every retry, since a failed flash may have left the BL in an
+	// unknown state. Stage 1 attempt 1 skips re-entry because DFU mode was
+	// already entered at the top of this function.
 	for i, stage := range plan.Stages {
-		if i > 0 {
-			fu.log.Infof("Re-entering DFU mode for stage %d (%s)...", i+1, stage.Label)
-			if err := fu.enterDFUMode(); err != nil {
-				fu.setStatus("failed:nrfupdate")
-				fu.service.SetFault(FaultFirmwareUpdate)
-				fu.attemptReconnect()
-				return fmt.Errorf("failed to re-enter DFU mode before stage %s: %w", stage.Label, err)
-			}
-		}
-		fu.log.Infof("Flashing stage %d/%d: %s (%s)", i+1, len(plan.Stages), stage.Label, stage.Path)
-		if err := fu.runNordicDFU(stage.Path); err != nil {
-			fu.setStatus("failed:dfu")
+		if err := fu.runStageWithRetry(stage, i, len(plan.Stages)); err != nil {
 			fu.service.SetFault(FaultFirmwareUpdate)
 			fu.attemptReconnect()
-			return fmt.Errorf("DFU failed on stage %s: %w", stage.Label, err)
+			return err
 		}
 	}
 
@@ -400,6 +388,70 @@ func (fu *FirmwareUpdater) PerformStagedUpdate(pair *ZipPair) error {
 	fu.setStatus("success")
 	fu.log.Infof("Firmware update to %s completed successfully", pair.Version)
 	return nil
+}
+
+// runStageWithRetry flashes one DFU stage, retrying on transient UART or
+// nordicsemi failures up to MaxStageAttempts times. It re-enters DFU mode
+// before every retry because a failed flash may have left the bootloader in
+// an unknown state — sending the DFU command again is benign whether the BL
+// is alive (it accepts the request) or the device just rebooted (the new BL
+// session catches the next request).
+//
+// On exhausted retries, sets the firmware-update-status hash to either
+// failed:nrfupdate (couldn't enter DFU) or failed:dfu (entered DFU but the
+// flash itself failed), preserving the distinction the single-attempt path
+// used to make.
+func (fu *FirmwareUpdater) runStageWithRetry(stage DFUStage, stageIdx, stageCount int) error {
+	maxAttempts := max(fu.config.MaxStageAttempts, 1)
+
+	type errPhase int
+	const (
+		phaseEnter errPhase = iota
+		phaseFlash
+	)
+
+	var lastErr error
+	var lastPhase errPhase
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		// Stage 1 attempt 1 inherits the DFU entry done by the caller; every
+		// other (stage, attempt) pair re-enters DFU first.
+		if !(stageIdx == 0 && attempt == 1) {
+			if attempt > 1 {
+				fu.log.Infof("Re-entering DFU mode for stage %d (%s), retry %d/%d...",
+					stageIdx+1, stage.Label, attempt, maxAttempts)
+			} else {
+				fu.log.Infof("Re-entering DFU mode for stage %d (%s)...", stageIdx+1, stage.Label)
+			}
+			if err := fu.enterDFUMode(); err != nil {
+				lastErr = fmt.Errorf("entering DFU mode for stage %s: %w", stage.Label, err)
+				lastPhase = phaseEnter
+				fu.log.Warnf("DFU entry failed (stage %s, attempt %d/%d): %v",
+					stage.Label, attempt, maxAttempts, err)
+				continue
+			}
+		}
+
+		fu.log.Infof("Flashing stage %d/%d: %s (%s) [attempt %d/%d]",
+			stageIdx+1, stageCount, stage.Label, stage.Path, attempt, maxAttempts)
+		if err := fu.runNordicDFU(stage.Path); err != nil {
+			lastErr = fmt.Errorf("DFU failed on stage %s: %w", stage.Label, err)
+			lastPhase = phaseFlash
+			fu.log.Warnf("DFU flash failed (stage %s, attempt %d/%d): %v",
+				stage.Label, attempt, maxAttempts, err)
+			continue
+		}
+
+		return nil
+	}
+
+	switch lastPhase {
+	case phaseEnter:
+		fu.setStatus("failed:nrfupdate")
+	default:
+		fu.setStatus("failed:dfu")
+	}
+	return fmt.Errorf("stage %s exhausted %d attempts: %w", stage.Label, maxAttempts, lastErr)
 }
 
 // PerformUpdate is the legacy single-zip entry point. New code should call
