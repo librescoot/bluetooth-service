@@ -7,9 +7,29 @@ import (
 	"github.com/librescoot/bluetooth-service/pkg/ble"
 )
 
-// InitializeNRF52 initializes communication with the nRF52
+// nrfHandshakeTimeout caps how long InitializeNRF52 waits for the nRF to
+// reply to the version request. The reply normally arrives in a few ms over
+// USOCK; 2 seconds is generous enough to ride out worst-case scheduling
+// latency and tight enough to surface a non-responsive nRF immediately
+// instead of leaving the service silently degraded.
+const nrfHandshakeTimeout = 2 * time.Second
+
+// InitializeNRF52 initializes communication with the nRF52 and blocks until
+// the nRF acknowledges by emitting a BLE version frame, or until
+// nrfHandshakeTimeout elapses. A timeout is returned as an error so callers
+// (Bootstrap.startNormally, ReconnectUSock) can surface FaultNRFInit or
+// failed:reconnect as appropriate. Late-arriving versions clear the fault
+// via handleBLEVersionMessage, so a slow handshake self-heals.
 func (s *Service) InitializeNRF52() error {
 	s.log.Infof("Starting nRF52 initialization...")
+
+	// Drain any stale version signal from a previous handshake. The buffered
+	// channel may still hold an entry if the version handler fired between
+	// the previous wait and now (e.g. on rapid reconnects).
+	select {
+	case <-s.versionRxCh:
+	default:
+	}
 
 	// 1. Disable data streaming
 	if err := writeUARTMessage(s.usock, ble.TypeDataStream, ble.TypeDataStreamEnable, 0); err != nil {
@@ -58,8 +78,19 @@ func (s *Service) InitializeNRF52() error {
 		s.log.Debugf("Sent command to restart advertising without whitelist")
 	}
 
-	s.log.Infof("nRF52 initialization complete")
-	return nil
+	// Block until the version reply arrives or we time out. The version
+	// handler does a non-blocking send on versionRxCh on receipt; a reply
+	// that arrived during the steps above is sitting in the buffered
+	// channel and is consumed immediately here.
+	select {
+	case <-s.versionRxCh:
+		s.log.Infof("nRF52 initialization complete")
+		return nil
+	case <-time.After(nrfHandshakeTimeout):
+		return fmt.Errorf("handshake timeout: no version response within %v", nrfHandshakeTimeout)
+	case <-s.stopCh:
+		return fmt.Errorf("handshake aborted: service stopping")
+	}
 }
 
 // ShutdownNRF52 tells the nRF to stop its autonomous data stream before
