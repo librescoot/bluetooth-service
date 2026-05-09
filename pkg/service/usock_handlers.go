@@ -820,6 +820,9 @@ func (s *Service) handleBatteryInfoMessage(subType ble.SubType, value interface{
 	case ble.TypeBatteryInfoCharge: // 1
 		redisField = "charge"
 		if isInt {
+			if valueInt > 100 {
+				valueInt = 100
+			}
 			s.log.Debugf("Received CB Battery Charge: %d %%", valueInt)
 			redisValue = valueInt
 		} else {
