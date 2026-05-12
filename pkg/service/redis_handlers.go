@@ -107,9 +107,19 @@ func (s *Service) SubscribeToRedisChannels() {
 					}
 
 				case KeyPowerManager:
-					if field == "state" {
+					switch field {
+					case "state":
 						if err := s.UpdatePowerManagementState(value); err != nil {
 							s.log.Errorf("Error sending power management state update triggered by Redis: %v", err)
+						}
+					case "wake-timer-seconds":
+						seconds, parseErr := strconv.ParseUint(value, 10, 32)
+						if parseErr != nil {
+							s.log.Warnf("Invalid wake-timer-seconds value %q: %v", value, parseErr)
+							break
+						}
+						if err := s.SetWakeTimer(uint32(seconds)); err != nil {
+							s.log.Errorf("Error programming nRF wake timer: %v", err)
 						}
 					}
 
@@ -634,5 +644,17 @@ func (s *Service) UpdatePowerManagementState(stateStr string) error {
 		}
 	}
 
+	return nil
+}
+
+// SetWakeTimer programs the nRF52 to wake the iMX6 after the given number of
+// seconds. Pass 0 to disarm any pending wake timer. The nRF52 will send back
+// an ACK over UART (handled in handlePowerManagementMessage), which flips the
+// power-manager:wake-timer-armed hash field that pm-service waits on.
+func (s *Service) SetWakeTimer(seconds uint32) error {
+	if err := writeUARTMessage32(s.usock, ble.TypePowerManagement, ble.TypePowerManagementWakeTimerSet, int32(seconds)); err != nil {
+		return fmt.Errorf("failed to send wake-timer-set: %w", err)
+	}
+	s.log.Infof("Sent wake-timer-set to nRF: %d seconds", seconds)
 	return nil
 }

@@ -625,6 +625,23 @@ func (s *Service) handlePowerManagementMessage(subType ble.SubType, value interf
 		} else {
 			s.log.Debugf("Forwarded reboot request to scooter:power")
 		}
+	case ble.TypePowerManagementWakeTimerSet:
+		// ACK from nRF echoing the seconds value we just programmed. A non-zero
+		// echo means the timer is now armed; zero means it was disarmed.
+		ackVal, ok := convertToInt(value)
+		if !ok {
+			s.log.Warnf("Could not decode wake-timer-set ACK value: %v", value)
+			break
+		}
+		armed := "false"
+		if ackVal > 0 {
+			armed = "true"
+		}
+		if err := s.ipc.Hash(KeyPowerManager).Set("wake-timer-armed", armed); err != nil {
+			s.log.Errorf("Failed to write wake-timer-armed to Redis: %v", err)
+		} else {
+			s.log.Debugf("Wake-timer ACK from nRF: %d seconds → wake-timer-armed=%s", ackVal, armed)
+		}
 	default:
 		s.log.Warnf("Unknown power management message relative subtype: %v", subType)
 	}

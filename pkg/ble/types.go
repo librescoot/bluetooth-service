@@ -89,6 +89,7 @@ const (
 	TypePowerManagementPowerRequest       SubType = 2 // BLE_SCOOTER_SERVICE_POWER_MANAGEMENT_POWER_REQUEST
 	TypePowerManagementHibernationRequest SubType = 3 // BLE_SCOOTER_SERVICE_POWER_MANAGEMENT_HIBERNATION_REQUEST
 	TypePowerManagementRebootRequest      SubType = 4 // BLE_SCOOTER_SERVICE_POWER_MANAGEMENT_REBOOT_REQUEST
+	TypePowerManagementWakeTimerSet       SubType = 5 // BLE_SCOOTER_SERVICE_POWER_MANAGEMENT_WAKE_TIMER_SET (uint32 seconds; 0 disarms)
 
 	// BLE debug sub-types
 	TypeBLEDebugResetAck SubType = 3 // BLE_SCOOTER_SERVICE_DEBUG_RESET_ACK

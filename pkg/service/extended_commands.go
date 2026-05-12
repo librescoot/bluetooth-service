@@ -49,6 +49,8 @@ func (s *Service) handleExtendedCommandMessage(msgType ble.MessageType, absSubTy
 		s.handleSettingsGet(strings.TrimPrefix(cmdStr, "get:"))
 	} else if strings.HasPrefix(cmdStr, "set:") {
 		s.handleSettingsSet(strings.TrimPrefix(cmdStr, "set:"))
+	} else if strings.HasPrefix(cmdStr, "pm:") {
+		s.handlePMCommand(strings.TrimPrefix(cmdStr, "pm:"))
 	} else {
 		s.log.Warnf("Unknown extended command prefix: %s", cmdStr)
 		s.sendExtendedResponse("error:unknown command")
@@ -328,6 +330,50 @@ func (s *Service) handleKeycardCommand(cmd string) {
 	}
 }
 
+// handlePMCommand processes power-management commands from the mobile app.
+//
+//	pm:hibernate-for <duration>  → arm a one-shot hibernation that wakes after the duration
+//	pm:hibernate-cancel          → cancel a pending wake timer and return the system to run
+//
+// Duration accepts Go time.ParseDuration syntax (e.g. "8h", "30m", "120s").
+func (s *Service) handlePMCommand(cmd string) {
+	s.log.Infof("Received pm command: %s", cmd)
+
+	if cmd == "hibernate-cancel" {
+		if err := ipc.SendRequest(s.ipc, "scooter:power", "hibernate-cancel"); err != nil {
+			s.log.Errorf("Failed to forward hibernate-cancel: %v", err)
+			s.sendExtendedResponse("pm:error:redis")
+			return
+		}
+		s.sendExtendedResponse("pm:ok")
+		return
+	}
+
+	if strings.HasPrefix(cmd, "hibernate-for ") {
+		arg := strings.TrimSpace(strings.TrimPrefix(cmd, "hibernate-for "))
+		dur, err := time.ParseDuration(arg)
+		if err != nil {
+			s.sendExtendedResponse("pm:error:invalid duration")
+			return
+		}
+		seconds := int64(dur.Seconds())
+		if seconds <= 0 {
+			s.sendExtendedResponse("pm:error:duration must be positive")
+			return
+		}
+		payload := fmt.Sprintf("hibernate-for:%d", seconds)
+		if err := ipc.SendRequest(s.ipc, "scooter:power", payload); err != nil {
+			s.log.Errorf("Failed to forward %s: %v", payload, err)
+			s.sendExtendedResponse("pm:error:redis")
+			return
+		}
+		s.sendExtendedResponse("pm:ok")
+		return
+	}
+
+	s.sendExtendedResponse("pm:error:unknown command")
+}
+
 // handleAlarmCommand processes alarm commands by forwarding them to the
 // scooter:alarm Redis queue for processing by the alarm service.
 func (s *Service) handleAlarmCommand(cmd string) {
@@ -532,6 +578,7 @@ var capabilityMap = map[string][]string{
 	"status":  {"maps-available", "navigation-available"},
 	"alarm":   {"enable", "disable", "arm", "disarm", "start", "start:<seconds>", "stop"},
 	"ltc":     {"enable", "disable", "force-enable", "force-disable", "status"},
+	"pm":      {"hibernate-for <duration>", "hibernate-cancel"},
 	"cap":     {"list", "<category>"},
 	"get":     {"<key>", "list", "list:<prefix>"},
 	"set":     {"<key>:<value>"},
