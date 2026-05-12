@@ -551,6 +551,9 @@ func (s *Service) UpdatePowerManagementState(stateStr string) error {
 	case "hibernating-timer":
 		stateInt = 2
 		s.log.Debugf(" hibernating-timer state detected, sending as hibernating (2) to nRF.")
+	case "hibernating-for":
+		stateInt = 2
+		s.log.Debugf(" hibernating-for state detected, sending as hibernating (2) to nRF.")
 	case "hibernating-l2":
 		stateInt = 2 // Send base state
 	case "suspending-imminent":
@@ -563,6 +566,9 @@ func (s *Service) UpdatePowerManagementState(stateStr string) error {
 	case "hibernating-timer-imminent":
 		stateInt = 4
 		s.log.Debugf(" hibernating-timer-imminent state detected, sending as hibernating-imminent (4) to nRF.")
+	case "hibernating-for-imminent":
+		stateInt = 4
+		s.log.Debugf(" hibernating-for-imminent state detected, sending as hibernating-imminent (4) to nRF.")
 	case "reboot":
 		stateInt = 5
 	case "reboot-imminent":
@@ -571,7 +577,7 @@ func (s *Service) UpdatePowerManagementState(stateStr string) error {
 	case "suspending-pending":
 		stateInt = 3
 		s.log.Debugf(" %s state detected, sending suspending-imminent to nRF for user feedback.", stateStr)
-	case "hibernating-pending", "hibernating-manual-pending", "hibernating-timer-pending":
+	case "hibernating-pending", "hibernating-manual-pending", "hibernating-timer-pending", "hibernating-for-pending":
 		stateInt = 4
 		s.log.Debugf(" %s state detected, sending hibernating-imminent to nRF for user feedback.", stateStr)
 	case "reboot-pending":
@@ -627,7 +633,7 @@ func (s *Service) UpdatePowerManagementState(stateStr string) error {
 	}
 
 	// Handle hibernation commands to nRF chip
-	if stateStr == "hibernating" || stateStr == "hibernating-manual" || stateStr == "hibernating-timer" {
+	if stateStr == "hibernating" || stateStr == "hibernating-manual" || stateStr == "hibernating-timer" || stateStr == "hibernating-for" {
 		// Disable data streaming before hibernation to prevent automatic wake-up
 		if err := writeUARTMessage(s.usock, ble.TypeDataStream, ble.TypeDataStreamEnable, 0); err != nil {
 			s.log.Warnf(" failed to disable data stream before hibernation: %v", err)
