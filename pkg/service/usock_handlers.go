@@ -481,6 +481,9 @@ func (s *Service) handleBLEDebugMessage(msgType ble.MessageType, absSubTypeKey u
 				} else {
 					s.log.Debugf("Sent Reset ACK to nRF")
 				}
+				// The firmware rebooted and lost its cached iMX->nRF state;
+				// re-push everything so BLE consumers don't see stale values.
+				s.resyncAfterNRFReset()
 			} else {
 				s.log.Warnf("Could not decode nRF Reset Info array values: %v", resetInfoArr)
 			}
