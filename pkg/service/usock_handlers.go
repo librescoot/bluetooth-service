@@ -573,6 +573,18 @@ func (s *Service) handlePowerManagementMessage(subType ble.SubType, value interf
 	case ble.TypePowerManagementState:
 		if stateAck, ok := convertToInt(value); ok {
 			s.log.Debugf("Received ACK for Power Management State update: %d", stateAck)
+			// The nRF acked the suspending state: it is silenced and its reply
+			// has fully drained onto our UART. Confirm to pm-service, which
+			// gates the actual suspend on this. Confirming at send time is not
+			// enough; the ACK itself would hit the armed ttymxc1 wakeup and
+			// pull the iMX6 straight back out of suspend-to-RAM.
+			if stateAck == 0 && s.ipc != nil {
+				if err := s.ipc.Hash(KeyPowerManager).Set("power-state-sent", "suspending"); err != nil {
+					s.log.Warnf("failed to confirm power-state-sent: %v", err)
+				} else {
+					s.log.Infof("nRF acked suspending state")
+				}
+			}
 		} else {
 			s.log.Warnf("Could not decode power management state ACK value: %v", value)
 		}
