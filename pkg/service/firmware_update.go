@@ -85,6 +85,12 @@ type FirmwareUpdater struct {
 	log     *logger.Logger
 	ipc     *ipc.Client
 	service *Service
+
+	// lastFlashedVersion is the zip version we last flashed. It guards against
+	// reflashing the same version forever when the baked firmware reports a
+	// version that never satisfies the filename version (dirty build / metadata
+	// mismatch). Reset once the nRF reports up to date.
+	lastFlashedVersion string
 }
 
 // NewFirmwareUpdater creates a new FirmwareUpdater instance
@@ -268,11 +274,22 @@ func (fu *FirmwareUpdater) CheckAndUpdate(currentVersionStr string) (bool, error
 
 	if !latestVersion.IsNewerThan(currentVersion) {
 		fu.log.Infof("Current firmware %s is up to date (latest: %s)", currentVersion, latestVersion)
+		fu.lastFlashedVersion = ""
 		fu.setStatus("idle")
 		return false, nil
 	}
 
+	// Convergence guard: if we already flashed this exact zip version and the
+	// nRF still reports something older, reflashing won't help — the filename
+	// version and the baked firmware version disagree. Stop instead of looping.
+	if fu.lastFlashedVersion == pair.Version {
+		fu.log.Errorf("nRF still reports %s after flashing %s; not reflashing (zip filename vs firmware version mismatch — remove or rename the zip)", currentVersion, latestVersion)
+		fu.setStatus("error")
+		return false, nil
+	}
+
 	fu.log.Infof("Newer firmware available: %s (current: %s)", latestVersion, currentVersion)
+	fu.lastFlashedVersion = pair.Version
 	if err := fu.PerformStagedUpdate(pair); err != nil {
 		return false, err
 	}
