@@ -53,6 +53,11 @@ type Service struct {
 	subWg     sync.WaitGroup
 	subMu     sync.Mutex
 
+	// nRF reset resync debounce: the firmware re-sends RESET_INFO until it is
+	// ACKed, so several can arrive before our ACK lands; resync only once.
+	resyncMu        sync.Mutex
+	lastResetResync time.Time
+
 	// Extended response rate limiting: the nRF SoftDevice's HVN TX queue
 	// is 1 deep, so back-to-back notifications get dropped. Pace consecutive
 	// extended responses to give the BLE link time to drain.
@@ -326,6 +331,36 @@ func (s *Service) StopSubscriptions() {
 func (s *Service) RestartSubscriptions() {
 	s.StopSubscriptions()
 	s.SubscribeToRedisChannels()
+}
+
+// resyncAfterNRFReset re-pushes all iMX->nRF state after the firmware rebooted
+// and lost its cache. The serial link is still up (only the nRF reset), so it
+// restarts the Redis subscriptions — StartWithSync re-emits every field — and
+// re-initializes streaming, rather than reopening USOCK. The dedup caches are
+// cleared first so the re-pushes aren't suppressed against values that were
+// sent to the pre-reset firmware. Debounced because the nRF re-sends
+// RESET_INFO until ACKed.
+func (s *Service) resyncAfterNRFReset() {
+	s.resyncMu.Lock()
+	if time.Since(s.lastResetResync) < 5*time.Second {
+		s.resyncMu.Unlock()
+		return
+	}
+	s.lastResetResync = time.Now()
+	s.resyncMu.Unlock()
+
+	s.log.Infof("nRF reset: resyncing state to firmware")
+
+	s.mu.Lock()
+	s.lastMileage = ""
+	s.lastVehicleState = ""
+	s.mu.Unlock()
+
+	s.RestartSubscriptions()
+
+	if err := s.InitializeNRF52(); err != nil {
+		s.log.Errorf("nRF reset resync: re-initialization failed: %v", err)
+	}
 }
 
 // setErrorAndSleep sets an error state in Redis and blocks forever to prevent restart loops
