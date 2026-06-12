@@ -75,6 +75,13 @@ type Service struct {
 	// recovers.
 	schemaMu    sync.RWMutex
 	schemaCache map[string]settingSchema
+
+	// Signaled by handleBLEVersionMessage whenever a BLE version frame
+	// arrives from the nRF. InitializeNRF52 drains this channel before
+	// sending the version request, then waits on it to confirm the
+	// handshake completed before returning. Buffered (size 1) so the
+	// version handler's send is non-blocking.
+	versionRxCh chan struct{}
 }
 
 // Fault codes for bluetooth service
@@ -87,10 +94,11 @@ const (
 // New creates a new Service instance
 func New(ipcClient *ipc.Client, log *logger.Logger) *Service {
 	return &Service{
-		ipc:    ipcClient,
-		log:    log,
-		stopCh: make(chan struct{}),
-		faults: ipcClient.NewFaultSet("ble:fault", "ble", "fault"),
+		ipc:         ipcClient,
+		log:         log,
+		stopCh:      make(chan struct{}),
+		faults:      ipcClient.NewFaultSet("ble:fault", "ble", "fault"),
+		versionRxCh: make(chan struct{}, 1),
 	}
 }
 

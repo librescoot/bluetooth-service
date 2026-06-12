@@ -380,6 +380,15 @@ func (s *Service) handleBLEVersionMessage(msgType ble.MessageType, absSubTypeKey
 		if versionStr, ok := convertToString(value); ok {
 			s.log.Infof("Detected firmware version: %s", versionStr)
 
+			// Signal InitializeNRF52's handshake wait; clear FaultNRFInit
+			// so a late-arriving version after a handshake-timeout self-heals
+			// the fault state.
+			select {
+			case s.versionRxCh <- struct{}{}:
+			default:
+			}
+			s.ClearFault(FaultNRFInit)
+
 			// Write version to Redis immediately (before compatibility check)
 			if err := s.ipc.Hash(KeyFirmwareVersion).Set("nrf-fw-version", versionStr); err != nil {
 				s.log.Errorf("Failed to update BLE version in Redis: %v", err)
