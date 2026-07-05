@@ -525,6 +525,17 @@ func (s *Service) handleStatusQuery(key string) {
 		}
 		s.sendExtendedResponse(fmt.Sprintf("status:navigation-available:%s", val))
 
+	case "version:mdb", "version:dbc":
+		// Installed firmware (OS image) version, published to the
+		// version:<component> hash by version-service on boot. DBC may be
+		// absent if it has never booted with this MDB.
+		component := strings.TrimPrefix(key, "version:")
+		version, err := s.ipc.HGet("version:"+component, "version_id")
+		if err != nil || version == "" {
+			version = "unknown"
+		}
+		s.sendExtendedResponse(fmt.Sprintf("status:version:%s:%s", component, version))
+
 	default:
 		s.sendExtendedResponse("status:error:unknown key")
 	}
@@ -575,7 +586,7 @@ var capabilityMap = map[string][]string{
 	"usb":     {"ums", "normal"},
 	"time":    {"set"},
 	"config":  {"apn", "hibernate-timer", "update-channel", "auto-standby-seconds"},
-	"status":  {"maps-available", "navigation-available"},
+	"status":  {"maps-available", "navigation-available", "version:mdb", "version:dbc"},
 	"alarm":   {"enable", "disable", "arm", "disarm", "start", "start:<seconds>", "stop"},
 	"ltc":     {"enable", "disable", "force-enable", "force-disable", "status"},
 	"pm":      {"hibernate-for <duration>", "hibernate-cancel"},

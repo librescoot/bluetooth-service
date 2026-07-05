@@ -126,7 +126,7 @@ Available command topics:
 | `usb` | `ums`, `normal` | `usb` hash |
 | `time` | `set <unix_timestamp>` | timedatectl |
 | `config` | `apn`, `hibernate-timer`, `update-channel`, `auto-standby-seconds` | `settings` hash |
-| `status` | `maps-available`, `navigation-available` | various hashes |
+| `status` | `maps-available`, `navigation-available`, `version:mdb`, `version:dbc` | various hashes |
 | `alarm` | `enable`, `disable`, `arm`, `disarm`, `start`, `stop` | `scooter:alarm` queue |
 | `cap` | `list`, `<topic>` | (local) |
 
