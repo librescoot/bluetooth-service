@@ -51,6 +51,15 @@ type Payload struct {
 	Size int    // Size of the payload
 }
 
+// Stats holds link-quality counters, cumulative since the port was opened.
+// Consumers compute deltas; used by the link manager to detect a peer talking
+// at a different baud rate (garbage storm).
+type Stats struct {
+	SyncDiscards    uint64 // bytes discarded while hunting for the sync sequence
+	HeaderCRCFails  uint64 // frames rejected on header CRC
+	PayloadCRCFails uint64 // frames rejected on payload CRC
+}
+
 // USOCK represents a UART socket connection to the nRF52
 type USOCK struct {
 	port         *serial.Port
@@ -64,6 +73,14 @@ type USOCK struct {
 	frame        Frame
 	buffer       []byte
 	mu           sync.Mutex
+
+	// frame IDs whose handler runs synchronously in the read loop instead of a
+	// fresh goroutine: per-frame goroutines do not preserve ordering, which the
+	// OTA bulk-data stream depends on (out-of-order offsets force rewinds)
+	syncFrameIDs map[byte]bool
+
+	statsMu sync.Mutex
+	stats   Stats
 }
 
 // CRC-16/ARC lookup table
@@ -244,6 +261,24 @@ func (u *USOCK) SetErrorHandler(handler func(error)) {
 	u.errorHandler = handler
 }
 
+// SetSyncFrameIDs marks frame IDs whose payload handler is invoked synchronously
+// from the read loop, preserving frame order. Must be called before traffic with
+// these frame IDs arrives (i.e. right after New).
+func (u *USOCK) SetSyncFrameIDs(ids ...byte) {
+	m := make(map[byte]bool, len(ids))
+	for _, id := range ids {
+		m[id] = true
+	}
+	u.syncFrameIDs = m
+}
+
+// GetStats returns a snapshot of the link-quality counters.
+func (u *USOCK) GetStats() Stats {
+	u.statsMu.Lock()
+	defer u.statsMu.Unlock()
+	return u.stats
+}
+
 // Close closes the USOCK connection. Idempotent — safe to call multiple times.
 func (u *USOCK) Close() error {
 	var err error
@@ -259,7 +294,9 @@ func (u *USOCK) Close() error {
 func (u *USOCK) readLoop() {
 	defer u.wg.Done()
 
-	buf := make([]byte, 1) // Read one byte at a time for more precise control
+	// bulk reads: at 1 Mbaud the link carries up to ~100 KB/s and per-byte reads
+	// burn CPU on syscalls; the byte-wise state machine is fed from the chunk
+	buf := make([]byte, 4096)
 	u.log.Debugf("Starting serial read loop")
 
 	for {
@@ -267,7 +304,6 @@ func (u *USOCK) readLoop() {
 		case <-u.stopChan:
 			return
 		default:
-			// Use blocking read with no timeout
 			n, err := u.port.Read(buf)
 			if err != nil {
 				select {
@@ -287,13 +323,9 @@ func (u *USOCK) readLoop() {
 				continue
 			}
 
-			if n == 0 {
-				continue
+			for i := 0; i < n; i++ {
+				u.processByte(buf[i])
 			}
-
-			// Process the received byte
-			b := buf[0]
-			u.processByte(b)
 		}
 	}
 }
@@ -307,6 +339,10 @@ func (u *USOCK) processByte(b byte) {
 			u.state = StateSync2
 			u.buffer = u.buffer[:0] // Clear buffer
 			u.buffer = append(u.buffer, b)
+		} else {
+			u.statsMu.Lock()
+			u.stats.SyncDiscards++
+			u.statsMu.Unlock()
 		}
 	case StateSync2:
 		if b == SyncByte2 {
@@ -347,6 +383,9 @@ func (u *USOCK) processByte(b byte) {
 		if calculatedCRC != u.frame.HeaderCRC {
 			u.log.Debugf("RX Error: Invalid header CRC: calculated=0x%04x, received=0x%04x",
 				calculatedCRC, u.frame.HeaderCRC)
+			u.statsMu.Lock()
+			u.stats.HeaderCRCFails++
+			u.statsMu.Unlock()
 			u.state = StateSync1
 			return
 		}
@@ -376,6 +415,9 @@ func (u *USOCK) processByte(b byte) {
 		if calculatedCRC != u.frame.PayloadCRC {
 			u.log.Debugf("RX Error: Invalid payload CRC: calculated=0x%04x, received=0x%04x",
 				calculatedCRC, u.frame.PayloadCRC)
+			u.statsMu.Lock()
+			u.stats.PayloadCRCFails++
+			u.statsMu.Unlock()
 			u.state = StateSync1
 			return
 		}
@@ -389,13 +431,20 @@ func (u *USOCK) processByte(b byte) {
 		payload := make([]byte, len(u.frame.Payload))
 		copy(payload, u.frame.Payload)
 
-		// Call the callback with the payload
+		// Call the callback with the payload. Frame IDs registered as synchronous
+		// (OTA bulk data) are handled inline to preserve ordering; everything else
+		// keeps the historical one-goroutine-per-frame behavior.
 		if u.handler != nil {
-			go u.handler(&Payload{
+			p := &Payload{
 				ID:   u.frame.ID,
 				Data: payload,
 				Size: len(payload),
-			})
+			}
+			if u.syncFrameIDs[u.frame.ID] {
+				u.handler(p)
+			} else {
+				go u.handler(p)
+			}
 		}
 
 		// Reset state machine
