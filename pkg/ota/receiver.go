@@ -520,7 +520,9 @@ func (r *Receiver) onInstallField(comp, field, value string) {
 		case "pending-reboot":
 			r.lastPhase = PhasePendingReboot
 			r.lastPercent = 100
-			r.send(EncodeInstallProgress(r.lastPhase, r.lastPercent, "lock scooter to reboot"))
+			// update-service reboots the MDB after 3 min of sustained stand-by
+			// (updater.go TriggerReboot); no user action needed beyond standby
+			r.send(EncodeInstallProgress(r.lastPhase, r.lastPercent, "reboots after 3 min in stand-by"))
 			// install is done: free the staged bundle and our inhibitor;
 			// update-service owns the reboot coordination from here
 			r.finishInstallLocked()
