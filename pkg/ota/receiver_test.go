@@ -321,3 +321,88 @@ func TestStatusReqIdle(t *testing.T) {
 		t.Fatalf("expected idle phase, got %x", p)
 	}
 }
+
+func TestDeltaBundleKeepsExtension(t *testing.T) {
+	r, fw, fi, dir := newTestReceiver(t)
+	data, sha := makeBundle(4_000)
+	id := "librescoot-unu-mdb-nightly-20260101T000000.delta"
+
+	r.HandleControl(startMsg(data, sha, 240, id))
+	sendAll(r, data, 240, 0)
+	r.HandleControl([]byte{OpComplete})
+
+	if cack := fw.lastOfOp(OpCompleteAck); cack == nil || cack[1] != CompleteOK {
+		t.Fatalf("expected COMPLETE_ACK ok, got %x", cack)
+	}
+
+	fi.mu.Lock()
+	defer fi.mu.Unlock()
+	if len(fi.calls) != 1 {
+		t.Fatalf("installer called %d times", len(fi.calls))
+	}
+	want := filepath.Join(dir, "mdb", id)
+	if fi.calls[0] != want {
+		t.Errorf("installer got %q, want %q (extension must survive staging)", fi.calls[0], want)
+	}
+}
+
+func TestTraversalBundleIDRejected(t *testing.T) {
+	r, fw, _, dir := newTestReceiver(t)
+	data, sha := makeBundle(100)
+
+	for _, id := range []string{"../evil", "a/b", ".hidden"} {
+		r.HandleControl(startMsg(data, sha, 240, id))
+		if ack := fw.lastOfOp(OpStartAck); ack == nil || ack[1] != StartBadParams {
+			t.Errorf("bundle id %q accepted: %x", id, ack)
+		}
+	}
+	if matches, _ := filepath.Glob(filepath.Join(dir, "*", "*")); len(matches) != 0 {
+		t.Errorf("staging dir not empty after rejected STARTs: %v", matches)
+	}
+}
+
+// installBundle drives a full transfer + install queueing for retention tests.
+func installBundle(t *testing.T, r *Receiver, fw *fakeWriter, id string) {
+	t.Helper()
+	data, sha := makeBundle(1_000)
+	r.HandleControl(startMsg(data, sha, 240, id))
+	sendAll(r, data, 240, 0)
+	r.HandleControl([]byte{OpComplete})
+	if cack := fw.lastOfOp(OpCompleteAck); cack == nil || cack[1] != CompleteOK {
+		t.Fatalf("expected COMPLETE_ACK ok, got %x", cack)
+	}
+}
+
+func TestFinishInstallRetention(t *testing.T) {
+	tests := []struct {
+		name      string
+		id        string
+		phase     byte
+		wantFinal bool // staged bundle survives finishInstallLocked
+	}{
+		{"mender success kept as delta base", "bundle-v1", PhasePendingReboot, true},
+		{"mender explicit success kept", "bundle-v2", PhaseSuccess, true},
+		{"mender failure discarded", "bundle-v3", PhaseFailure, false},
+		{"delta success discarded", "librescoot-unu-mdb-nightly-20260101T000000.delta", PhasePendingReboot, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r, fw, _, _ := newTestReceiver(t)
+			installBundle(t, r, fw, tc.id)
+
+			r.mu.Lock()
+			finalPath := r.staging.FinalPath(ComponentMDB, tc.id)
+			sidecar := r.staging.sidecarPath(ComponentMDB, tc.id)
+			r.lastPhase = tc.phase
+			r.finishInstallLocked()
+			r.mu.Unlock()
+
+			if _, err := os.Stat(finalPath); (err == nil) != tc.wantFinal {
+				t.Errorf("final bundle exists=%v, want %v (err=%v)", err == nil, tc.wantFinal, err)
+			}
+			if _, err := os.Stat(sidecar); !os.IsNotExist(err) {
+				t.Error("sidecar survived finishInstallLocked")
+			}
+		})
+	}
+}

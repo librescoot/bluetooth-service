@@ -11,8 +11,12 @@ import (
 )
 
 // DefaultStagingDir is where partial and completed bundles are staged. It lives
-// on the persistent /data partition so transfers survive reboots.
-const DefaultStagingDir = "/data/ota/ble"
+// on the persistent /data partition so transfers survive reboots. The
+// per-component subdirectories (/data/ota/mdb, /data/ota/dbc) are
+// update-service's own download directories — staging there means a completed
+// full image is found by update-service's base lookup for later delta updates,
+// and keeps the files inside the dirs ums-service's orphan sweep leaves alone.
+const DefaultStagingDir = "/data/ota"
 
 // freeSpaceMargin is kept free on top of the bundle size so the staging never
 // starves update-service's own /data usage.
@@ -32,8 +36,10 @@ type Sidecar struct {
 	CreatedAt string `json:"created_at"`
 }
 
-// Staging manages the on-disk layout: <dir>/<component>/<bundleID>.mender.part
-// plus <bundleID>.json sidecars.
+// Staging manages the on-disk layout: <dir>/<component>/<stagedName>.part plus
+// <bundleID>.json sidecars, where stagedName is the bundle ID with ".mender"
+// appended unless the ID already names a delta or full artifact (see
+// stagedName).
 type Staging struct {
 	dir string
 }
@@ -53,14 +59,26 @@ func (st *Staging) componentDir(component byte) string {
 	return filepath.Join(st.dir, componentName(component))
 }
 
+// stagedName returns the on-disk name of a completed bundle. IDs that already
+// carry a known artifact extension are used verbatim — the phone sends the
+// full asset filename for deltas so update-service can dispatch on the
+// extension — while everything else is a full image and gets ".mender"
+// appended (the phone historically sends the filename stem for those).
+func stagedName(bundleID string) string {
+	if strings.HasSuffix(bundleID, ".delta") || strings.HasSuffix(bundleID, ".mender") {
+		return bundleID
+	}
+	return bundleID + ".mender"
+}
+
 // PartPath returns the path of the partial bundle file.
 func (st *Staging) PartPath(component byte, bundleID string) string {
-	return filepath.Join(st.componentDir(component), bundleID+".mender.part")
+	return filepath.Join(st.componentDir(component), stagedName(bundleID)+".part")
 }
 
 // FinalPath returns the path the completed bundle is renamed to.
 func (st *Staging) FinalPath(component byte, bundleID string) string {
-	return filepath.Join(st.componentDir(component), bundleID+".mender")
+	return filepath.Join(st.componentDir(component), stagedName(bundleID))
 }
 
 func (st *Staging) sidecarPath(component byte, bundleID string) string {
@@ -120,6 +138,15 @@ func (st *Staging) Discard(component byte, bundleID string) {
 	os.Remove(st.sidecarPath(component, bundleID))
 }
 
+// Forget removes the transfer bookkeeping (partial file and sidecar) but keeps
+// the completed bundle. Used after a successful MDB full-image install: the
+// .mender stays in update-service's download dir as the base for future delta
+// updates, and update-service's own retention policy owns it from here.
+func (st *Staging) Forget(component byte, bundleID string) {
+	os.Remove(st.PartPath(component, bundleID))
+	os.Remove(st.sidecarPath(component, bundleID))
+}
+
 // PartSize returns the current size of the partial file (0 when absent).
 func (st *Staging) PartSize(component byte, bundleID string) uint32 {
 	info, err := os.Stat(st.PartPath(component, bundleID))
@@ -148,7 +175,9 @@ func (st *Staging) HasSpace(need uint64) bool {
 }
 
 // CleanupStale removes partial transfers that have not been touched for a week
-// and orphaned sidecars. Returns the number of files removed.
+// and orphaned sidecars. Returns the number of files removed. Only .part files
+// and their sidecars are touched: completed .mender files in these directories
+// are owned by update-service (delta base retention), never by us.
 func (st *Staging) CleanupStale() int {
 	removed := 0
 	for _, comp := range []string{"mdb", "dbc"} {
@@ -158,16 +187,19 @@ func (st *Staging) CleanupStale() int {
 			continue
 		}
 		for _, e := range entries {
-			if !strings.HasSuffix(e.Name(), ".mender.part") {
+			if !strings.HasSuffix(e.Name(), ".mender.part") && !strings.HasSuffix(e.Name(), ".delta.part") {
 				continue
 			}
 			info, err := e.Info()
 			if err != nil || time.Since(info.ModTime()) < staleAge {
 				continue
 			}
-			bundleID := strings.TrimSuffix(e.Name(), ".mender.part")
+			// invert stagedName: "id.mender.part" -> "id", "id.delta.part" -> "id.delta".
+			// A bundle ID may also end in ".mender" verbatim, so try both sidecars.
+			name := strings.TrimSuffix(e.Name(), ".part")
 			os.Remove(filepath.Join(dir, e.Name()))
-			os.Remove(filepath.Join(dir, bundleID+".json"))
+			os.Remove(filepath.Join(dir, strings.TrimSuffix(name, ".mender")+".json"))
+			os.Remove(filepath.Join(dir, name+".json"))
 			removed++
 		}
 	}

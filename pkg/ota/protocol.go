@@ -124,7 +124,30 @@ func DecodeStart(p []byte) (Start, error) {
 		return s, fmt.Errorf("START truncated: id_len=%d but %d bytes left", idLen, len(p)-42)
 	}
 	s.BundleID = string(p[42 : 42+idLen])
+	if !validBundleID(s.BundleID) {
+		return s, fmt.Errorf("invalid bundle id %q", s.BundleID)
+	}
 	return s, nil
+}
+
+// validBundleID restricts bundle IDs to a filename-safe charset: the ID is
+// joined verbatim into staging paths, so path separators and a leading dot
+// (".", "..", hidden files) must never get through. The same rule is enforced
+// by the app before sending. First char alphanumeric, rest [A-Za-z0-9._-].
+func validBundleID(id string) bool {
+	if len(id) == 0 || len(id) > 64 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case i > 0 && (c == '.' || c == '_' || c == '-'):
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // EncodeStart builds a START payload (used by tests and bench tooling).

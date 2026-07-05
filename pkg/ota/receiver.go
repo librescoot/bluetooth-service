@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -554,9 +555,18 @@ func (r *Receiver) watcherFetch(field string) (string, bool) {
 func (r *Receiver) finishInstallLocked() {
 	phase, pct := r.lastPhase, r.lastPercent
 
-	// delete the staged bundle: on success/pending-reboot it has been consumed
-	// by mender-update, on failure a retry needs a fresh transfer anyway
-	r.staging.Discard(r.installComp, r.installBundleID)
+	// A successfully installed MDB full image stays in place: it now lives in
+	// update-service's download dir and is the base for future delta updates
+	// (update-service's retention keeps the newest). Everything else is
+	// discarded: failures need a fresh transfer, DBC bundles have been copied
+	// to the DBC by the handoff, and .delta files are consumed by
+	// update-service during apply.
+	installed := phase == PhasePendingReboot || phase == PhaseSuccess
+	if installed && r.installComp == ComponentMDB && !strings.HasSuffix(r.installBundleID, ".delta") {
+		r.staging.Forget(r.installComp, r.installBundleID)
+	} else {
+		r.staging.Discard(r.installComp, r.installBundleID)
+	}
 	r.installBundleID = ""
 
 	r.stopInstallWatcherLocked()

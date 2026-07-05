@@ -90,6 +90,47 @@ func TestDecodeStartErrors(t *testing.T) {
 	}
 }
 
+func TestBundleIDValidation(t *testing.T) {
+	valid := []string{
+		"x",
+		"bundle-v1",
+		"librescoot-unu-mdb-nightly-20260701T000000",
+		"librescoot-unu-mdb-nightly-20260701T000000.delta",
+		"librescoot-unu-dbc-v1.2.3.mender",
+		"A_b-c.d",
+	}
+	invalid := []string{
+		"",
+		".hidden",
+		"..",
+		"../escape",
+		"a/b",
+		"/abs",
+		"-leading-dash",
+		"_leading_underscore",
+		"space here",
+		"null\x00byte",
+		string(bytes.Repeat([]byte{'a'}, 65)),
+	}
+	for _, id := range valid {
+		if !validBundleID(id) {
+			t.Errorf("validBundleID(%q) = false, want true", id)
+		}
+	}
+	for _, id := range invalid {
+		if validBundleID(id) {
+			t.Errorf("validBundleID(%q) = true, want false", id)
+		}
+	}
+
+	// DecodeStart enforces it end to end
+	var sha [32]byte
+	p := EncodeStart(Start{Version: 1, ChunkSize: 240, TotalSize: 10, SHA256: sha, BundleID: "a/../../etc"})
+	if _, err := DecodeStart(p); err == nil {
+		t.Error("traversal bundle id accepted")
+	}
+}
+
 func TestDecodeData(t *testing.T) {
 	off, data, err := DecodeData(EncodeData(1024, []byte{1, 2, 3}))
 	if err != nil || off != 1024 || !bytes.Equal(data, []byte{1, 2, 3}) {
