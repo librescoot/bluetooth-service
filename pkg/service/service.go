@@ -7,6 +7,7 @@ import (
 
 	ipc "github.com/librescoot/redis-ipc"
 
+	"github.com/librescoot/bluetooth-service/pkg/ble"
 	"github.com/librescoot/bluetooth-service/pkg/logger"
 	"github.com/librescoot/bluetooth-service/pkg/usock"
 )
@@ -75,6 +76,19 @@ type Service struct {
 	// recovers.
 	schemaMu    sync.RWMutex
 	schemaCache map[string]settingSchema
+
+	// UART link manager: baud negotiation with the nRF and automatic fallback
+	link *LinkManager
+
+	// OTA receiver: phone -> scooter firmware transfer over the OTA tunnel
+	ota otaReceiver
+}
+
+// otaReceiver is the subset of *ota.Receiver used by the USOCK dispatch
+// (interface so the service compiles without a receiver wired, e.g. in tests)
+type otaReceiver interface {
+	HandleData(payload []byte)
+	HandleControl(payload []byte)
 }
 
 // Fault codes for bluetooth service
@@ -86,12 +100,79 @@ const (
 
 // New creates a new Service instance
 func New(ipcClient *ipc.Client, log *logger.Logger) *Service {
-	return &Service{
+	s := &Service{
 		ipc:    ipcClient,
 		log:    log,
 		stopCh: make(chan struct{}),
 		faults: ipcClient.NewFaultSet("ble:fault", "ble", "fault"),
 	}
+	s.link = newLinkManager(s)
+	return s
+}
+
+// SetOTAReceiver wires the OTA transfer receiver into the USOCK dispatch.
+func (s *Service) SetOTAReceiver(r otaReceiver) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ota = r
+}
+
+// Link returns the UART link manager.
+func (s *Service) Link() *LinkManager {
+	return s.link
+}
+
+// EnsureLinkBaud brings the UART link to the requested baud rate (used before
+// nRF DFU, which only talks 115200).
+func (s *Service) EnsureLinkBaud(baud int) error {
+	return s.link.EnsureLinkBaud(baud)
+}
+
+// getUSockConcrete returns the underlying *usock.USOCK, or nil when the
+// connection is absent or replaced by a test double.
+func (s *Service) getUSockConcrete() *usock.USOCK {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if sock, ok := s.usock.(*usock.USOCK); ok {
+		return sock
+	}
+	return nil
+}
+
+// reopenUSockAtBaud closes the current serial connection and reopens it at the
+// given baud rate, re-applying handlers. Unlike ReconnectUSock this does NOT
+// run the nRF init sequence — it is the link manager's low-level primitive.
+func (s *Service) reopenUSockAtBaud(baud int) error {
+	s.mu.Lock()
+	if s.serialDevice == "" || s.usockHandler == nil {
+		s.mu.Unlock()
+		return fmt.Errorf("serial config not set")
+	}
+	device := s.serialDevice
+	handler := s.usockHandler
+	errHandler := s.usockErrHandler
+	old := s.usock
+	s.mu.Unlock()
+
+	if old != nil {
+		if err := old.Close(); err != nil {
+			s.log.Warnf("reopenUSockAtBaud: close failed: %v", err)
+		}
+	}
+
+	sock, err := usock.New(device, baud, handler, s.log)
+	if err != nil {
+		return fmt.Errorf("failed to reopen serial port at %d baud: %w", baud, err)
+	}
+	if errHandler != nil {
+		sock.SetErrorHandler(errHandler)
+	}
+	sock.SetSyncFrameIDs(ble.FrameOTAData, ble.FrameOTACtrl)
+
+	s.mu.Lock()
+	s.usock = sock
+	s.mu.Unlock()
+	return nil
 }
 
 // SetUSock sets the USOCK connection for the service
@@ -183,14 +264,20 @@ func (s *Service) ReconnectUSock() error {
 	if errHandler != nil {
 		sock.SetErrorHandler(errHandler)
 	}
+	sock.SetSyncFrameIDs(ble.FrameOTAData, ble.FrameOTACtrl)
 
 	s.mu.Lock()
 	s.usock = sock
 	s.mu.Unlock()
 
+	// the port was reopened at the boot baud rate; reflect that before init
+	s.link.resetToDefault()
+
 	if err := s.InitializeNRF52(); err != nil {
 		return fmt.Errorf("failed to re-initialize nRF52: %w", err)
 	}
+
+	s.link.StartNegotiation()
 
 	return nil
 }
@@ -292,9 +379,12 @@ func (s *Service) startNormally() error {
 	if errHandler != nil {
 		sock.SetErrorHandler(errHandler)
 	}
+	sock.SetSyncFrameIDs(ble.FrameOTAData, ble.FrameOTACtrl)
 	s.SetUSock(sock)
 	s.ClearFault(FaultSerialPort)
 	s.log.Infof("Connected to nRF52 via USOCK")
+
+	s.link.resetToDefault()
 
 	s.SubscribeToRedisChannels()
 
@@ -306,6 +396,8 @@ func (s *Service) startNormally() error {
 		s.ClearFault(FaultNRFInit)
 		s.log.Infof("nRF52 initialization sequence sent successfully.")
 	}
+
+	s.link.StartNegotiation()
 
 	return nil
 }
@@ -361,6 +453,10 @@ func (s *Service) resyncAfterNRFReset() {
 	if err := s.InitializeNRF52(); err != nil {
 		s.log.Errorf("nRF reset resync: re-initialization failed: %v", err)
 	}
+
+	// a reset nRF is back at the boot baud rate with fresh capabilities;
+	// renegotiate (no-op for legacy firmware)
+	s.link.StartNegotiation()
 }
 
 // setErrorAndSleep sets an error state in Redis and blocks forever to prevent restart loops

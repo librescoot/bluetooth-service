@@ -11,6 +11,7 @@ import (
 	ipc "github.com/librescoot/redis-ipc"
 
 	"github.com/librescoot/bluetooth-service/pkg/logger"
+	"github.com/librescoot/bluetooth-service/pkg/ota"
 	"github.com/librescoot/bluetooth-service/pkg/service"
 	"github.com/librescoot/bluetooth-service/pkg/usock"
 )
@@ -28,6 +29,7 @@ var (
 	showVersion  = flag.Bool("version", false, "Print version and exit")
 	firmwareDir  = flag.String("firmware-dir", service.DefaultFirmwareDir, "Directory containing firmware files")
 	autoUpdate   = flag.Bool("auto-update", true, "Automatically update firmware on startup if newer version available")
+	otaStaging   = flag.String("ota-staging-dir", ota.DefaultStagingDir, "Staging directory for BLE OTA bundle transfers")
 )
 
 // Redis keys
@@ -107,6 +109,19 @@ func main() {
 	svc.SetFirmwareUpdater(fwUpdater)
 
 	log.Infof("Firmware update: auto-update=%v, firmware-dir=%s", *autoUpdate, *firmwareDir)
+
+	// BLE OTA receiver: accepts update bundles pushed by the phone through the
+	// nRF's OTA tunnel, stages them and hands them to update-service.
+	otaReceiver := ota.New(log, ipcClient, func() ota.FrameWriter {
+		if w := svc.GetUSock(); w != nil {
+			return w
+		}
+		return nil
+	}, *otaStaging, map[byte]ota.Installer{
+		ota.ComponentMDB: &ota.MenderInstaller{IPC: ipcClient},
+		ota.ComponentDBC: &ota.DBCInstaller{IPC: ipcClient, Log: log},
+	})
+	svc.SetOTAReceiver(otaReceiver)
 
 	// Probe for DFU mode -> either recover (if nRF is stuck in DFU with no
 	// working app) or open USOCK and run the normal init sequence. Bootstrap

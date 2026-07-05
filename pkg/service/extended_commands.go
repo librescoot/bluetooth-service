@@ -579,6 +579,7 @@ var capabilityMap = map[string][]string{
 	"alarm":   {"enable", "disable", "arm", "disarm", "start", "start:<seconds>", "stop"},
 	"ltc":     {"enable", "disable", "force-enable", "force-disable", "status"},
 	"pm":      {"hibernate-for <duration>", "hibernate-cancel"},
+	"ota":     {"transfer"}, // BLE OTA bundle transfer via the 0x0500 GATT service
 	"cap":     {"list", "<category>"},
 	"get":     {"<key>", "list", "list:<prefix>"},
 	"set":     {"<key>:<value>"},

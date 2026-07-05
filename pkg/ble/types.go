@@ -25,6 +25,22 @@ const (
 	TypeLTCControl                    MessageType = 0x0120     // BLE_SCOOTER_SERVICE_LTC_CONTROL
 	TypeAccelerometer                 MessageType = 0x0200     // BLE_SCOOTER_SERVICE_ACCELEROMETER
 	TypeExtended                      MessageType = 0x0400     // BLE_SCOOTER_SERVICE_EXTENDED
+	TypeOTA                           MessageType = 0x0500     // BLE_SCOOTER_SERVICE_OTA (GATT service block; USOCK side uses raw frames)
+	TypeLink                          MessageType = 0xA0A0     // BLE_SCOOTER_SERVICE_LINK (UART link management, USOCK only)
+)
+
+// Raw (non-CBOR) USOCK frame IDs used by the OTA transfer tunnel. Payloads are
+// byte-identical copies of the OTA GATT characteristic values; see pkg/ota.
+const (
+	FrameOTAData   byte = 0xB0 // nRF -> iMX: [u32 LE offset][chunk]
+	FrameOTACtrl   byte = 0xB1 // nRF -> iMX: control message (opcode-prefixed)
+	FrameOTAStatus byte = 0xB2 // iMX -> nRF: status/ACK message, notified to the phone
+)
+
+// Link capability bits reported via TypeLinkCaps.
+const (
+	LinkCapBaud1M    = 0x01 // firmware supports 1 Mbaud operation
+	LinkCapOTATunnel = 0x02 // firmware forwards the OTA tunnel frames
 )
 
 // SubType represents the sub-type of a message
@@ -140,6 +156,12 @@ const (
 	// Scooter info sub-types (additional)
 	TypeNavigationActive SubType = 4 // BLE_SCOOTER_SERVICE_NAVIGATION_ACTIVE
 	TypeUMSStatus        SubType = 5 // BLE_SCOOTER_SERVICE_UMS_STATUS
+
+	// UART link management sub-types (relative to TypeLink 0xA0A0)
+	TypeLinkCaps    SubType = 1 // BLE_SCOOTER_SERVICE_LINK_CAPS: uint32 capability bitmask
+	TypeLinkBaudSet SubType = 2 // BLE_SCOOTER_SERVICE_LINK_BAUD_SET: uint32 literal baud rate
+	TypeLinkPing    SubType = 3 // BLE_SCOOTER_SERVICE_LINK_PING: uint32 nonce, echoed
+	TypeLinkStats   SubType = 4 // BLE_SCOOTER_SERVICE_LINK_STATS: int array [crc, uart, overrun, txdrop]
 )
 
 // BLECommand represents BLE control commands

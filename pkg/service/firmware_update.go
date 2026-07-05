@@ -363,6 +363,13 @@ func (fu *FirmwareUpdater) runStagedUpdate(pair *ZipPair, initialStatus string) 
 	fu.log.Infof("Target: bootloader_version=%d application_version=%d",
 		blTarget.FwVersion, appTarget.FwVersion)
 
+	// The DFU bootloader and nrfupdate.py only talk 115200: downshift a
+	// negotiated 1 Mbaud link first (waits out the nRF's idle revert if the
+	// cooperative downshift fails).
+	if err := fu.service.EnsureLinkBaud(115200); err != nil {
+		fu.log.Warnf("Failed to downshift link baud before DFU (continuing anyway): %v", err)
+	}
+
 	// Tell the nRF to stop its autonomous data stream before we hand the
 	// serial line to nrfupdate.py. Otherwise the data stream frames arrive
 	// faster than the 1s read timeout in nrfupdate.py's serial_request(),
@@ -550,6 +557,11 @@ func (fu *FirmwareUpdater) legacyPerformUpdate(firmwarePath string) error {
 
 	fu.addDFUInhibit(fmt.Sprintf("flashing nRF52 firmware from %s", filepath.Base(firmwarePath)))
 	defer fu.removeDFUInhibit()
+
+	// DFU bootloader talks 115200 only; downshift a negotiated 1 Mbaud link
+	if err := fu.service.EnsureLinkBaud(115200); err != nil {
+		fu.log.Warnf("Failed to downshift link baud before DFU (continuing anyway): %v", err)
+	}
 
 	fu.log.Infof("Stopping nRF data stream...")
 	if err := writeUARTMessage(fu.service.GetUSock(), ble.TypeDataStream, ble.TypeDataStreamEnable, 0); err != nil {
