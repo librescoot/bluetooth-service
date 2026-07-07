@@ -189,11 +189,16 @@ func (lm *LinkManager) negotiate() {
 		lm.svc.log.Infof("Link: negotiated %d baud", linkBaudFast)
 		lm.publishStatus()
 		lm.startKeepalive()
+		// upshift reopened the port; concurrent state writes may have been
+		// lost mid-switch — re-push everything now that the link is stable
+		lm.svc.resyncStateToNRF("baud upshift")
 		return
 	}
 
 	lm.svc.log.Warnf("Link: staying at %d baud after failed negotiation", linkBaudDefault)
 	lm.publishStatus()
+	// the failed upshift also reopened the port (possibly twice)
+	lm.svc.resyncStateToNRF("failed baud negotiation")
 }
 
 // probeCaps sends LINK_CAPS requests and waits for a response; a timeout after

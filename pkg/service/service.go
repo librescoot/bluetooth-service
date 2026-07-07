@@ -54,6 +54,11 @@ type Service struct {
 	subWg     sync.WaitGroup
 	subMu     sync.Mutex
 
+	// Serializes RestartSubscriptions: concurrent restarts (nRF reset resync
+	// vs post-negotiation resync) would leak the first caller's watcher set,
+	// leaving two subscriptions forwarding every event.
+	restartMu sync.Mutex
+
 	// nRF reset resync debounce: the firmware re-sends RESET_INFO until it is
 	// ACKed, so several can arrive before our ACK lands; resync only once.
 	resyncMu        sync.Mutex
@@ -421,8 +426,30 @@ func (s *Service) StopSubscriptions() {
 
 // RestartSubscriptions stops existing subscriptions and starts new ones
 func (s *Service) RestartSubscriptions() {
+	s.restartMu.Lock()
+	defer s.restartMu.Unlock()
 	s.StopSubscriptions()
 	s.SubscribeToRedisChannels()
+}
+
+// resyncStateToNRF re-pushes all iMX->nRF state after a baud negotiation.
+// The Redis subscriptions run concurrently with the link negotiation, and a
+// frame written while the port is being reopened for a baud change is
+// silently lost — either written at the old rate to an nRF that has already
+// switched, or into the closing fd. A state field that never changes again
+// (vehicle "stand-by" after the post-hibernation boot) then stays stale on
+// the BLE side indefinitely, so every negotiation that reopened the port is
+// followed by a full re-push: clear the dedup caches and restart the
+// subscriptions — StartWithSync re-emits every field.
+func (s *Service) resyncStateToNRF(reason string) {
+	s.log.Infof("Re-pushing state to nRF after %s", reason)
+
+	s.mu.Lock()
+	s.lastMileage = ""
+	s.lastVehicleState = ""
+	s.mu.Unlock()
+
+	s.RestartSubscriptions()
 }
 
 // resyncAfterNRFReset re-pushes all iMX->nRF state after the firmware rebooted
