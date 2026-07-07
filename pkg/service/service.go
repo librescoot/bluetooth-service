@@ -262,6 +262,13 @@ func (s *Service) ReconnectUSock() error {
 	s.lastVehicleState = ""
 	s.mu.Unlock()
 
+	// return port ownership to the link manager: the updater reaches this
+	// point on every exit path (success and attemptReconnect). Resume before
+	// the reopen attempt so a failed reopen can't leave the manager suspended
+	// forever; nothing acts on the port until StartNegotiation below.
+	s.link.resetToDefault()
+	s.link.Resume()
+
 	sock, err := usock.New(device, baud, handler, s.log)
 	if err != nil {
 		return fmt.Errorf("failed to reconnect to nRF52: %w", err)
@@ -274,9 +281,6 @@ func (s *Service) ReconnectUSock() error {
 	s.mu.Lock()
 	s.usock = sock
 	s.mu.Unlock()
-
-	// the port was reopened at the boot baud rate; reflect that before init
-	s.link.resetToDefault()
 
 	if err := s.InitializeNRF52(); err != nil {
 		return fmt.Errorf("failed to re-initialize nRF52: %w", err)

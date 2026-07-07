@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	ipc "github.com/librescoot/redis-ipc"
@@ -91,6 +92,12 @@ type FirmwareUpdater struct {
 	// version that never satisfies the filename version (dirty build / metadata
 	// mismatch). Reset once the nRF reports up to date.
 	lastFlashedVersion string
+
+	// inProgress makes CheckAndUpdate single-flight: every VERSION response
+	// spawns a check (boot, reconnects, link fallbacks), and re-inits DURING an
+	// update produce version responses too — a concurrent second update would
+	// fight over the serial port.
+	inProgress atomic.Bool
 }
 
 // NewFirmwareUpdater creates a new FirmwareUpdater instance
@@ -247,6 +254,12 @@ func (fu *FirmwareUpdater) findFirmwarePath(version *FirmwareVersion) (string, e
 // don't match. It's called from the USOCK version-string handler after each
 // reconnect.
 func (fu *FirmwareUpdater) CheckAndUpdate(currentVersionStr string) (bool, error) {
+	if !fu.inProgress.CompareAndSwap(false, true) {
+		fu.log.Infof("Firmware update check skipped: another update is in progress")
+		return false, nil
+	}
+	defer fu.inProgress.Store(false)
+
 	fu.setStatus("checking")
 
 	currentVersion, err := ParseFirmwareVersion(currentVersionStr)
@@ -363,9 +376,14 @@ func (fu *FirmwareUpdater) runStagedUpdate(pair *ZipPair, initialStatus string) 
 	fu.log.Infof("Target: bootloader_version=%d application_version=%d",
 		blTarget.FwVersion, appTarget.FwVersion)
 
-	// The DFU bootloader and nrfupdate.py only talk 115200: downshift a
-	// negotiated 1 Mbaud link first (waits out the nRF's idle revert if the
-	// cooperative downshift fails).
+	// Take exclusive ownership of the serial line: block the link manager's
+	// negotiations/keepalive (it would otherwise reopen the port mid-flash and
+	// steal DFU traffic) and wait out any in-flight negotiation, THEN settle
+	// the wire at 115200 — the DFU bootloader and nrfupdate.py only talk
+	// 115200. Ownership is returned via ReconnectUSock (Resume) on every exit
+	// path of the update.
+	fu.log.Infof("Suspending UART link management for DFU...")
+	fu.service.Link().Suspend()
 	if err := fu.service.EnsureLinkBaud(115200); err != nil {
 		fu.log.Warnf("Failed to downshift link baud before DFU (continuing anyway): %v", err)
 	}
@@ -558,7 +576,10 @@ func (fu *FirmwareUpdater) legacyPerformUpdate(firmwarePath string) error {
 	fu.addDFUInhibit(fmt.Sprintf("flashing nRF52 firmware from %s", filepath.Base(firmwarePath)))
 	defer fu.removeDFUInhibit()
 
-	// DFU bootloader talks 115200 only; downshift a negotiated 1 Mbaud link
+	// take exclusive port ownership from the link manager, then settle the
+	// wire at 115200 (DFU bootloader talks 115200 only); ownership is returned
+	// via ReconnectUSock (Resume) on every exit path
+	fu.service.Link().Suspend()
 	if err := fu.service.EnsureLinkBaud(115200); err != nil {
 		fu.log.Warnf("Failed to downshift link baud before DFU (continuing anyway): %v", err)
 	}

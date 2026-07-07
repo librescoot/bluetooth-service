@@ -56,7 +56,8 @@ type LinkManager struct {
 	mu          sync.Mutex
 	currentBaud int
 	caps        int
-	negotiating bool
+	opBusy      bool // a negotiation or fallback is running (owns the port)
+	suspended   bool // firmware updater owns the port; refuse all operations
 	keepStop    chan struct{}
 
 	capsCh chan int
@@ -83,6 +84,56 @@ func (lm *LinkManager) resetToDefault() {
 	lm.stopKeepalive()
 	lm.mu.Lock()
 	lm.currentBaud = linkBaudDefault
+	lm.mu.Unlock()
+}
+
+// beginOp claims the link for a negotiation or fallback. Returns false when the
+// link manager is suspended (firmware update in progress) or another operation
+// is already running.
+func (lm *LinkManager) beginOp() bool {
+	lm.mu.Lock()
+	defer lm.mu.Unlock()
+	if lm.suspended || lm.opBusy {
+		return false
+	}
+	lm.opBusy = true
+	return true
+}
+
+func (lm *LinkManager) endOp() {
+	lm.mu.Lock()
+	lm.opBusy = false
+	lm.mu.Unlock()
+}
+
+// Suspend hands exclusive port ownership to the caller (the nRF firmware
+// updater): stops the keepalive, blocks new negotiations/fallbacks, and waits
+// for an in-flight operation to finish. After Suspend returns, the link manager
+// will not touch the serial port until Resume. Callers should follow up with
+// EnsureLinkBaud(115200) to settle the wire before handing it to nrfutil.
+func (lm *LinkManager) Suspend() {
+	lm.mu.Lock()
+	lm.suspended = true
+	lm.mu.Unlock()
+
+	lm.stopKeepalive()
+
+	for {
+		lm.mu.Lock()
+		busy := lm.opBusy
+		lm.mu.Unlock()
+		if !busy {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// Resume lifts a Suspend. It does not start a negotiation by itself — the
+// updater's ReconnectUSock path does that after the port is re-established.
+func (lm *LinkManager) Resume() {
+	lm.mu.Lock()
+	lm.suspended = false
 	lm.mu.Unlock()
 }
 
@@ -140,18 +191,10 @@ func (lm *LinkManager) StartNegotiation() {
 }
 
 func (lm *LinkManager) negotiate() {
-	lm.mu.Lock()
-	if lm.negotiating {
-		lm.mu.Unlock()
+	if !lm.beginOp() {
 		return
 	}
-	lm.negotiating = true
-	lm.mu.Unlock()
-	defer func() {
-		lm.mu.Lock()
-		lm.negotiating = false
-		lm.mu.Unlock()
-	}()
+	defer lm.endOp()
 
 	lm.mu.Lock()
 	alreadyFast := lm.currentBaud != linkBaudDefault
@@ -437,10 +480,18 @@ func (lm *LinkManager) keepaliveLoop(stop chan struct{}) {
 }
 
 // fallback reopens at the boot baud rate, re-initializes the nRF (it most
-// likely rebooted) and renegotiates.
+// likely rebooted) and renegotiates. Refused while suspended: during a firmware
+// update the "dead" link is expected (nrfutil owns the port), and reopening it
+// here would steal the DFU traffic.
 func (lm *LinkManager) fallback() {
+	if !lm.beginOp() {
+		lm.svc.log.Infof("Link: fallback skipped (link manager suspended or busy)")
+		return
+	}
+
 	if err := lm.reopenAt(linkBaudDefault); err != nil {
 		lm.svc.log.Errorf("Link: fallback reopen failed: %v", err)
+		lm.endOp()
 		return
 	}
 	lm.publishStatus()
@@ -448,6 +499,7 @@ func (lm *LinkManager) fallback() {
 	if err := lm.svc.InitializeNRF52(); err != nil {
 		lm.svc.log.Errorf("Link: re-initialization after fallback failed: %v", err)
 	}
+	lm.endOp()
 	lm.StartNegotiation()
 }
 
