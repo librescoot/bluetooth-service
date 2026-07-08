@@ -619,6 +619,14 @@ func (s *Service) UpdatePowerManagementState(stateStr string) error {
 		} else {
 			s.log.Infof("Synced data stream on running")
 		}
+		// After a resume — or a suspend aborted after the quiesce ACK — the
+		// link sits at the boot baud rate from the suspend downshift. Both
+		// sides are awake again (the running state above unsilences the nRF),
+		// so renegotiate the fast link. Collapses to a no-op when already
+		// fast, negotiating, or during DFU.
+		if s.link != nil && s.link.CurrentBaud() == linkBaudDefault {
+			s.link.StartNegotiation()
+		}
 	}
 
 	// Handle hibernation level separately if needed

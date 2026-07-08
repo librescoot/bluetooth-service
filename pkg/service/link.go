@@ -25,6 +25,10 @@ import (
 //     fallback: reopen at 115200, re-init, renegotiate.
 //   - Before nRF DFU (bootloader talks 115200 only), EnsureLinkBaud(115200)
 //     downshifts cooperatively, with the nRF's 15 s idle revert as the backstop.
+//   - When the nRF ACKs the suspending power state it retunes itself to 115200
+//     (wake bytes are only proven at the boot baud rate). DownshiftForSuspend
+//     follows it with a wire-silent local reopen; the fast link is renegotiated
+//     when the power state returns to running.
 
 const (
 	linkBaudDefault = 115200
@@ -400,6 +404,42 @@ func (lm *LinkManager) EnsureLinkBaud(baud int) error {
 	return nil
 }
 
+// DownshiftForSuspend follows the nRF down to the boot baud rate after it
+// acked the suspending power state: the nRF drains that ACK and retunes itself
+// to 115200 (see link_mgmt.c), so a local reopen keeps the link consistent
+// across the suspend/resume cycle and across suspend aborts.
+//
+// This must be completely silent on the wire. The nRF is silenced but still
+// answers any frame it receives (wake preamble + reply), and once the iMX is
+// asleep such a reply hits the armed ttymxc1 wakeup and pulls it straight back
+// out of suspend-to-RAM. So: no BAUD_SET, no PING verify — just a termios
+// reopen. Called synchronously from the suspending-ACK handler so the port is
+// already at 115200 before pm-service learns of the ACK and can commit the
+// suspend or abort back to running.
+func (lm *LinkManager) DownshiftForSuspend() {
+	lm.stopKeepalive()
+
+	lm.mu.Lock()
+	atDefault := lm.currentBaud == linkBaudDefault
+	lm.mu.Unlock()
+	if atDefault {
+		return
+	}
+
+	if !lm.beginOp() {
+		lm.svc.log.Warnf("Link: suspend downshift skipped (link manager suspended or busy); fallback will recover the link after resume")
+		return
+	}
+	defer lm.endOp()
+
+	if err := lm.reopenAt(linkBaudDefault); err != nil {
+		lm.svc.log.Errorf("Link: suspend downshift reopen failed: %v", err)
+		return
+	}
+	lm.svc.log.Infof("Link: downshifted to %d baud for suspend", linkBaudDefault)
+	lm.publishStatus()
+}
+
 // keepalive supervises the fast link: PING every period, fall back to 115200 on
 // consecutive misses or a garbage storm.
 func (lm *LinkManager) startKeepalive() {
@@ -442,6 +482,16 @@ func (lm *LinkManager) keepaliveLoop(stop chan struct{}) {
 		}
 
 		ok := lm.ping(keepaliveTimeout)
+
+		// The keepalive may have been stopped while the ping was in flight
+		// (suspend downshift, DFU). Acting on the failed ping now would start a
+		// fallback whose re-init frames make the silenced nRF answer — and once
+		// the iMX is asleep that answer wakes it right back up.
+		select {
+		case <-stop:
+			return
+		default:
+		}
 
 		garbage := false
 		if sock := lm.svc.getUSockConcrete(); sock != nil {
