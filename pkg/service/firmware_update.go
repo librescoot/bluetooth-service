@@ -2,7 +2,9 @@ package service
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -16,6 +18,18 @@ import (
 
 	"github.com/librescoot/bluetooth-service/pkg/ble"
 	"github.com/librescoot/bluetooth-service/pkg/logger"
+)
+
+// Bounds on the external DFU subprocesses. These are backstops against a hung
+// tool, not expected durations: a real flash finishes in 1-3 min. Without them,
+// a subprocess blocked on an unresponsive serial line never returns, and since
+// RecoverFromDFU runs synchronously in Bootstrap() before the Redis command
+// watcher starts, a bricked nRF at boot would wedge the whole service "active"
+// but deaf. Kept generous so a slow-but-progressing flash is never killed
+// mid-write (which could brick the nRF); the timeout only fires on a true hang.
+const (
+	dfuEnterTimeout = 3 * time.Minute
+	dfuFlashTimeout = 10 * time.Minute
 )
 
 // powerInhibitsHash is the Redis hash pm-service watches for inhibitors that
@@ -642,13 +656,20 @@ func (fu *FirmwareUpdater) legacyPerformUpdate(firmwarePath string) error {
 // The downstream SLIP version query or nordicsemi ping is the real verification
 // that the bootloader is alive.
 func (fu *FirmwareUpdater) enterDFUMode() error {
-	cmd := exec.Command("python3", fu.config.NRFUpdateScript, "-p", fu.config.SerialDevice, "--dfu", "usock")
+	ctx, cancel := context.WithTimeout(context.Background(), dfuEnterTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "python3", fu.config.NRFUpdateScript, "-p", fu.config.SerialDevice, "--dfu", "usock")
 	var output bytes.Buffer
 	cmd.Stdout = &output
 	cmd.Stderr = &output
 
 	err := cmd.Run()
 	if err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			fu.log.Errorf("nrfupdate.py timed out after %v (serial line unresponsive?), output: %s", dfuEnterTimeout, output.String())
+			return fmt.Errorf("nrfupdate.py timed out after %v: %w", dfuEnterTimeout, ctx.Err())
+		}
 		fu.log.Errorf("nrfupdate.py failed: %v, output: %s", err, output.String())
 		return fmt.Errorf("nrfupdate.py: %w", err)
 	}
@@ -659,7 +680,10 @@ func (fu *FirmwareUpdater) enterDFUMode() error {
 
 // runNordicDFU runs the Nordic DFU tool
 func (fu *FirmwareUpdater) runNordicDFU(firmwarePath string) error {
-	cmd := exec.Command("python3", "-m", "nordicsemi", "dfu", "serial",
+	ctx, cancel := context.WithTimeout(context.Background(), dfuFlashTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "python3", "-m", "nordicsemi", "dfu", "serial",
 		"-p", fu.config.SerialDevice,
 		"-pkg", firmwarePath,
 		"-cd", fmt.Sprintf("%d", fu.config.DFUCooldown))
@@ -673,6 +697,12 @@ func (fu *FirmwareUpdater) runNordicDFU(firmwarePath string) error {
 
 	err := cmd.Run()
 	if err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			fu.log.Errorf("Nordic DFU timed out after %v (serial line unresponsive?)", dfuFlashTimeout)
+			fu.log.Errorf("stdout: %s", stdout.String())
+			fu.log.Errorf("stderr: %s", stderr.String())
+			return fmt.Errorf("nordic DFU timed out after %v: %w", dfuFlashTimeout, ctx.Err())
+		}
 		fu.log.Errorf("Nordic DFU failed: %v", err)
 		fu.log.Errorf("stdout: %s", stdout.String())
 		fu.log.Errorf("stderr: %s", stderr.String())
