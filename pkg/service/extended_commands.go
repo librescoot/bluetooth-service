@@ -409,6 +409,14 @@ func (s *Service) handleTimeCommand(cmd string) {
 	}
 }
 
+// systemTimeArg formats a Unix timestamp for `timedatectl set-time`, which
+// interprets its argument in the system-local timezone. Formatting in local
+// time keeps the wall clock correct; formatting in UTC (as this used to) set
+// the clock off by the local offset, e.g. 2h behind in CEST.
+func systemTimeArg(timestamp int64) string {
+	return time.Unix(timestamp, 0).Format("2006-01-02 15:04:05")
+}
+
 // setSystemTime parses a Unix timestamp string and sets the system clock
 // via timedatectl.
 func (s *Service) setSystemTime(timestampStr string) error {
@@ -416,8 +424,8 @@ func (s *Service) setSystemTime(timestampStr string) error {
 	if err != nil {
 		return fmt.Errorf("invalid timestamp: %w", err)
 	}
-	t := time.Unix(timestamp, 0).UTC()
-	timeStr := t.Format("2006-01-02 15:04:05")
+	t := time.Unix(timestamp, 0)
+	timeStr := systemTimeArg(timestamp)
 	cmd := exec.Command("timedatectl", "set-time", timeStr)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to set time: %w (%s)", err, strings.TrimSpace(string(out)))
