@@ -38,6 +38,13 @@ const (
 const (
 	powerInhibitsHash = "power:inhibits"
 	dfuInhibitID      = "ble-dfu"
+
+	// powerManagerHash / powerStateRunning: pm-service publishes its current
+	// power state here. "running" is the only value that means no power
+	// transition is pending or in flight; anything else (*-pending, *-imminent,
+	// reboot, suspending, hibernating) means one is underway.
+	powerManagerHash  = "power-manager"
+	powerStateRunning = "running"
 )
 
 type powerInhibitData struct {
@@ -365,6 +372,21 @@ func (fu *FirmwareUpdater) runStagedUpdate(pair *ZipPair, initialStatus string) 
 
 	fu.addDFUInhibit(fmt.Sprintf("flashing nRF52 firmware to %s", pair.Version))
 	defer fu.removeDFUInhibit()
+
+	// Set-then-check: the inhibitor above blocks any power transition pm-service
+	// evaluates from now on, but it can't recall one already committed. If a
+	// reboot/suspend is already imminent or in flight, our inhibitor arrived too
+	// late and flashing now risks power being cut mid-write (an interrupted
+	// bootloader stage is an unrecoverable brick). Bail so the caller retries
+	// once the transition settles; removeDFUInhibit runs via the defer above.
+	// Reading pm's published state after setting the inhibitor narrows the race
+	// to the redis round-trip rather than the whole multi-minute flash.
+	if state, err := fu.ipc.Hash(powerManagerHash).Get("state"); err != nil {
+		fu.log.Warnf("Could not read power-manager state before DFU (proceeding): %v", err)
+	} else if state != "" && state != powerStateRunning {
+		fu.setStatus("idle")
+		return fmt.Errorf("aborting DFU: power transition already in progress (power-manager state=%q)", state)
+	}
 
 	// Parse target versions from the signed init packets inside the zips.
 	blInfo, err := ParseZipDFUInfo(pair.BLPath)
