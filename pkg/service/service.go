@@ -36,7 +36,7 @@ type Service struct {
 	log             *logger.Logger
 	stopCh          chan struct{}
 	wg              sync.WaitGroup
-	faults          *ipc.FaultSet // Fault tracking
+	faults          *ipc.FaultReporter // Fault tracking
 	serialDevice    string
 	baudRate        int
 	usockHandler    func(*usock.Payload)
@@ -98,10 +98,16 @@ type otaReceiver interface {
 
 // Fault codes for bluetooth service
 const (
-	FaultSerialPort     = 1 // Serial port communication error
-	FaultNRFInit        = 2 // nRF52 initialization error
-	FaultFirmwareUpdate = 3 // Firmware update error
+	FaultSerialPort     = 1
+	FaultNRFInit        = 2
+	FaultFirmwareUpdate = 3
 )
+
+var faultDescriptions = map[int]string{
+	FaultSerialPort:     "Serial port communication error",
+	FaultNRFInit:        "nRF52 initialization error",
+	FaultFirmwareUpdate: "Firmware update error",
+}
 
 // New creates a new Service instance
 func New(ipcClient *ipc.Client, log *logger.Logger) *Service {
@@ -109,7 +115,7 @@ func New(ipcClient *ipc.Client, log *logger.Logger) *Service {
 		ipc:    ipcClient,
 		log:    log,
 		stopCh: make(chan struct{}),
-		faults: ipcClient.NewFaultSet("ble:fault", "ble", "fault"),
+		faults: ipcClient.NewFaultReporter("ble"),
 	}
 	s.link = newLinkManager(s)
 	return s
@@ -291,24 +297,21 @@ func (s *Service) ReconnectUSock() error {
 	return nil
 }
 
-// SetFault adds a fault code to the fault set
+// SetFault raises a fault. Idempotent: emits nothing if already raised.
 func (s *Service) SetFault(code int) {
-	if err := s.faults.Add(code); err != nil {
-		s.log.Errorf("Failed to add fault %d: %v", code, err)
+	desc, ok := faultDescriptions[code]
+	if !ok {
+		desc = fmt.Sprintf("unknown fault %d", code)
+	}
+	if err := s.faults.Raise(code, desc); err != nil {
+		s.log.Errorf("Failed to raise fault %d: %v", code, err)
 	}
 }
 
-// ClearFault removes a fault code from the fault set
+// ClearFault clears a fault. Idempotent: emits nothing if not raised.
 func (s *Service) ClearFault(code int) {
-	if err := s.faults.Remove(code); err != nil {
-		s.log.Errorf("Failed to remove fault %d: %v", code, err)
-	}
-}
-
-// ClearAllFaults removes all fault codes
-func (s *Service) ClearAllFaults() {
-	if err := s.faults.Clear(); err != nil {
-		s.log.Errorf("Failed to clear faults: %v", err)
+	if err := s.faults.Clear(code); err != nil {
+		s.log.Errorf("Failed to clear fault %d: %v", code, err)
 	}
 }
 
