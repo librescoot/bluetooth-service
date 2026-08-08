@@ -90,7 +90,7 @@ func main() {
 	}
 	usockErrHandler := func(err error) {
 		log.Errorf("Serial communication error: %v", err)
-		svc.SetFault(service.FaultSerialPort)
+		svc.SetFault(service.FaultSerialPort, fmt.Sprintf("serial communication error: %v", err))
 	}
 
 	svc.SetSerialConfig(*serialDevice, *baudRate, usockHandler, usockErrHandler)

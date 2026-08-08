@@ -447,7 +447,7 @@ func (fu *FirmwareUpdater) runStagedUpdate(pair *ZipPair, initialStatus string) 
 	fu.log.Infof("Entering DFU mode...")
 	if err := fu.enterDFUMode(); err != nil {
 		fu.setStatus("failed:nrfupdate")
-		fu.service.SetFault(FaultFirmwareUpdate)
+		fu.service.SetFault(FaultFirmwareUpdate, fmt.Sprintf("DFU mode entry failed: %v", err))
 		fu.attemptReconnect()
 		return fmt.Errorf("failed to enter DFU mode: %w", err)
 	}
@@ -477,7 +477,7 @@ func (fu *FirmwareUpdater) runStagedUpdate(pair *ZipPair, initialStatus string) 
 	// already entered at the top of this function.
 	for i, stage := range plan.Stages {
 		if err := fu.runStageWithRetry(stage, i, len(plan.Stages)); err != nil {
-			fu.service.SetFault(FaultFirmwareUpdate)
+			fu.service.SetFault(FaultFirmwareUpdate, fmt.Sprintf("DFU stage %d/%d (%s) failed: %v", i+1, len(plan.Stages), stage.Label, err))
 			fu.attemptReconnect()
 			return err
 		}
@@ -491,7 +491,7 @@ func (fu *FirmwareUpdater) runStagedUpdate(pair *ZipPair, initialStatus string) 
 	fu.log.Infof("Reconnecting to nRF...")
 	if err := fu.service.ReconnectUSock(); err != nil {
 		fu.setStatus("failed:reconnect")
-		fu.service.SetFault(FaultFirmwareUpdate)
+		fu.service.SetFault(FaultFirmwareUpdate, fmt.Sprintf("reconnect after update failed: %v", err))
 		return fmt.Errorf("failed to reconnect after update: %w", err)
 	}
 
@@ -638,7 +638,7 @@ func (fu *FirmwareUpdater) legacyPerformUpdate(firmwarePath string) error {
 	fu.log.Infof("Entering DFU mode...")
 	if err := fu.enterDFUMode(); err != nil {
 		fu.setStatus("failed:nrfupdate")
-		fu.service.SetFault(FaultFirmwareUpdate)
+		fu.service.SetFault(FaultFirmwareUpdate, fmt.Sprintf("DFU mode entry failed: %v", err))
 		fu.attemptReconnect()
 		return fmt.Errorf("failed to enter DFU mode: %w", err)
 	}
@@ -646,7 +646,7 @@ func (fu *FirmwareUpdater) legacyPerformUpdate(firmwarePath string) error {
 	fu.log.Infof("Running Nordic DFU...")
 	if err := fu.runNordicDFU(firmwarePath); err != nil {
 		fu.setStatus("failed:dfu")
-		fu.service.SetFault(FaultFirmwareUpdate)
+		fu.service.SetFault(FaultFirmwareUpdate, fmt.Sprintf("Nordic DFU failed: %v", err))
 		fu.attemptReconnect()
 		return fmt.Errorf("DFU failed: %w", err)
 	}
@@ -657,7 +657,7 @@ func (fu *FirmwareUpdater) legacyPerformUpdate(firmwarePath string) error {
 	fu.log.Infof("Reconnecting to nRF...")
 	if err := fu.service.ReconnectUSock(); err != nil {
 		fu.setStatus("failed:reconnect")
-		fu.service.SetFault(FaultFirmwareUpdate)
+		fu.service.SetFault(FaultFirmwareUpdate, fmt.Sprintf("reconnect after update failed: %v", err))
 		return fmt.Errorf("failed to reconnect after update: %w", err)
 	}
 

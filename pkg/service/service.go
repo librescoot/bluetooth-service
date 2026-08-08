@@ -36,7 +36,7 @@ type Service struct {
 	log             *logger.Logger
 	stopCh          chan struct{}
 	wg              sync.WaitGroup
-	faults          *ipc.FaultSet // Fault tracking
+	faults          *ipc.FaultReporter // Fault tracking
 	serialDevice    string
 	baudRate        int
 	usockHandler    func(*usock.Payload)
@@ -109,7 +109,7 @@ func New(ipcClient *ipc.Client, log *logger.Logger) *Service {
 		ipc:    ipcClient,
 		log:    log,
 		stopCh: make(chan struct{}),
-		faults: ipcClient.NewFaultSet("ble:fault", "ble", "fault"),
+		faults: ipcClient.NewFaultReporter("ble"),
 	}
 	s.link = newLinkManager(s)
 	return s
@@ -291,24 +291,20 @@ func (s *Service) ReconnectUSock() error {
 	return nil
 }
 
-// SetFault adds a fault code to the fault set
-func (s *Service) SetFault(code int) {
-	if err := s.faults.Add(code); err != nil {
-		s.log.Errorf("Failed to add fault %d: %v", code, err)
+// SetFault marks a fault code active. The description reaches the
+// events:faults stream, so it should name the specific failure rather than
+// restate the code's category. Repeating a fault that is already active is a
+// no-op and emits no stream entry.
+func (s *Service) SetFault(code int, description string) {
+	if err := s.faults.Raise(code, description); err != nil {
+		s.log.Errorf("Failed to raise fault %d: %v", code, err)
 	}
 }
 
-// ClearFault removes a fault code from the fault set
+// ClearFault marks a fault code inactive.
 func (s *Service) ClearFault(code int) {
-	if err := s.faults.Remove(code); err != nil {
-		s.log.Errorf("Failed to remove fault %d: %v", code, err)
-	}
-}
-
-// ClearAllFaults removes all fault codes
-func (s *Service) ClearAllFaults() {
-	if err := s.faults.Clear(); err != nil {
-		s.log.Errorf("Failed to clear faults: %v", err)
+	if err := s.faults.Clear(code); err != nil {
+		s.log.Errorf("Failed to clear fault %d: %v", code, err)
 	}
 }
 
@@ -399,7 +395,7 @@ func (s *Service) startNormally() error {
 
 	s.log.Infof("Initializing communication with nRF52...")
 	if err := s.InitializeNRF52(); err != nil {
-		s.SetFault(FaultNRFInit)
+		s.SetFault(FaultNRFInit, fmt.Sprintf("nRF52 initialization sequence failed: %v", err))
 		s.log.Errorf("Error during nRF52 initialization sequence: %v", err)
 	} else {
 		s.ClearFault(FaultNRFInit)
