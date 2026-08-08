@@ -369,7 +369,7 @@ func (s *Service) UpdateSeatboxLock(stateStr string) error {
 
 // UpdateHandlebarLock sends the current handlebar lock state to nRF52
 func (s *Service) UpdateHandlebarLock(stateStr string) error {
-	var stateInt uint16 = 0 // Default to 0 (locked)
+	var stateInt uint16 // 0 is locked
 
 	switch stateStr {
 	case "locked":
