@@ -89,6 +89,7 @@ type Receiver struct {
 	lastPhase       byte
 	lastPercent     byte
 	watcher         *ipc.HashWatcher
+	waitingOutcome  bool // install finished, still observing status until it clears to idle
 	idleTimer       *time.Timer
 	inhibitTmr      *time.Timer
 	lastSent        time.Time // pacing for INSTALL_PROGRESS notifications
@@ -244,6 +245,16 @@ func (r *Receiver) handleStartLocked(payload []byte) {
 	if r.state == stateReceiving && r.sess != nil {
 		r.log.Infof("OTA: new START while receiving %s; closing old session", r.sess.start.BundleID)
 		r.closeSessionFileLocked()
+	}
+
+	// An accepted START ends observation of a previous install's outcome
+	// (e.g. a DBC update awaiting its next power cycle): the phone has moved
+	// on, and a stale status transition must not clobber the new transfer's
+	// progress relay.
+	if r.watcher != nil {
+		_ = r.watcher.Stop()
+		r.watcher = nil
+		r.waitingOutcome = false
 	}
 
 	shaHex := hex.EncodeToString(start.SHA256[:])
@@ -469,10 +480,18 @@ func fileSHA256(f *os.File) (string, error) {
 ////////////////////////////////////////////////////////////////////////////////
 
 func (r *Receiver) startInstallWatcherLocked() {
-	if r.ipcCli == nil || r.watcher != nil {
+	if r.ipcCli == nil {
 		return
 	}
 	comp := componentName(r.installComp)
+	if r.watcher != nil {
+		// A fresh install begins while we may still be observing the outcome
+		// of a previous one (e.g. a DBC update awaiting its next power cycle).
+		// Replace the watcher so it tracks this component instead.
+		_ = r.watcher.Stop()
+		r.watcher = nil
+		r.waitingOutcome = false
+	}
 	w := r.ipcCli.NewHashWatcher(installHash)
 	w.OnAny(func(field, value string) error {
 		r.onInstallField(comp, field, value)
@@ -501,12 +520,20 @@ func (r *Receiver) stopInstallWatcherLocked() {
 func (r *Receiver) onInstallField(comp, field, value string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.state != stateInstalling {
+	// Relay progress while actively installing, and keep relaying a successful
+	// outcome (pending-reboot/success) until the component's status returns to
+	// idle. For MDB the reboot restarts this receiver and resets the phase; the
+	// DBC applies on its next power cycle without rebooting the MDB, so without
+	// this the reported phase would stay latched at pending-reboot forever.
+	if r.state != stateInstalling && !r.waitingOutcome {
 		return
 	}
 
 	switch field {
 	case "install-progress:" + comp:
+		if r.waitingOutcome {
+			return
+		}
 		if pct, err := strconv.Atoi(value); err == nil && pct >= 0 && pct <= 100 {
 			r.lastPhase = PhaseInstalling
 			r.lastPercent = byte(pct)
@@ -515,18 +542,27 @@ func (r *Receiver) onInstallField(comp, field, value string) {
 
 	case "status:" + comp:
 		switch value {
-		case "preparing":
-			r.lastPhase = PhaseVerifying
-			r.sendProgressPacedLocked(value)
-		case "installing":
-			r.lastPhase = PhaseInstalling
+		case "preparing", "installing":
+			if r.waitingOutcome {
+				return
+			}
+			if value == "preparing" {
+				r.lastPhase = PhaseVerifying
+			} else {
+				r.lastPhase = PhaseInstalling
+			}
 			r.sendProgressPacedLocked(value)
 		case "pending-reboot":
 			r.lastPhase = PhasePendingReboot
 			r.lastPercent = 100
 			// update-service reboots the MDB after 3 min of sustained stand-by
-			// (updater.go TriggerReboot); no user action needed beyond standby
-			r.send(EncodeInstallProgress(r.lastPhase, r.lastPercent, "reboots after 3 min in stand-by"))
+			// (updater.go TriggerReboot); the DBC applies on its next power-on.
+			// Either way update-service owns the reboot coordination from here.
+			msg := "reboots after 3 min in stand-by"
+			if comp == "dbc" {
+				msg = "applies on next power-on"
+			}
+			r.send(EncodeInstallProgress(r.lastPhase, r.lastPercent, msg))
 			// install is done: free the staged bundle and our inhibitor;
 			// update-service owns the reboot coordination from here
 			r.finishInstallLocked()
@@ -535,6 +571,17 @@ func (r *Receiver) onInstallField(comp, field, value string) {
 			r.lastPercent = 100
 			r.send(EncodeInstallProgress(r.lastPhase, r.lastPercent, ""))
 			r.finishInstallLocked()
+		case "idle":
+			// The target applied the update (DBC next power-on, or MDB reboot
+			// completed) and cleared its status: the pending outcome is over.
+			if !r.waitingOutcome {
+				return
+			}
+			r.lastPhase = PhaseIdle
+			r.lastPercent = 0
+			r.waitingOutcome = false
+			r.send(EncodeInstallProgress(r.lastPhase, r.lastPercent, ""))
+			r.stopInstallWatcherLocked()
 		case "error":
 			r.lastPhase = PhaseFailure
 			msg, _ := r.watcherFetch("error-message:" + comp)
@@ -575,12 +622,29 @@ func (r *Receiver) finishInstallLocked() {
 	}
 	r.installBundleID = ""
 
-	r.stopInstallWatcherLocked()
+	// The inhibitor is released below; its watchdog must not fire later.
+	if r.inhibitTmr != nil {
+		r.inhibitTmr.Stop()
+		r.inhibitTmr = nil
+	}
+
 	r.state = stateIdle
 	r.sess = nil
 	r.removeInhibitorLocked()
 	r.publishStatusLocked("idle")
 	r.lastPhase, r.lastPercent = phase, pct
+
+	// A successful install leaves the target in pending-reboot: the MDB is
+	// rebooted by update-service (which restarts this receiver and resets the
+	// phase), but the DBC only applies on its next power cycle. Keep observing
+	// the component's status so the phase reported to the phone is cleared back
+	// to idle when that happens; errors and stalled installs end observation.
+	if installed {
+		r.waitingOutcome = true
+	} else {
+		r.waitingOutcome = false
+		r.stopInstallWatcherLocked()
+	}
 }
 
 func (r *Receiver) sendProgressPacedLocked(msg string) {

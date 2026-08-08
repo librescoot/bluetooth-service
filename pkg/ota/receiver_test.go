@@ -27,7 +27,6 @@ func (fw *fakeWriter) WriteWithFrameID(frameID byte, data []byte) error {
 	return nil
 }
 
-
 func (fw *fakeWriter) lastOfOp(op byte) []byte {
 	fw.mu.Lock()
 	defer fw.mu.Unlock()
@@ -396,5 +395,128 @@ func TestFinishInstallRetention(t *testing.T) {
 				t.Error("sidecar survived finishInstallLocked")
 			}
 		})
+	}
+}
+
+// TestDBCPendingRebootClearsToIdle is the regression test for the DBC BLE OTA
+// status relay: a DBC install ends with status "pending-reboot" and applies on
+// the DBC's next power-on — no MDB reboot happens, so the phase the receiver
+// reports must clear back to idle when the DBC's update-service clears
+// status:dbc, instead of staying latched at pending-reboot forever.
+func TestDBCPendingRebootClearsToIdle(t *testing.T) {
+	r, fw, _, _ := newTestReceiver(t)
+
+	// Simulate a finished DBC install: update-service reported
+	// status:dbc=pending-reboot, the receiver relayed it and finished.
+	r.mu.Lock()
+	r.installComp = ComponentDBC
+	r.lastPhase = PhasePendingReboot
+	r.lastPercent = 100
+	r.finishInstallLocked()
+	r.mu.Unlock()
+
+	if !r.waitingOutcome {
+		t.Fatal("expected receiver to keep observing outcome after pending-reboot")
+	}
+
+	// The DBC's update-service comes back after the next power-on and clears
+	// its status; the receiver must relay idle to the phone and reset state.
+	r.onInstallField("dbc", "status:dbc", "idle")
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.lastPhase != PhaseIdle {
+		t.Fatalf("lastPhase = %#x, want idle (0x06)", r.lastPhase)
+	}
+	if r.lastPercent != 0 {
+		t.Fatalf("lastPercent = %d, want 0", r.lastPercent)
+	}
+	if r.waitingOutcome {
+		t.Error("waitingOutcome still set after idle")
+	}
+	frame := fw.lastOfOp(OpInstallProgress)
+	if len(frame) < 2 {
+		t.Fatalf("no INSTALL_PROGRESS frame sent for idle, got %x", frame)
+	}
+	if frame[1] != PhaseIdle {
+		t.Fatalf("sent phase %#x, want idle (0x06)", frame[1])
+	}
+}
+
+// TestDBCPendingRebootSurvivesWithoutMDBReset asserts the outcome stays
+// pending-reboot (while redis status does too) until the DBC clears it — a
+// STATUS_REQ after pending-reboot but before idle must still report it.
+func TestDBCPendingRebootKeptUntilIdle(t *testing.T) {
+	r, fw, _, _ := newTestReceiver(t)
+
+	r.mu.Lock()
+	r.installComp = ComponentDBC
+	r.lastPhase = PhasePendingReboot
+	r.lastPercent = 100
+	r.finishInstallLocked()
+	r.mu.Unlock()
+
+	// phone reconnects / polls before the DBC powered on again
+	r.HandleControl([]byte{OpStatusReq})
+	p := fw.lastOfOp(OpInstallProgress)
+	if p == nil || p[1] != PhasePendingReboot {
+		t.Fatalf("expected pending-reboot before DBC clears, got %x", p)
+	}
+}
+
+// TestPendingRebootMessagePerComponent checks the OTA_STATUS message text is
+// accurate for each component: MDB is rebooted by update-service, the DBC just
+// applies on its next power-on.
+func TestPendingRebootMessagePerComponent(t *testing.T) {
+	tests := []struct {
+		comp byte
+		want string
+	}{
+		{ComponentMDB, "reboots after 3 min in stand-by"},
+		{ComponentDBC, "applies on next power-on"},
+	}
+	for _, tc := range tests {
+		t.Run(componentName(tc.comp), func(t *testing.T) {
+			r, fw, _, _ := newTestReceiver(t)
+			r.mu.Lock()
+			r.installComp = tc.comp
+			r.state = stateInstalling
+			r.mu.Unlock()
+
+			r.onInstallField(componentName(tc.comp), "status:"+componentName(tc.comp), "pending-reboot")
+
+			frame := fw.lastOfOp(OpInstallProgress)
+			if len(frame) < 4 {
+				t.Fatalf("no INSTALL_PROGRESS frame, got %x", frame)
+			}
+			if got := string(frame[4:]); got != tc.want {
+				t.Errorf("message = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestIdleIgnoredDuringActiveInstall guards the outcome relay: an "idle"
+// status event must not clobber an install that is still in progress.
+func TestIdleIgnoredDuringActiveInstall(t *testing.T) {
+	r, fw, _, _ := newTestReceiver(t)
+	r.mu.Lock()
+	r.state = stateInstalling
+	r.lastPhase = PhaseInstalling
+	r.lastPercent = 42
+	r.mu.Unlock()
+
+	r.onInstallField("mdb", "status:mdb", "idle")
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.lastPhase != PhaseInstalling || r.lastPercent != 42 {
+		t.Fatalf("idle clobbered active install: phase=%#x pct=%d", r.lastPhase, r.lastPercent)
+	}
+	if r.waitingOutcome {
+		t.Error("waitingOutcome set by idle during active install")
+	}
+	if frame := fw.lastOfOp(OpInstallProgress); frame != nil && frame[1] == PhaseIdle {
+		t.Fatal("idle frame sent during active install")
 	}
 }
