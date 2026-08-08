@@ -123,23 +123,23 @@ func ParseZipDFUInfo(path string) (*ZipDFUInfo, error) {
 func parseDATInitPacket(data []byte) (InitPacketInfo, error) {
 	signedCmd, err := findFieldLenDelim(data, 2)
 	if err != nil {
-		return InitPacketInfo{}, fmt.Errorf("Packet.signed_command: %w", err)
+		return InitPacketInfo{}, fmt.Errorf("read Packet.signed_command: %w", err)
 	}
 	command, err := findFieldLenDelim(signedCmd, 1)
 	if err != nil {
-		return InitPacketInfo{}, fmt.Errorf("SignedCommand.command: %w", err)
+		return InitPacketInfo{}, fmt.Errorf("read SignedCommand.command: %w", err)
 	}
 	initCmd, err := findFieldLenDelim(command, 2)
 	if err != nil {
-		return InitPacketInfo{}, fmt.Errorf("Command.init: %w", err)
+		return InitPacketInfo{}, fmt.Errorf("read Command.init: %w", err)
 	}
 	fwVersion, err := findFieldVarint(initCmd, 1)
 	if err != nil {
-		return InitPacketInfo{}, fmt.Errorf("InitCommand.fw_version: %w", err)
+		return InitPacketInfo{}, fmt.Errorf("read InitCommand.fw_version: %w", err)
 	}
 	fwType, err := findFieldVarint(initCmd, 4)
 	if err != nil {
-		return InitPacketInfo{}, fmt.Errorf("InitCommand.type: %w", err)
+		return InitPacketInfo{}, fmt.Errorf("read InitCommand.type: %w", err)
 	}
 	return InitPacketInfo{
 		FwVersion: uint32(fwVersion),

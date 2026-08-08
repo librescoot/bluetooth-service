@@ -23,8 +23,6 @@ var (
 	serialDevice = flag.String("serial", "/dev/ttymxc1", "Serial device path")
 	baudRate     = flag.Int("baud", 115200, "Serial baud rate")
 	redisAddr    = flag.String("redis-addr", "localhost:6379", "Redis server address")
-	redisPass    = flag.String("redis-pass", "", "Redis password")
-	redisDB      = flag.Int("redis-db", 0, "Redis database number")
 	logLevel     = flag.Int("log-level", int(logger.LogLevelInfo), "Log level (0=none, 1=error, 2=warning, 3=info, 4=debug)")
 	showVersion  = flag.Bool("version", false, "Print version and exit")
 	firmwareDir  = flag.String("firmware-dir", service.DefaultFirmwareDir, "Directory containing firmware files")

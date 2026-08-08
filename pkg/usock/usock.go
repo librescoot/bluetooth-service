@@ -461,12 +461,3 @@ func calculateCRC16(data []byte, seed uint16) uint16 {
 	}
 	return crc
 }
-
-// calculateCRC8 calculates an 8-bit CRC by XORing all bytes
-func calculateCRC8(data []byte) uint8 {
-	var crc uint8
-	for _, b := range data {
-		crc ^= b
-	}
-	return crc
-}

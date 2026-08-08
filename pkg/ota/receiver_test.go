@@ -27,14 +27,6 @@ func (fw *fakeWriter) WriteWithFrameID(frameID byte, data []byte) error {
 	return nil
 }
 
-func (fw *fakeWriter) last() []byte {
-	fw.mu.Lock()
-	defer fw.mu.Unlock()
-	if len(fw.frames) == 0 {
-		return nil
-	}
-	return fw.frames[len(fw.frames)-1]
-}
 
 func (fw *fakeWriter) lastOfOp(op byte) []byte {
 	fw.mu.Lock()

@@ -432,7 +432,7 @@ func (s *Service) UpdateFirmwareVersion(version string) error {
 
 // UpdateBatteryActiveStatus sends the battery active status to nRF52
 func (s *Service) UpdateBatteryActiveStatus(slot int, stateStr string) error {
-	var baseSubType ble.SubType = ble.TypeBatterySlot0State
+	baseSubType := ble.TypeBatterySlot0State
 	if slot == 1 {
 		baseSubType = ble.TypeBatterySlot1State
 	}
@@ -453,7 +453,7 @@ func (s *Service) UpdateBatteryActiveStatus(slot int, stateStr string) error {
 
 // UpdateBatteryPresentStatus sends the battery presence status to nRF52
 func (s *Service) UpdateBatteryPresentStatus(slot int, presentStr string) error {
-	var baseSubType ble.SubType = ble.TypeBatterySlot0Presence
+	baseSubType := ble.TypeBatterySlot0Presence
 	if slot == 1 {
 		baseSubType = ble.TypeBatterySlot1Presence
 	}
@@ -486,7 +486,7 @@ func (s *Service) UpdateBatteryPresentStatus(slot int, presentStr string) error 
 
 // UpdateBatteryCycleCount sends the battery cycle count to nRF52
 func (s *Service) UpdateBatteryCycleCount(slot int, cyclesStr string) error {
-	var baseSubType ble.SubType = ble.TypeBatterySlot0CycleCount
+	baseSubType := ble.TypeBatterySlot0CycleCount
 	if slot == 1 {
 		baseSubType = ble.TypeBatterySlot1CycleCount
 	}
@@ -509,7 +509,7 @@ func (s *Service) UpdateBatteryCycleCount(slot int, cyclesStr string) error {
 
 // UpdateBatteryRemainingCharge sends the battery remaining charge to nRF52
 func (s *Service) UpdateBatteryRemainingCharge(slot int, chargeStr string) error {
-	var baseSubType ble.SubType = ble.TypeBatterySlot0Charge
+	baseSubType := ble.TypeBatterySlot0Charge
 	if slot == 1 {
 		baseSubType = ble.TypeBatterySlot1Charge
 	}
