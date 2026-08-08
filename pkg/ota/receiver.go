@@ -295,13 +295,13 @@ func (r *Receiver) handleStartLocked(payload []byte) {
 		return
 	}
 	if err := f.Truncate(int64(resume)); err != nil {
-		f.Close()
+		_ = f.Close()
 		r.log.Errorf("OTA: truncating staging file failed: %v", err)
 		r.send(EncodeStartAck(StartBadParams, 0, windowChunks, ackEvery, MaxChunkSize))
 		return
 	}
 	if _, err := f.Seek(int64(resume), io.SeekStart); err != nil {
-		f.Close()
+		_ = f.Close()
 		r.log.Errorf("OTA: seeking staging file failed: %v", err)
 		r.send(EncodeStartAck(StartBadParams, 0, windowChunks, ackEvery, MaxChunkSize))
 		return
@@ -412,7 +412,9 @@ func (r *Receiver) abortSessionLocked(discard bool) {
 
 func (r *Receiver) closeSessionFileLocked() {
 	if r.sess != nil && r.sess.file != nil {
-		r.sess.file.Close()
+		if err := r.sess.file.Close(); err != nil {
+			r.log.Warnf("OTA: closing staging file failed: %v", err)
+		}
 		r.sess.file = nil
 	}
 }
@@ -485,7 +487,9 @@ func (r *Receiver) startInstallWatcherLocked() {
 
 func (r *Receiver) stopInstallWatcherLocked() {
 	if r.watcher != nil {
-		r.watcher.Stop()
+		// The watcher is a progress relay; once we're tearing it down there
+		// is no listener left to hand a stop failure to.
+		_ = r.watcher.Stop()
 		r.watcher = nil
 	}
 	if r.inhibitTmr != nil {

@@ -87,7 +87,7 @@ func ParseZipDFUInfo(path string) (*ZipDFUInfo, error) {
 			return nil, fmt.Errorf("opening %s in %q: %w", f.Name, path, err)
 		}
 		data, err := io.ReadAll(rc)
-		rc.Close()
+		_ = rc.Close()
 		if err != nil {
 			return nil, fmt.Errorf("reading %s in %q: %w", f.Name, path, err)
 		}

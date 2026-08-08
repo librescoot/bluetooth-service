@@ -178,7 +178,9 @@ func (s *Service) SubscribeToRedisChannels() {
 				return nil
 			})
 
-			watcher.StartWithSync() // Fetches initial state and calls handlers
+			if err := watcher.StartWithSync(); err != nil {
+				s.log.Errorf("Error starting Redis watcher for channel %s: %v", chName, err)
+			}
 			defer watcher.Stop()
 
 			<-stopCh

@@ -115,11 +115,11 @@ func (st *Staging) WriteSidecar(component byte, sc *Sidecar) error {
 		return err
 	}
 	if _, err := f.Write(data); err != nil {
-		f.Close()
+		_ = f.Close()
 		return err
 	}
 	if err := f.Sync(); err != nil {
-		f.Close()
+		_ = f.Close()
 		return err
 	}
 	if err := f.Close(); err != nil {
@@ -131,11 +131,13 @@ func (st *Staging) WriteSidecar(component byte, sc *Sidecar) error {
 	return syncDir(dir)
 }
 
-// Discard removes the partial file and sidecar of a bundle.
+// Discard removes the partial file and sidecar of a bundle. Best-effort: a
+// bundle only ever has some of these three paths present at once, so most
+// calls are expected to remove files that were never there.
 func (st *Staging) Discard(component byte, bundleID string) {
-	os.Remove(st.PartPath(component, bundleID))
-	os.Remove(st.FinalPath(component, bundleID))
-	os.Remove(st.sidecarPath(component, bundleID))
+	_ = os.Remove(st.PartPath(component, bundleID))
+	_ = os.Remove(st.FinalPath(component, bundleID))
+	_ = os.Remove(st.sidecarPath(component, bundleID))
 }
 
 // Forget removes the transfer bookkeeping (partial file and sidecar) but keeps
@@ -143,8 +145,8 @@ func (st *Staging) Discard(component byte, bundleID string) {
 // .mender stays in update-service's download dir as the base for future delta
 // updates, and update-service's own retention policy owns it from here.
 func (st *Staging) Forget(component byte, bundleID string) {
-	os.Remove(st.PartPath(component, bundleID))
-	os.Remove(st.sidecarPath(component, bundleID))
+	_ = os.Remove(st.PartPath(component, bundleID))
+	_ = os.Remove(st.sidecarPath(component, bundleID))
 }
 
 // PartSize returns the current size of the partial file (0 when absent).
@@ -197,9 +199,9 @@ func (st *Staging) CleanupStale() int {
 			// invert stagedName: "id.mender.part" -> "id", "id.delta.part" -> "id.delta".
 			// A bundle ID may also end in ".mender" verbatim, so try both sidecars.
 			name := strings.TrimSuffix(e.Name(), ".part")
-			os.Remove(filepath.Join(dir, e.Name()))
-			os.Remove(filepath.Join(dir, strings.TrimSuffix(name, ".mender")+".json"))
-			os.Remove(filepath.Join(dir, name+".json"))
+			_ = os.Remove(filepath.Join(dir, e.Name()))
+			_ = os.Remove(filepath.Join(dir, strings.TrimSuffix(name, ".mender")+".json"))
+			_ = os.Remove(filepath.Join(dir, name+".json"))
 			removed++
 		}
 	}

@@ -132,7 +132,9 @@ func (di *DBCInstaller) waitReachable(timeout time.Duration) error {
 	for time.Now().Before(deadline) {
 		conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", dbcAddr, dbcSSHPort), 2*time.Second)
 		if err == nil {
-			conn.Close()
+			// This is a reachability probe; the connection carries no data,
+			// so a close failure has nothing left to report.
+			_ = conn.Close()
 			return nil
 		}
 		time.Sleep(time.Second)
