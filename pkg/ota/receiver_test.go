@@ -496,9 +496,12 @@ func TestPendingRebootMessagePerComponent(t *testing.T) {
 	}
 }
 
-// TestIdleIgnoredDuringActiveInstall guards the outcome relay: an "idle"
-// status event must not clobber an install that is still in progress.
-func TestIdleIgnoredDuringActiveInstall(t *testing.T) {
+// TestIdleResolvedDuringActiveInstall guards against the receiver latching in
+// stateInstalling: if update-service clears to "idle" without a terminal outcome
+// while we track an install (e.g. it had nothing to install), the receiver must
+// return to idle — clearing OTA_STATUS and unblocking new transfers — instead of
+// staying stuck on the install phase forever.
+func TestIdleResolvedDuringActiveInstall(t *testing.T) {
 	r, fw, _, _ := newTestReceiver(t)
 	r.mu.Lock()
 	r.state = stateInstalling
@@ -510,13 +513,49 @@ func TestIdleIgnoredDuringActiveInstall(t *testing.T) {
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.lastPhase != PhaseInstalling || r.lastPercent != 42 {
-		t.Fatalf("idle clobbered active install: phase=%#x pct=%d", r.lastPhase, r.lastPercent)
+	if r.lastPhase != PhaseIdle || r.lastPercent != 0 {
+		t.Fatalf("idle did not resolve active install to idle: phase=%#x pct=%d", r.lastPhase, r.lastPercent)
+	}
+	if r.state != stateIdle {
+		t.Fatalf("state = %v, want idle", r.state)
 	}
 	if r.waitingOutcome {
 		t.Error("waitingOutcome set by idle during active install")
 	}
-	if frame := fw.lastOfOp(OpInstallProgress); frame != nil && frame[1] == PhaseIdle {
-		t.Fatal("idle frame sent during active install")
+	if frame := fw.lastOfOp(OpInstallProgress); frame == nil || frame[1] != PhaseIdle {
+		t.Fatalf("expected idle frame after resolving, got %x", frame)
+	}
+}
+
+// TestFailureClearsToIdleAndAllowsNewTransfer is the regression test for the
+// "OTA_STATUS stuck" report: a failed install (status:error) must not latch a
+// Failure/Installing phase on the characteristic. A reconnecting phone polling
+// STATUS_REQ must get idle, and a new transfer must be accepted rather than
+// answered with StartInstalling.
+func TestFailureClearsToIdleAndAllowsNewTransfer(t *testing.T) {
+	r, fw, _, _ := newTestReceiver(t)
+
+	// Simulate a delta install that update-service reports as failed.
+	r.mu.Lock()
+	r.state = stateInstalling
+	r.lastPhase = PhaseInstalling
+	r.lastPercent = 20
+	r.installComp = ComponentMDB
+	r.installBundleID = "librescoot-unu-mdb-nightly-20260101T000000.delta"
+	r.mu.Unlock()
+
+	r.onInstallField("mdb", "status:mdb", "error")
+
+	// A reconnecting phone polling STATUS_REQ must get idle, not a stale failure.
+	r.HandleControl([]byte{OpStatusReq})
+	if p := fw.lastOfOp(OpInstallProgress); p == nil || p[1] != PhaseIdle {
+		t.Fatalf("STATUS_REQ after failure: got %x, want idle", p)
+	}
+
+	// And a brand-new transfer must be accepted, not rejected as busy.
+	data, sha := makeBundle(1_000)
+	r.HandleControl(startMsg(data, sha, 240, "bundle-new"))
+	if ack := fw.lastOfOp(OpStartAck); ack == nil || ack[1] == StartInstalling {
+		t.Fatalf("new START after failure rejected/busy: %x", ack)
 	}
 }

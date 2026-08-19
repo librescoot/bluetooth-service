@@ -211,7 +211,17 @@ func (r *Receiver) HandleControl(payload []byte) {
 	case OpAbort:
 		r.handleAbortLocked()
 	case OpStatusReq:
-		r.send(EncodeInstallProgress(r.lastPhase, r.lastPercent, ""))
+		// With no session and no pending outcome, answer (and re-latch) idle:
+		// the OTA_STATUS characteristic stores the last notified value on the nRF
+		// across connections, so without this an idle receiver would keep serving a
+		// stale terminal phase (failure, stalled "installing") to a reconnecting
+		// phone and every polling client, even though a new transfer is possible.
+		if r.state == stateIdle && !r.waitingOutcome {
+			r.lastPhase, r.lastPercent = PhaseIdle, 0
+			r.send(EncodeInstallProgress(PhaseIdle, 0, ""))
+		} else {
+			r.send(EncodeInstallProgress(r.lastPhase, r.lastPercent, ""))
+		}
 	default:
 		r.log.Warnf("OTA: unknown control opcode 0x%02x", payload[0])
 	}
@@ -256,6 +266,12 @@ func (r *Receiver) handleStartLocked(payload []byte) {
 		r.watcher = nil
 		r.waitingOutcome = false
 	}
+
+	// A fresh transfer must not inherit a stale terminal phase from a previous
+	// session (failure / stuck installing). Clear it so the progress relay for this
+	// transfer starts clean.
+	r.lastPhase = PhaseIdle
+	r.lastPercent = 0
 
 	shaHex := hex.EncodeToString(start.SHA256[:])
 	resume := uint32(0)
@@ -444,6 +460,10 @@ func (r *Receiver) releaseSessionLocked() {
 	}
 	r.removeInhibitorLocked()
 	r.publishStatusLocked("idle")
+	// Overwrite the OTA_STATUS characteristic: the nRF stores the last notified
+	// value across connections, so an idle session must push an idle frame to
+	// clear whatever terminal frame (e.g. a failure) the previous session left.
+	r.send(EncodeInstallProgress(PhaseIdle, 0, ""))
 }
 
 func (r *Receiver) touchIdleLocked() {
@@ -572,11 +592,20 @@ func (r *Receiver) onInstallField(comp, field, value string) {
 			r.send(EncodeInstallProgress(r.lastPhase, r.lastPercent, ""))
 			r.finishInstallLocked()
 		case "idle":
-			// The target applied the update (DBC next power-on, or MDB reboot
-			// completed) and cleared its status: the pending outcome is over.
 			if !r.waitingOutcome {
+				// We were tracking an install (stateInstalling) but update-service
+				// cleared to idle without a terminal outcome — e.g. it had nothing
+				// to install, or the install was superseded. Leaving the receiver in
+				// stateInstalling here would block every new transfer (START answers
+				// StartInstalling) and keep OTA_STATUS stuck on the install phase.
+				// Finish as a non-installed outcome, which returns to idle.
+				if r.state == stateInstalling {
+					r.finishInstallLocked()
+				}
 				return
 			}
+			// The target applied the update (DBC next power-on, or MDB reboot
+			// completed) and cleared its status: the pending outcome is over.
 			r.lastPhase = PhaseIdle
 			r.lastPercent = 0
 			r.waitingOutcome = false
@@ -632,18 +661,24 @@ func (r *Receiver) finishInstallLocked() {
 	r.sess = nil
 	r.removeInhibitorLocked()
 	r.publishStatusLocked("idle")
-	r.lastPhase, r.lastPercent = phase, pct
 
 	// A successful install leaves the target in pending-reboot: the MDB is
 	// rebooted by update-service (which restarts this receiver and resets the
 	// phase), but the DBC only applies on its next power cycle. Keep observing
 	// the component's status so the phase reported to the phone is cleared back
-	// to idle when that happens; errors and stalled installs end observation.
+	// to idle when that happens, keeping this outcome observable via STATUS_REQ.
 	if installed {
+		r.lastPhase, r.lastPercent = phase, pct
 		r.waitingOutcome = true
 	} else {
+		// Errors and stalled installs end observation. Their terminal phase must not
+		// latch on the OTA_STATUS characteristic (the nRF keeps the last notified
+		// value across connections) or it would block/confuse every later client.
+		// Clear it and push an idle frame, the same signal STATUS_REQ answers.
+		r.lastPhase, r.lastPercent = PhaseIdle, 0
 		r.waitingOutcome = false
 		r.stopInstallWatcherLocked()
+		r.send(EncodeInstallProgress(PhaseIdle, 0, ""))
 	}
 }
 
