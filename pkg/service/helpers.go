@@ -42,8 +42,8 @@ func batteryStateToString(state int) string {
 	}
 }
 
-// Convert string vehicle state to the wire integer expected by mdb-nrf52
-// (see firmware vehicle_data_def.h). "hop-on-learning" collapses to PARKED
+// Convert string vehicle state to the wire integer the nRF52 expects.
+// "hop-on-learning" collapses to PARKED
 // because the user is actively interacting with the dashboard (it's only
 // "locked-feeling" from the dashboard UI's perspective). "hop-on" gets the
 // dedicated value 6 so the firmware picks the right power-rail rules

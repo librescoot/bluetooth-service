@@ -11,7 +11,8 @@ import (
 )
 
 // UART link management: baud-rate negotiation with the nRF52 and automatic
-// fallback to the 115200 boot baud rate. Mirrors src/link_mgmt.c in mdb-nrf52.
+// fallback to the 115200 boot baud rate. Mirrors the nRF52 side of the same
+// protocol.
 //
 // Rules:
 //   - Both sides always boot at 115200; the negotiated baud rate is never persisted.
@@ -406,7 +407,7 @@ func (lm *LinkManager) EnsureLinkBaud(baud int) error {
 
 // DownshiftForSuspend follows the nRF down to the boot baud rate after it
 // acked the suspending power state: the nRF drains that ACK and retunes itself
-// to 115200 (see link_mgmt.c), so a local reopen keeps the link consistent
+// to 115200, so a local reopen keeps the link consistent
 // across the suspend/resume cycle and across suspend aborts.
 //
 // This must be completely silent on the wire. The nRF is silenced but still
