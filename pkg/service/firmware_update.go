@@ -251,7 +251,17 @@ func (fu *FirmwareUpdater) findFirmwarePath(version *FirmwareVersion) (string, e
 		return "", fmt.Errorf("failed to read firmware directory: %w", err)
 	}
 
-	versionStr := version.String()
+	// Match on the version as it was written, not the canonical form. String()
+	// re-emits the parts in a fixed order, build then suffix, which round-trips
+	// a release tag like v2.0.0-1-ls but reorders a git describe version like
+	// v2.7.2-ls-3-ge34b878 into v2.7.2-3-ls-ge34b878. The parser bins the parts
+	// by whether they look numeric rather than by position, so the original
+	// order is not recoverable from the fields. Filenames carry the original,
+	// so canonicalising here made every untagged build unfindable.
+	versionStr := version.Raw
+	if versionStr == "" {
+		versionStr = version.String()
+	}
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
