@@ -43,6 +43,8 @@ func (s *Service) handleExtendedCommandMessage(msgType ble.MessageType, absSubTy
 		s.handleAlarmCommand(strings.TrimPrefix(cmdStr, "alarm:"))
 	} else if strings.HasPrefix(cmdStr, "ltc:") {
 		s.handleLTCCommand(strings.TrimPrefix(cmdStr, "ltc:"))
+	} else if strings.HasPrefix(cmdStr, "ble:") {
+		s.handleBLECommand(strings.TrimPrefix(cmdStr, "ble:"))
 	} else if strings.HasPrefix(cmdStr, "cap:") {
 		s.handleCapabilityQuery(strings.TrimPrefix(cmdStr, "cap:"))
 	} else if strings.HasPrefix(cmdStr, "get:") {
@@ -595,6 +597,94 @@ func (s *Service) handleLTCCommand(cmd string) {
 	}
 }
 
+// minNrfBondDeleteVersion is the first nRF firmware whose delete-bond does
+// anything. Older builds accept the command and drop it, so a phone would be
+// told the scooter had forgotten it while the scooter kept the bond.
+var minNrfBondDeleteVersion = &FirmwareVersion{Major: 2, Minor: 8, Patch: 0}
+
+// bleForgetAckGrace is how long the reply to ble:forget gets before the
+// delete-bond that takes the link down with it. MAX_CONN_INTERVAL is 75 ms and
+// the nRF's HVN TX queue is one deep, so without this the notification is still
+// queued when the peer is disconnected and the phone never learns whether the
+// scooter agreed.
+const bleForgetAckGrace = 300 * time.Millisecond
+
+// nrfBondDeleteSupported reports whether an nRF running versionStr acts on
+// delete-bond. An unreadable or unparseable version answers no: claiming the
+// bond was cleared when it was not is the one outcome worth avoiding here.
+func nrfBondDeleteSupported(versionStr string) bool {
+	if versionStr == "" {
+		return false
+	}
+	fw, err := ParseFirmwareVersion(versionStr)
+	if err != nil {
+		return false
+	}
+	return fw.Compare(minNrfBondDeleteVersion) >= 0
+}
+
+// nrfSupportsBondDelete reports whether the attached nRF acts on delete-bond.
+// The version is read from Redis rather than cached: this service is what
+// writes it, and it is rewritten every time the nRF (re)starts, a firmware
+// update included.
+func (s *Service) nrfSupportsBondDelete() bool {
+	versionStr, err := s.ipc.HGet(KeyFirmwareVersion, "nrf-fw-version")
+	if err != nil {
+		s.log.Warnf("nRF firmware version unavailable, treating delete-bond as unsupported: %v", err)
+		return false
+	}
+	if !nrfBondDeleteSupported(versionStr) {
+		s.log.Warnf("nRF firmware %q does not act on delete-bond", versionStr)
+		return false
+	}
+	return true
+}
+
+// handleBLECommand processes BLE link and bond commands from the phone.
+//
+// Only the caller's own bond is reachable here. delete-all-bonds stays with lsc
+// and the dashboard: over BLE it would let one phone unpair every other phone
+// on the scooter, and the phone asking has no way to know who else it is
+// throwing off.
+func (s *Service) handleBLECommand(cmd string) {
+	cmd = strings.TrimSpace(cmd)
+
+	switch cmd {
+	case "forget":
+		s.handleBLEForget()
+	default:
+		s.sendExtendedResponse("ble:error:unknown command")
+	}
+}
+
+// handleBLEForget asks the nRF to delete the bond of the peer that sent the
+// command. The firmware resolves the peer from the live connection, so there is
+// no identity to pass and no way to name anyone else's bond.
+//
+// The delete runs from the nRF's disconnect handler, which means this command
+// ends the connection it arrived on. That is the point when a user is
+// deliberately forgetting the scooter, and the firmware rebuilds the whitelist
+// and re-arms advertising afterwards.
+func (s *Service) handleBLEForget() {
+	if !s.nrfSupportsBondDelete() {
+		s.sendExtendedResponse("ble:error:unsupported")
+		return
+	}
+
+	// Answer first: the command below takes the link down, and a reply queued
+	// after it would never be transmitted.
+	s.sendExtendedResponse("ble:forget:ok")
+
+	go func() {
+		time.Sleep(bleForgetAckGrace)
+		if err := writeUARTMessage(s.usock, ble.TypeBLECommand, ble.SubType(ble.BLECommandDeleteBond), 0); err != nil {
+			s.log.Errorf("Failed to send delete-bond to nRF: %v", err)
+			return
+		}
+		s.log.Infof("Asked the nRF to delete the connected peer's bond")
+	}()
+}
+
 // capabilityMap maps each command category to its supported commands.
 var capabilityMap = map[string][]string{
 	"nav":     {"dest", "clear", "fav:add", "fav:delete", "fav:navigate", "fav:list"},
@@ -605,11 +695,38 @@ var capabilityMap = map[string][]string{
 	"status":  {"maps-available", "navigation-available", "version:mdb", "version:dbc"},
 	"alarm":   {"enable", "disable", "arm", "disarm", "start", "start:<seconds>", "stop"},
 	"ltc":     {"enable", "disable", "force-enable", "force-disable", "status"},
+	"ble":     {"forget"},
 	"pm":      {"hibernate-for <duration>", "hibernate-cancel"},
 	"ota":     {"transfer"}, // BLE OTA bundle transfer via the 0x0500 GATT service
 	"cap":     {"list", "<category>"},
 	"get":     {"<key>", "list", "list:<prefix>"},
 	"set":     {"<key>:<value>"},
+}
+
+// capabilityCommands returns the commands a category can serve right now.
+// Most categories are fixed at build time. "ble" is not: the bond delete it
+// offers needs an nRF new enough to act on it, and the nRF carries its own
+// version. Reporting it regardless would make the probe worthless, since the
+// answer the phone is probing for is exactly the one that varies.
+func (s *Service) capabilityCommands(category string) []string {
+	return capabilityCommandsFor(category, s.nrfSupportsBondDelete)
+}
+
+// capabilityCommandsFor is the version-dependent filtering, split out so it can
+// be tested without a Redis client. bondDelete is only consulted for the one
+// category that needs it.
+func capabilityCommandsFor(category string, bondDelete func() bool) []string {
+	commands := capabilityMap[category]
+	if category != "ble" || bondDelete() {
+		return commands
+	}
+	available := make([]string, 0, len(commands))
+	for _, c := range commands {
+		if c != "forget" {
+			available = append(available, c)
+		}
+	}
+	return available
 }
 
 // handleCapabilityQuery responds with the list of supported extended command features.
@@ -630,7 +747,8 @@ func (s *Service) handleCapabilityQuery(cmd string) {
 		return
 	}
 
-	if commands, ok := capabilityMap[cmd]; ok {
+	if _, ok := capabilityMap[cmd]; ok {
+		commands := s.capabilityCommands(cmd)
 		s.sendExtendedResponse(fmt.Sprintf("cap:%s:count:%d", cmd, len(commands)))
 		for _, c := range commands {
 			s.sendExtendedResponse(fmt.Sprintf("cap:%s:%s", cmd, c))

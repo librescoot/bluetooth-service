@@ -36,3 +36,55 @@ func TestSystemTimeArgUsesLocalZone(t *testing.T) {
 		t.Errorf("round-trip = %v, want %v", parsed.UTC(), time.Unix(epoch, 0).UTC())
 	}
 }
+
+// The single-bond delete was a silent no-op in the nRF until v2.8.0-ls, so the
+// gate has to answer no for anything older and for a version it cannot read.
+// Answering yes there would have the phone report both halves of the bond
+// cleared while the scooter kept its half.
+func TestNrfBondDeleteSupported(t *testing.T) {
+	tests := []struct {
+		version string
+		want    bool
+	}{
+		{"v2.8.0-ls", true},
+		{"2.8.0", true},
+		{"v2.8.1-ls", true},
+		{"v2.9.0-ls", true},
+		{"v3.0.0-ls", true},
+		{"v2.8.0-3-gabc123-ls", true},
+		{"v2.7.2-ls", false},
+		{"v2.7.2-5-gdeadbee-ls", false},
+		{"v1.12.0", false},
+		{"", false},
+		{"not-a-version", false},
+	}
+
+	for _, tt := range tests {
+		if got := nrfBondDeleteSupported(tt.version); got != tt.want {
+			t.Errorf("nrfBondDeleteSupported(%q) = %v, want %v", tt.version, got, tt.want)
+		}
+	}
+}
+
+// cap:ble is what the app probes before offering to clear the scooter side of a
+// bond, so it has to track the nRF rather than what this binary was built with.
+func TestCapabilityCommandsForBLETracksFirmware(t *testing.T) {
+	supported := capabilityCommandsFor("ble", func() bool { return true })
+	if len(supported) != 1 || supported[0] != "forget" {
+		t.Errorf("ble capabilities on new firmware = %v, want [forget]", supported)
+	}
+
+	unsupported := capabilityCommandsFor("ble", func() bool { return false })
+	if len(unsupported) != 0 {
+		t.Errorf("ble capabilities on old firmware = %v, want none", unsupported)
+	}
+
+	// Other categories are fixed at build time and must not consult the nRF.
+	nav := capabilityCommandsFor("nav", func() bool {
+		t.Error("nav capabilities consulted the nRF firmware version")
+		return false
+	})
+	if len(nav) != len(capabilityMap["nav"]) {
+		t.Errorf("nav capabilities = %v, want %v", nav, capabilityMap["nav"])
+	}
+}
