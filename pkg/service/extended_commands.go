@@ -79,6 +79,14 @@ func (s *Service) sendExtendedResponse(response string) {
 
 	if err := writeUARTMessageString(s.usock, ble.TypeExtended, ble.TypeExtendedResponse, response); err != nil {
 		s.log.Errorf("Failed to send extended response: %v", err)
+	} else {
+		// Log the reply, not just the request. Without this a command that
+		// was answered and a command whose answer never reached the phone
+		// look identical in the journal, which is the shape of every
+		// extended-command problem worth debugging. The nRF drops a
+		// notification it cannot queue and reports nothing back, so this is
+		// the last point where the reply is known to exist.
+		s.log.Infof("Sent extended response: %s", response)
 	}
 	s.lastExtRespTime = time.Now()
 }
