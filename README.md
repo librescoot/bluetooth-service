@@ -1,161 +1,86 @@
 # Librescoot Bluetooth Service
 
-The Librescoot Bluetooth Service acts as a communication bridge between an nRF52 microcontroller and a Redis-based backend system. It facilitates control and monitoring of vehicle components through BLE connectivity, including lock/unlock commands, battery status, and mileage synchronization.
-
 Part of the [Librescoot](https://librescoot.org/) open-source platform.
 
-## Features
+The Bluetooth Service connects the vehicle's nRF52 controller to the Librescoot Redis/Valkey IPC bus. It exchanges controller state and commands over the nRF52 serial USOCK link, exposing that functionality to BLE clients through the controller firmware.
+## Capabilities
 
-- Serial communication with nRF52 using USOCK protocol over CBOR
-- Redis-based state management via redis-ipc library
-- BLE pairing management and device connectivity
-- Bidirectional message forwarding between nRF52 and Redis
-- Vehicle state synchronization (locks, battery, mileage)
-- Fault tracking and reporting via FaultSet API
-- Configurable logging levels
-- Build-time version information embedded in binary
-- Graceful shutdown on signal interrupts
+- Synchronizes vehicle, battery, mileage, firmware, navigation, USB, and power-management state between Redis/Valkey and the nRF52.
+- Handles controller-originated BLE actions, including pairing, lock and vehicle state, keycard, navigation, alarm, time, USB, settings, power-management, and LTC charger requests.
+- Consumes commands from the `scooter:ble` queue for advertising, bonding, LTC control, data-stream synchronization, and firmware-update requests.
+- Performs nRF52 firmware discovery and optional startup/forced updates from its firmware directory.
+- Receives BLE OTA bundles, stages them, and hands MDB or DBC artifacts to the update path.
+- Reports serial and nRF initialization faults through Redis/Valkey.
 
-## Dependencies
+## Operation and interfaces
 
-- `github.com/librescoot/redis-ipc` - Redis-based IPC library for service communication
-- `github.com/tarm/serial` - Serial port communication
-- `github.com/fxamacker/cbor/v2` - CBOR encoding/decoding for USOCK protocol
+The service starts a serial USOCK connection and Redis/Valkey hash watchers. It subscribes to `vehicle`, `battery:0`, `battery:1`, `power-manager`, `engine-ecu`, `system`, `ble`, `navigation`, `usb`, and `keycard`; initial state is synchronized when the watchers start.
 
-## System Architecture
+It processes these Redis/Valkey list commands on `scooter:ble`:
 
-The service operates around a central `service` package that manages:
-- Connection to the nRF52 via the `usock` package
-- Connection to the Redis server via the `redis-ipc` library
-- Handling incoming messages from the serial device
-- Watching for outgoing commands from Redis
-- Translating and forwarding messages/commands between the serial interface and Redis
-- Managing vehicle state updates (battery status, locks, mileage, etc.)
+- `advertising-start-with-whitelisting`, `advertising-restart-no-whitelisting`, and `advertising-stop`
+- `delete-bond`, `delete-all-bonds`, and `remove`
+- `ltc-enable`, `ltc-disable`, `ltc-force-enable`, `ltc-force-disable`, and `ltc-status`
+- `data-stream-sync` and `firmware-update`
 
-### Key Components
+BLE extended-command requests are topic-prefixed strings. The implementation supports navigation, keycard, USB mode, time, settings, status, alarm, LTC, BLE bond removal, power-management, and capability queries. Generic settings reads and writes use the `settings:schema` value published by the settings service; writes reject unknown or read-only keys and validate the schema types that the service understands. Clients should use the `cap` query rather than hard-code the available extended-command set.
 
-- **Main Application (`cmd/bluetooth-service`)**: Initializes connections, sets up the service, and handles startup/shutdown.
-- **Service (`pkg/service`)**: Core logic for message handling, Redis interaction, and state management.
-- **USOCK (`pkg/usock`)**: Handles the custom serial communication protocol with the nRF52 microcontroller.
-- **BLE (`pkg/ble`)**: BLE-specific data structures and constants.
-- **Logger (`pkg/logger`)**: Leveled logging with systemd/journald integration.
+## Configuration
 
-## Building and Running
+Configuration is supplied as command-line flags:
 
-To build the service:
+| Flag | Default | Purpose |
+| --- | --- | --- |
+| `--serial` | `/dev/ttymxc1` | nRF52 serial device |
+| `--baud` | `115200` | Serial baud rate |
+| `--redis-addr` | `localhost:6379` | Redis/Valkey address |
+| `--log-level` | `3` | Log level: `0` none through `4` debug |
+| `--firmware-dir` | service default | Directory containing nRF firmware files |
+| `--auto-update` | `true` | Update nRF firmware at startup when a newer version is available |
+| `--ota-staging-dir` | service default | Directory for incoming BLE OTA bundles |
+| `--version` | — | Print the build version and exit |
 
-```bash
-make build
+The production recipe installs the firmware updater and bundled firmware under `/usr/share/nrf-fw/`; its systemd unit starts `/usr/bin/bluetooth-service`.
+
+## Build and test
+
+A Go toolchain is required. The Makefile builds static Linux ARMv7 binaries by default.
+
+```sh
+make build       # ARMv7 binary: bin/bluetooth-service
+make build-host  # host binary: bin/bluetooth-service-host
+make test
 ```
 
-To build for the current host platform (development):
+Additional maintenance targets are `make lint`, `make fmt`, `make deps`, and `make clean`.
 
-```bash
-make build-host
+## Deployment and runtime dependencies
+
+The image recipe installs the executable at `/usr/bin/bluetooth-service` and the unit as `librescoot-bluetooth.service`. The unit runs as `root`, requires `valkey.service`, and restarts the process unconditionally.
+
+Runtime operation requires:
+
+- a reachable Redis or Valkey instance;
+- the configured serial device and an nRF52 running the matching USOCK/BLE firmware;
+- write access to the firmware and OTA staging locations when updates are enabled; and
+- `timedatectl` when BLE time-setting requests are used.
+
+For a packaged target, use the installed unit rather than a hand-written unit:
+
+```sh
+systemctl status librescoot-bluetooth.service
+journalctl -u librescoot-bluetooth.service
 ```
 
-The compiled binary will be available in the `bin` directory.
+## Operational and security notes
 
-### Development
-
-- `make build`: Build for ARM (default target, production)
-- `make build-arm`: Alias for `build`
-- `make build-amd64`: Build for AMD64
-- `make build-host`: Build for current host platform
-- `make dist`: Stripped ARM binary for distribution
-- `make test`: Run tests
-- `make lint`: Run golangci-lint
-- `make fmt`: Format code
-- `make deps`: Download and tidy dependencies
-- `make clean`: Remove build artifacts
-
-## Usage
-
-Run the service with default settings:
-
-```bash
-./bin/bluetooth-service
-```
-
-### Command Line Options
-
-- `--version`: Print version information and exit
-- `--serial`: Serial device path (default: `/dev/ttymxc1`)
-- `--baud`: Serial baud rate (default: `115200`)
-- `--redis-addr`: Redis server address (default: `localhost:6379`)
-- `--redis-pass`: Redis password (default: empty)
-- `--redis-db`: Redis database number (default: `0`)
-- `--log-level`: Log level (0=NONE, 1=ERROR, 2=WARN, 3=INFO, 4=DEBUG, default: 3)
-
-## Logging
-
-The service utilizes a leveled logging system with systemd/journald integration. When running under systemd, timestamps are omitted to avoid duplication with journald's timestamps.
-
-Log levels:
-- **0=NONE**: No logs
-- **1=ERROR**: Only error messages
-- **2=WARN**: Warning messages and errors
-- **3=INFO**: Informational messages, warnings, and errors (default)
-- **4=DEBUG**: Detailed debug messages and all above
-
-## BLE Interface
-
-### Power Requests
-
-The nRF52's `REQUESTS_POWER` characteristic (write) accepts UTF-8 string commands:
-
-| Command | Effect |
-|---------|--------|
-| `wakeup` | Exit hibernation mode |
-| `hibernate` | Request hibernation via iMX6 pm-service |
-| `reboot` | Soft reboot — forwarded to iMX6 pm-service |
-| `hard-reboot` | Power-cycle all rails via nRF52 hard reboot FSM (cuts power, waits, restores) |
-
-`hard-reboot` is only accepted during normal operation (stand-by, suspend, parked, ready-to-drive). It's rejected during active hibernation entry or if a hard reboot is already in progress.
-
-### Extended Commands
-
-The extended command characteristic (write, service 0x0400) accepts topic-prefixed string commands. Responses come back on the response characteristic (notify, same service).
-
-Available command topics:
-
-| Topic | Commands | Redis target |
-|-------|----------|-------------|
-| `nav` | `dest <lat>,<lon>[,<name>]`, `clear`, `fav:add`, `fav:delete`, `fav:navigate`, `fav:list` | `navigation` hash |
-| `keycard` | `list`, `count`, `add`, `remove` | `scooter:keycard` queue |
-| `usb` | `ums`, `normal` | `usb` hash |
-| `time` | `set <unix_timestamp>` | timedatectl |
-| `config` | `apn`, `hibernate-timer`, `update-channel`, `auto-standby-seconds` | `settings` hash |
-| `status` | `maps-available`, `navigation-available`, `version:mdb`, `version:dbc` | various hashes |
-| `alarm` | `enable`, `disable`, `arm`, `disarm`, `start`, `stop` | `scooter:alarm` queue |
-| `cap` | `list`, `<topic>` | (local) |
-
-Responses follow the format `<topic>:ok`, `<topic>:error:<reason>`, or `<topic>:<data>`.
-
-## Fault Tracking
-
-The service reports faults via the FaultSet API to the `ble:fault` Redis key:
-
-| Code | Description |
-|------|-------------|
-| 1    | Serial port communication error |
-| 2    | nRF52 initialization error |
+- The service is a privileged bridge between wireless commands and vehicle services. Restrict serial-device access and protect the Redis/Valkey IPC endpoint from untrusted clients.
+- A BLE time request invokes `timedatectl set-time`; only authorize BLE peers that may change the system clock.
+- Firmware update and OTA staging paths contain executable update inputs. Keep them service-owned and monitor update failures in the journal and Redis/Valkey fault state.
+- Send `SIGTERM` or `SIGINT` for a coordinated shutdown; the service stops the controller link before exiting.
 
 ## License
 
-This project is dual-licensed. The source code is available under the
-[Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License][cc-by-nc-sa].
-The maintainers reserve the right to grant separate licenses for commercial distribution; please contact the maintainers to discuss commercial licensing.
-
-[![CC BY-NC-SA 4.0][cc-by-nc-sa-image]][cc-by-nc-sa]
-
-[cc-by-nc-sa]: http://creativecommons.org/licenses/by-nc-sa/4.0/
-[cc-by-nc-sa-image]: https://licensebuttons.net/l/by-nc-sa/4.0/88x31.png
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
----
+This project is licensed under the [Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License](LICENSE).
 
 Made with ❤️ by the Librescoot community

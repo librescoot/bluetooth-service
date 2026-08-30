@@ -18,7 +18,6 @@ import (
 
 var version = "dev"
 
-// Configuration flags
 var (
 	serialDevice = flag.String("serial", "/dev/ttymxc1", "Serial device path")
 	baudRate     = flag.Int("baud", 115200, "Serial baud rate")
@@ -30,7 +29,6 @@ var (
 	otaStaging   = flag.String("ota-staging-dir", ota.DefaultStagingDir, "Staging directory for BLE OTA bundle transfers")
 )
 
-// Redis keys
 const (
 	KeyBatterySlot1    = "battery:0"
 	KeyBatterySlot2    = "battery:1"
@@ -43,7 +41,6 @@ const (
 	KeyBLECommand      = "ble"
 )
 
-// Battery state constants
 const (
 	BatteryStateUnknown = 0
 	BatteryStateAsleep  = 1
@@ -128,7 +125,6 @@ func main() {
 		log.Fatalf("Failed to bootstrap service: %v", err)
 	}
 
-	// Start the command watcher goroutine
 	go svc.WatchRedisCommands()
 
 	log.Infof("Initial state loaded via StartWithSync callbacks")

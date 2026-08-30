@@ -18,7 +18,6 @@ const (
 	SyncByte2        = 0xD9
 )
 
-// State machine states
 const (
 	StateSync1 = iota
 	StateSync2
@@ -32,10 +31,10 @@ const (
 	StatePayloadCRC2
 )
 
-// State represents the state of the USOCK state machine
 type State int
 
-// Frame represents a USOCK frame
+// Frame wire format is sync, ID, little-endian length, header CRC, payload, payload CRC.
+// Both checksums use CRC-16/ARC; the header CRC covers the bytes through length.
 type Frame struct {
 	ID         byte
 	PayloadLen uint16
@@ -44,11 +43,11 @@ type Frame struct {
 	PayloadCRC uint16
 }
 
-// Payload represents a received message payload
+// Payload is the validated frame data delivered to the handler.
 type Payload struct {
-	ID   byte   // Frame ID
-	Data []byte // Payload data
-	Size int    // Size of the payload
+	ID   byte
+	Data []byte
+	Size int
 }
 
 // Stats holds link-quality counters, cumulative since the port was opened.
@@ -60,7 +59,6 @@ type Stats struct {
 	PayloadCRCFails uint64 // frames rejected on payload CRC
 }
 
-// USOCK represents a UART socket connection to the nRF52
 type USOCK struct {
 	port         *serial.Port
 	handler      func(*Payload)
@@ -83,7 +81,6 @@ type USOCK struct {
 	stats   Stats
 }
 
-// CRC-16/ARC lookup table
 var crc16Table = []uint16{
 	0x0000, 0xC0C1, 0xC181, 0x0140, 0xC301, 0x03C0, 0x0280, 0xC241, 0xC601, 0x06C0, 0x0780, 0xC741,
 	0x0500, 0xC5C1, 0xC481, 0x0440, 0xCC01, 0x0CC0, 0x0D80, 0xCD41, 0x0F00, 0xCFC1, 0xCE81, 0x0E40,
@@ -109,9 +106,7 @@ var crc16Table = []uint16{
 	0x4100, 0x81C1, 0x8081, 0x4040,
 }
 
-// New creates a new USOCK connection
 func New(devicePath string, baudRate int, handler func(*Payload), log *logger.Logger) (*USOCK, error) {
-	// First clear UART attributes to ensure a clean start
 	if err := clearUARTAttributes(devicePath); err != nil {
 		return nil, fmt.Errorf("failed to clear UART attributes: %v", err)
 	}
@@ -125,31 +120,27 @@ func New(devicePath string, baudRate int, handler func(*Payload), log *logger.Lo
 		ReadTimeout: 500 * time.Millisecond,
 	}
 
-	// Open the port
 	port, err := serial.OpenPort(config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open serial port: %v", err)
 	}
 
-	// Create USOCK instance
 	usock := &USOCK{
 		port:         port,
 		handler:      handler,
-		errorHandler: nil, // Can be set later via SetErrorHandler
+		errorHandler: nil,
 		log:          log,
 		stopChan:     make(chan struct{}),
 		state:        StateSync1,
 		buffer:       make([]byte, 0, 256),
 	}
 
-	// Start read loop
 	usock.wg.Add(1)
 	go usock.readLoop()
 
 	return usock, nil
 }
 
-// clearUARTAttributes clears the UART attributes to ensure a clean start
 func clearUARTAttributes(devicePath string) error {
 	// With tarm/serial, we can't directly manipulate the terminal attributes
 	// Instead, we'll open the port with default settings and then close it
@@ -167,19 +158,17 @@ func clearUARTAttributes(devicePath string) error {
 		return fmt.Errorf("failed to open serial port for attribute clearing: %v", err)
 	}
 
-	// Close the port to release resources
 	err = port.Close()
 	if err != nil {
 		return fmt.Errorf("failed to close serial port after attribute clearing: %v", err)
 	}
 
-	// Wait a moment for the port to fully close
 	time.Sleep(100 * time.Millisecond)
 
 	return nil
 }
 
-// WriteWithFrameID sends data to the nRF52 with a specific frame ID
+// WriteWithFrameID holds the UART lock for a complete encoded frame so writers cannot interleave.
 func (u *USOCK) WriteWithFrameID(frameID byte, data []byte) error {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -188,51 +177,38 @@ func (u *USOCK) WriteWithFrameID(frameID byte, data []byte) error {
 		return fmt.Errorf("payload size exceeds maximum length of %d bytes", MaxPayloadLength)
 	}
 
-	// Create a frame with the specified ID
 	frame := Frame{
 		ID:         frameID,
 		PayloadLen: uint16(len(data)),
 		Payload:    data,
 	}
 
-	// Construct the header first (sync bytes + frame ID + payload length)
 	header := []byte{SyncByte1, SyncByte2, frame.ID}
 	lenBytes := make([]byte, 2)
 	binary.LittleEndian.PutUint16(lenBytes, frame.PayloadLen)
 	header = append(header, lenBytes...)
 
-	// Calculate header CRC over the entire header at once
 	frame.HeaderCRC = calculateCRC16(header, 0)
 
-	// Calculate payload CRC over the entire payload at once
 	frame.PayloadCRC = calculateCRC16(frame.Payload, 0)
 
-	// Log detailed frame information
 	u.log.Debugf("TX Frame: ID=0x%02x, Len=%d, HeaderCRC=0x%04x, PayloadCRC=0x%04x",
 		frame.ID, frame.PayloadLen, frame.HeaderCRC, frame.PayloadCRC)
 
-	// Log the payload in hex format for debugging
 	u.log.Debugf("TX Payload: %s", hex.EncodeToString(frame.Payload))
 
-	// Construct the complete frame in a single buffer to send all at once
-	completeFrame := make([]byte, 0, 7+len(frame.Payload)+2) // 7 bytes header + payload + 2 bytes CRC
+	completeFrame := make([]byte, 0, 7+len(frame.Payload)+2)
 
-	// Add header (sync bytes + frame ID + payload length)
 	completeFrame = append(completeFrame, header...)
 
-	// Add header CRC (little-endian)
 	completeFrame = append(completeFrame, byte(frame.HeaderCRC&0xFF), byte((frame.HeaderCRC>>8)&0xFF))
 
-	// Add payload
 	completeFrame = append(completeFrame, frame.Payload...)
 
-	// Add payload CRC (little-endian)
 	completeFrame = append(completeFrame, byte(frame.PayloadCRC&0xFF), byte((frame.PayloadCRC>>8)&0xFF))
 
-	// Log the complete frame in hex format for debugging
 	u.log.Debugf("TX Complete Frame: %s", hex.EncodeToString(completeFrame))
 
-	// Write the complete frame in a single operation
 	if _, err := u.port.Write(completeFrame); err != nil {
 		return fmt.Errorf("failed to write frame: %v", err)
 	}
@@ -240,21 +216,17 @@ func (u *USOCK) WriteWithFrameID(frameID byte, data []byte) error {
 	return nil
 }
 
-// Write sends data to the nRF52
-// This is kept for backward compatibility but now uses WriteWithFrameID internally
 func (u *USOCK) Write(data []byte) error {
 	if len(data) == 0 {
 		return fmt.Errorf("cannot write empty data")
 	}
 
-	// Use the first byte as the frame ID and the rest as payload
 	frameID := data[0]
 	payload := data[1:]
 
 	return u.WriteWithFrameID(frameID, payload)
 }
 
-// SetErrorHandler sets a callback for serial communication errors
 func (u *USOCK) SetErrorHandler(handler func(error)) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -272,7 +244,6 @@ func (u *USOCK) SetSyncFrameIDs(ids ...byte) {
 	u.syncFrameIDs = m
 }
 
-// GetStats returns a snapshot of the link-quality counters.
 func (u *USOCK) GetStats() Stats {
 	u.statsMu.Lock()
 	defer u.statsMu.Unlock()
@@ -290,7 +261,6 @@ func (u *USOCK) Close() error {
 	return err
 }
 
-// readLoop continuously reads from the serial port
 func (u *USOCK) readLoop() {
 	defer u.wg.Done()
 
@@ -330,9 +300,7 @@ func (u *USOCK) readLoop() {
 	}
 }
 
-// processByte processes a single byte through the state machine
 func (u *USOCK) processByte(b byte) {
-	// Process the byte based on the current state
 	switch u.state {
 	case StateSync1:
 		if b == SyncByte1 {
@@ -364,7 +332,6 @@ func (u *USOCK) processByte(b byte) {
 		u.buffer = append(u.buffer, b)
 		u.state = StateHeaderCRC1
 
-		// Validate payload length
 		if u.frame.PayloadLen > MaxPayloadLength {
 			u.log.Debugf("RX Error: Invalid payload length: %d (max: %d)",
 				u.frame.PayloadLen, MaxPayloadLength)
@@ -376,10 +343,8 @@ func (u *USOCK) processByte(b byte) {
 	case StateHeaderCRC2:
 		u.frame.HeaderCRC |= uint16(b) << 8
 
-		// Calculate CRC for the header (sync bytes + frame ID + payload length)
 		calculatedCRC := calculateCRC16(u.buffer, 0)
 
-		// Validate header CRC
 		if calculatedCRC != u.frame.HeaderCRC {
 			u.log.Debugf("RX Error: Invalid header CRC: calculated=0x%04x, received=0x%04x",
 				calculatedCRC, u.frame.HeaderCRC)
@@ -390,15 +355,13 @@ func (u *USOCK) processByte(b byte) {
 			return
 		}
 
-		// Prepare for payload
 		u.frame.Payload = make([]byte, 0, u.frame.PayloadLen)
-		u.buffer = u.buffer[:0] // Clear buffer for payload CRC calculation
+		u.buffer = u.buffer[:0]
 		u.state = StatePayload
 	case StatePayload:
 		u.frame.Payload = append(u.frame.Payload, b)
 		u.buffer = append(u.buffer, b)
 
-		// Check if we've received the entire payload
 		if uint16(len(u.frame.Payload)) >= u.frame.PayloadLen {
 			u.state = StatePayloadCRC1
 		}
@@ -408,10 +371,8 @@ func (u *USOCK) processByte(b byte) {
 	case StatePayloadCRC2:
 		u.frame.PayloadCRC |= uint16(b) << 8
 
-		// Calculate CRC for the payload
 		calculatedCRC := calculateCRC16(u.buffer, 0)
 
-		// Validate payload CRC
 		if calculatedCRC != u.frame.PayloadCRC {
 			u.log.Debugf("RX Error: Invalid payload CRC: calculated=0x%04x, received=0x%04x",
 				calculatedCRC, u.frame.PayloadCRC)
@@ -422,7 +383,6 @@ func (u *USOCK) processByte(b byte) {
 			return
 		}
 
-		// Log successful frame reception with detailed information
 		u.log.Debugf("RX Frame: ID=0x%02x, Len=%d, HeaderCRC=0x%04x, PayloadCRC=0x%04x",
 			u.frame.ID, u.frame.PayloadLen, u.frame.HeaderCRC, u.frame.PayloadCRC)
 		u.log.Debugf("RX Payload: %s", hex.EncodeToString(u.frame.Payload))
@@ -447,12 +407,11 @@ func (u *USOCK) processByte(b byte) {
 			}
 		}
 
-		// Reset state machine
 		u.state = StateSync1
 	}
 }
 
-// calculateCRC16 calculates the CRC16 checksum for the given data
+// calculateCRC16 implements the CRC-16/ARC checksum required by USOCK frames.
 func calculateCRC16(data []byte, seed uint16) uint16 {
 	crc := seed
 	for _, b := range data {
