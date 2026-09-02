@@ -559,3 +559,26 @@ func TestFailureClearsToIdleAndAllowsNewTransfer(t *testing.T) {
 		t.Fatalf("new START after failure rejected/busy: %x", ack)
 	}
 }
+
+func TestSameVersionStartRejected(t *testing.T) {
+	r, fw, _, _ := newTestReceiver(t)
+	r.installedVersion = func(byte) string { return "1.3.0" }
+	data, sha := makeBundle(100)
+
+	msg := EncodeStart(Start{Version: 1, Component: ComponentMDB, ChunkSize: 240,
+		TotalSize: uint32(len(data)), SHA256: sha, BundleID: "librescoot-unu-mdb-v1.3.0"})
+	r.HandleControl(msg)
+	if ack := fw.lastOfOp(OpStartAck); ack == nil || ack[1] != StartAlreadyInstalled {
+		t.Fatalf("same-version bundle accepted: %x", ack)
+	}
+	if r.state != stateIdle {
+		t.Fatalf("state = %v, want idle", r.state)
+	}
+
+	msg = EncodeStart(Start{Version: 1, Component: ComponentMDB, ChunkSize: 240,
+		TotalSize: uint32(len(data)), SHA256: sha, BundleID: "librescoot-unu-mdb-v1.4.0"})
+	r.HandleControl(msg)
+	if ack := fw.lastOfOp(OpStartAck); ack == nil || ack[1] != StartNew {
+		t.Fatalf("newer bundle rejected: %x", ack)
+	}
+}

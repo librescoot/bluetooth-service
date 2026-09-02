@@ -79,6 +79,10 @@ type Receiver struct {
 	writer func() FrameWriter
 	inst   map[byte]Installer
 
+	// installedVersion returns version:<comp>[version_id] for a component,
+	// "" when unknown; replaced in tests
+	installedVersion func(component byte) string
+
 	staging *Staging
 
 	mu              sync.Mutex
@@ -102,7 +106,7 @@ func New(log *logger.Logger, ipcCli *ipc.Client, writer func() FrameWriter, stag
 	if stagingDir == "" {
 		stagingDir = DefaultStagingDir
 	}
-	return &Receiver{
+	r := &Receiver{
 		log:       log,
 		ipcCli:    ipcCli,
 		writer:    writer,
@@ -110,6 +114,17 @@ func New(log *logger.Logger, ipcCli *ipc.Client, writer func() FrameWriter, stag
 		staging:   NewStaging(stagingDir),
 		lastPhase: PhaseIdle,
 	}
+	r.installedVersion = func(component byte) string {
+		if ipcCli == nil {
+			return ""
+		}
+		v, err := ipcCli.HGet("version:"+componentName(component), "version_id")
+		if err != nil {
+			return ""
+		}
+		return v
+	}
+	return r
 }
 
 // send transmits a status message to the phone; drops silently when the link
@@ -248,6 +263,17 @@ func (r *Receiver) handleStartLocked(payload []byte) {
 			start.Version, start.Component, start.ChunkSize, start.TotalSize)
 		r.send(EncodeStartAck(StartBadParams, 0, windowChunks, ackEvery, MaxChunkSize))
 		return
+	}
+
+	// Refuse a bundle for the version that board already runs here, at the
+	// cost of one round trip, instead of after the whole transfer when
+	// update-service would refuse it anyway.
+	if target := versionFromBundleID(start.BundleID); target != "" {
+		if installed := r.installedVersion(start.Component); sameVersion(target, installed) {
+			r.log.Warnf("OTA: %s is already installed on %s, refusing START", target, componentName(start.Component))
+			r.send(EncodeStartAck(StartAlreadyInstalled, 0, windowChunks, ackEvery, MaxChunkSize))
+			return
+		}
 	}
 
 	// a START while receiving replaces the session: either the phone

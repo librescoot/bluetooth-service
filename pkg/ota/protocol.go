@@ -33,12 +33,13 @@ const (
 
 // START_ACK status codes.
 const (
-	StartResume     = 0x00 // resuming an interrupted transfer at resume_offset
-	StartNew        = 0x01 // fresh transfer from offset 0
-	StartNoSpace    = 0x10 // not enough free staging space
-	StartBusy       = 0x11 // another transfer session is active
-	StartBadParams  = 0x12 // malformed START or unsupported component/chunk size
-	StartInstalling = 0x13 // an install is in progress; poll with STATUS_REQ
+	StartResume           = 0x00 // resuming an interrupted transfer at resume_offset
+	StartNew              = 0x01 // fresh transfer from offset 0
+	StartNoSpace          = 0x10 // not enough free staging space
+	StartBusy             = 0x11 // another transfer session is active
+	StartBadParams        = 0x12 // malformed START or unsupported component/chunk size
+	StartInstalling       = 0x13 // an install is in progress; poll with STATUS_REQ
+	StartAlreadyInstalled = 0x14 // the bundle's version is already running on that board
 )
 
 // ACK flag bits.
