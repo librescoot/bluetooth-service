@@ -29,6 +29,7 @@ func (s *Service) SubscribeToRedisChannels() {
 		KeyNavigation,      // "navigation"
 		KeyUSB,             // "usb"
 		KeyKeycard,         // "keycard"
+		KeyAlarm,           // "alarm"
 	}
 
 	// Ensure only unique keys are subscribed
@@ -163,6 +164,33 @@ func (s *Service) SubscribeToRedisChannels() {
 						}
 						if err := writeUARTMessage(s.usock, ble.TypeScooterInfo, ble.TypeUMSStatus, mode); err != nil {
 							s.log.Errorf("Error sending UMS status update: %v", err)
+						}
+					}
+
+				case KeyAlarm:
+					switch field {
+					case "status":
+						if err := writeUARTMessageString(s.usock, ble.TypeAlarm, ble.TypeAlarmStatus, value); err != nil {
+							s.log.Errorf("Error sending alarm status update: %v", err)
+						}
+						// motion-service arms the accelerometer for these states and no
+						// others, so they are when movement can wake a hibernating board.
+						armed := uint16(0)
+						switch value {
+						case "armed", "level-1-triggered", "level-2-triggered":
+							armed = 1
+						}
+						if err := writeUARTMessage(s.usock, ble.TypeAlarm, ble.TypeAlarmMotionArmed, armed); err != nil {
+							s.log.Errorf("Error sending alarm motion-armed update: %v", err)
+						}
+					case "trigger:source":
+						// alarm-service publishes only the source, so the timestamp is read back.
+						timestamp, err := s.ipc.HGet(KeyAlarm, "trigger:timestamp")
+						if err != nil {
+							s.log.Errorf("Error reading alarm trigger timestamp: %v", err)
+						}
+						if err := writeUARTMessageString(s.usock, ble.TypeAlarm, ble.TypeAlarmLastTrigger, value+","+timestamp); err != nil {
+							s.log.Errorf("Error sending alarm trigger update: %v", err)
 						}
 					}
 

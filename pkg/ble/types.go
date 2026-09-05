@@ -24,6 +24,7 @@ const (
 	TypePowerMux                      MessageType = 0x0100     // BLE_SCOOTER_SERVICE_POWER_MUX_STATE
 	TypeLTCControl                    MessageType = 0x0120     // BLE_SCOOTER_SERVICE_LTC_CONTROL
 	TypeAccelerometer                 MessageType = 0x0200     // BLE_SCOOTER_SERVICE_ACCELEROMETER
+	TypeAlarm                         MessageType = 0x0220     // BLE_SCOOTER_SERVICE_ALARM
 	TypeExtended                      MessageType = 0x0400     // BLE_SCOOTER_SERVICE_EXTENDED
 	TypeOTA                           MessageType = 0x0500     // BLE_SCOOTER_SERVICE_OTA (GATT service block; USOCK side uses raw frames)
 	TypeLink                          MessageType = 0xA0A0     // BLE_SCOOTER_SERVICE_LINK (UART link management, USOCK only)
@@ -148,6 +149,11 @@ const (
 	// Accelerometer sub-types
 	TypeAccelerometerWakeUpSuspend     SubType = 1 // BLE_SCOOTER_SERVICE_ACCELEROMETER_WAKE_UP_SUSPEND
 	TypeAccelerometerWakeUpHibernation SubType = 2 // BLE_SCOOTER_SERVICE_ACCELEROMETER_WAKE_UP_HIBERNATION
+
+	// Sub-type 3 (wake sources) is composed by the nRF and never written from here.
+	TypeAlarmStatus      SubType = 1 // BLE_SCOOTER_SERVICE_ALARM_STATUS
+	TypeAlarmLastTrigger SubType = 2 // BLE_SCOOTER_SERVICE_ALARM_LAST_TRIGGER
+	TypeAlarmMotionArmed SubType = 4 // BLE_SCOOTER_SERVICE_ALARM_MOTION_ARMED
 
 	// Extended service sub-types
 	TypeExtendedCommand  SubType = 1 // BLE_SCOOTER_SERVICE_EXTENDED_COMMAND

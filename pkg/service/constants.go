@@ -19,6 +19,7 @@ const (
 	KeyNavigation     = "navigation"
 	KeyUSB            = "usb"
 	KeyKeycard        = "keycard"
+	KeyAlarm          = "alarm"
 )
 
 // Firmware update paths
