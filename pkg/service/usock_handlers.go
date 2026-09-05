@@ -1,9 +1,11 @@
 package service
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	ipc "github.com/librescoot/redis-ipc"
 
@@ -1194,10 +1196,15 @@ func (s *Service) writeFaultToRedis(key, source string, code int, message, fault
 	}
 }
 
-// accelerometerWakePayload maps an incoming ACCELEROMETER message to the
-// `bmx:interrupt` payload alarm-service expects ("wake-suspend" /
-// "wake-hibernation"), or returns ok=false if the message is not a wake
-// notification.
+// motion-service's motion:interrupt payload, which alarm-service consumes.
+type motionEvent struct {
+	Type      string `json:"type"`
+	Timestamp int64  `json:"timestamp"`
+}
+
+// accelerometerWakePayload classifies an incoming ACCELEROMETER message as
+// "wake-suspend" or "wake-hibernation", or returns ok=false if the message is
+// not a wake notification.
 //
 // Two on-the-wire encodings are recognized:
 //
@@ -1251,7 +1258,19 @@ func (s *Service) handleAccelerometerMessage(subType ble.SubType, value interfac
 		s.log.Debugf("Received accelerometer wake-up: %s", payload)
 	}
 
-	if _, err := s.ipc.Publish("bmx:interrupt", payload); err != nil {
+	// alarm-service's vocabulary is "edge" or "wake-hibernation"; a suspend wake
+	// is just another edge.
+	evt := motionEvent{Timestamp: time.Now().UnixMilli(), Type: "edge"}
+	if payload == "wake-hibernation" {
+		evt.Type = "wake-hibernation"
+	}
+	encoded, err := json.Marshal(evt)
+	if err != nil {
+		s.log.Errorf("Failed to encode accelerometer wake motion event: %v", err)
+		return
+	}
+
+	if _, err := s.ipc.Publish("motion:interrupt", string(encoded)); err != nil {
 		s.log.Errorf("Failed to publish accelerometer wake interrupt: %v", err)
 	}
 }
