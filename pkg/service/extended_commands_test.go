@@ -66,6 +66,32 @@ func TestNrfBondDeleteSupported(t *testing.T) {
 	}
 }
 
+func TestDBCWaitReached(t *testing.T) {
+	tests := []struct {
+		name        string
+		command     string
+		power       string
+		ready       string
+		wantReached bool
+	}{
+		{"on and ready", "on-wait", "on", "true", true},
+		{"on but not ready", "on-wait", "on", "false", false},
+		{"stale ready while off", "on-wait", "off", "true", false},
+		{"off", "off-wait", "off", "false", true},
+		{"off ignores stale ready", "off-wait", "off", "true", true},
+		{"still on", "off-wait", "on", "false", false},
+		{"unknown command", "wait", "on", "true", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := dbcWaitReached(tt.command, tt.power, tt.ready); got != tt.wantReached {
+				t.Errorf("dbcWaitReached(%q, %q, %q) = %v, want %v", tt.command, tt.power, tt.ready, got, tt.wantReached)
+			}
+		})
+	}
+}
+
 // cap:ble is what the app probes before offering to clear the scooter side of a
 // bond, so it has to track the nRF rather than what this binary was built with.
 func TestCapabilityCommandsForBLETracksFirmware(t *testing.T) {
@@ -86,5 +112,13 @@ func TestCapabilityCommandsForBLETracksFirmware(t *testing.T) {
 	})
 	if len(nav) != len(capabilityMap["nav"]) {
 		t.Errorf("nav capabilities = %v, want %v", nav, capabilityMap["nav"])
+	}
+
+	dbc := capabilityCommandsFor("dbc", func() bool {
+		t.Error("dbc capabilities consulted the nRF firmware version")
+		return false
+	})
+	if len(dbc) != 5 {
+		t.Errorf("dbc capabilities = %v, want five commands", dbc)
 	}
 }

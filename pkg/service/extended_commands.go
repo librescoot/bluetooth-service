@@ -53,6 +53,8 @@ func (s *Service) handleExtendedCommandMessage(msgType ble.MessageType, absSubTy
 		s.handleSettingsSet(strings.TrimPrefix(cmdStr, "set:"))
 	} else if strings.HasPrefix(cmdStr, "pm:") {
 		s.handlePMCommand(strings.TrimPrefix(cmdStr, "pm:"))
+	} else if strings.HasPrefix(cmdStr, "dbc:") {
+		s.handleDBCCommand(strings.TrimPrefix(cmdStr, "dbc:"))
 	} else {
 		s.log.Warnf("Unknown extended command prefix: %s", cmdStr)
 		s.sendExtendedResponse("error:unknown command")
@@ -384,6 +386,172 @@ func (s *Service) handlePMCommand(cmd string) {
 	s.sendExtendedResponse("pm:error:unknown command")
 }
 
+const (
+	dbcWaitTimeout      = 60 * time.Second
+	dbcWaitPollInterval = 250 * time.Millisecond
+)
+
+// handleDBCCommand controls dashboard power without changing the vehicle state.
+func (s *Service) handleDBCCommand(cmd string) {
+	cmd = strings.TrimSpace(cmd)
+
+	switch cmd {
+	case "status":
+		power, ready, err := s.dbcPowerState()
+		if err != nil {
+			s.log.Errorf("Failed to read DBC power state: %v", err)
+			s.sendExtendedResponse("dbc:status:error:redis")
+			return
+		}
+		s.sendExtendedResponse(fmt.Sprintf("dbc:status:power:%s:ready:%s", power, ready))
+		return
+	case "on", "on-wait", "off", "off-wait":
+	default:
+		s.sendExtendedResponse("dbc:error:unknown command")
+		return
+	}
+
+	action := strings.TrimSuffix(cmd, "-wait")
+	if action == "off" {
+		vehicle, err := s.ipc.HGetAll(KeyVehicle)
+		if err != nil {
+			s.log.Errorf("Failed to read DBC update state: %v", err)
+			s.sendExtendedResponse(fmt.Sprintf("dbc:%s:error:redis", cmd))
+			return
+		}
+		if vehicle["dbc-updating"] == "true" {
+			s.sendExtendedResponse(fmt.Sprintf("dbc:%s:error:update-in-progress", cmd))
+			return
+		}
+	}
+
+	if err := ipc.SendRequest(s.ipc, "scooter:hardware", "dashboard:"+action); err != nil {
+		s.log.Errorf("Failed to forward DBC %s command: %v", cmd, err)
+		s.sendExtendedResponse(fmt.Sprintf("dbc:%s:error:redis", cmd))
+		return
+	}
+
+	if !strings.HasSuffix(cmd, "-wait") {
+		s.sendExtendedResponse(fmt.Sprintf("dbc:%s:ok", cmd))
+		return
+	}
+
+	s.startDBCWait(cmd)
+}
+
+func (s *Service) dbcPowerState() (power, ready string, err error) {
+	vehicle, err := s.ipc.HGetAll(KeyVehicle)
+	if err != nil {
+		return "", "", err
+	}
+	power = vehicle["dashboard:power"]
+	switch power {
+	case "on", "off":
+	default:
+		power = "unknown"
+	}
+
+	dashboard, err := s.ipc.HGetAll("dashboard")
+	if err != nil {
+		return "", "", err
+	}
+	ready = dashboard["ready"]
+	switch ready {
+	case "true", "false":
+	default:
+		ready = "unknown"
+	}
+	return power, ready, nil
+}
+
+func dbcWaitReached(cmd, power, ready string) bool {
+	switch cmd {
+	case "on-wait":
+		return power == "on" && ready == "true"
+	case "off-wait":
+		return power == "off"
+	default:
+		return false
+	}
+}
+
+func (s *Service) startDBCWait(cmd string) {
+	s.dbcWaitMu.Lock()
+	if s.dbcWaitCancel != nil {
+		close(s.dbcWaitCancel)
+	}
+	cancel := make(chan struct{})
+	s.dbcWaitCancel = cancel
+	s.dbcWaitMu.Unlock()
+
+	go func() {
+		defer func() {
+			s.dbcWaitMu.Lock()
+			if s.dbcWaitCancel == cancel {
+				s.dbcWaitCancel = nil
+			}
+			s.dbcWaitMu.Unlock()
+		}()
+
+		ticker := time.NewTicker(dbcWaitPollInterval)
+		defer ticker.Stop()
+		timer := time.NewTimer(dbcWaitTimeout)
+		defer timer.Stop()
+
+		for {
+			power, ready, err := s.dbcPowerState()
+			if !s.dbcWaitActive(cancel) {
+				return
+			}
+			if err != nil {
+				s.log.Errorf("Failed while waiting for DBC %s: %v", cmd, err)
+				s.sendDBCWaitResponse(cancel, fmt.Sprintf("dbc:%s:error:redis", cmd))
+				return
+			}
+			if dbcWaitReached(cmd, power, ready) {
+				s.sendDBCWaitResponse(cancel, fmt.Sprintf("dbc:%s:ok", cmd))
+				return
+			}
+
+			select {
+			case <-ticker.C:
+			case <-timer.C:
+				s.sendDBCWaitResponse(cancel, fmt.Sprintf("dbc:%s:error:timeout", cmd))
+				return
+			case <-cancel:
+				return
+			case <-s.stopCh:
+				return
+			}
+		}
+	}()
+}
+
+func (s *Service) dbcWaitActive(cancel chan struct{}) bool {
+	s.dbcWaitMu.Lock()
+	defer s.dbcWaitMu.Unlock()
+	return s.dbcWaitCancel == cancel
+}
+
+func (s *Service) sendDBCWaitResponse(cancel chan struct{}, response string) bool {
+	s.dbcWaitMu.Lock()
+	defer s.dbcWaitMu.Unlock()
+	if s.dbcWaitCancel != cancel {
+		return false
+	}
+	s.sendExtendedResponse(response)
+	return true
+}
+
+func (s *Service) cancelDBCWait() {
+	s.dbcWaitMu.Lock()
+	defer s.dbcWaitMu.Unlock()
+	if s.dbcWaitCancel != nil {
+		close(s.dbcWaitCancel)
+		s.dbcWaitCancel = nil
+	}
+}
+
 // handleAlarmCommand processes alarm commands by forwarding them to the
 // scooter:alarm Redis queue for processing by the alarm service.
 func (s *Service) handleAlarmCommand(cmd string) {
@@ -697,6 +865,7 @@ var capabilityMap = map[string][]string{
 	"ltc":     {"enable", "disable", "force-enable", "force-disable", "status"},
 	"ble":     {"forget"},
 	"pm":      {"hibernate-for <duration>", "hibernate-cancel"},
+	"dbc":     {"status", "on", "off", "on-wait", "off-wait"},
 	"ota":     {"transfer"}, // BLE OTA bundle transfer via the 0x0500 GATT service
 	"cap":     {"list", "<category>"},
 	"get":     {"<key>", "list", "list:<prefix>"},

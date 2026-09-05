@@ -70,6 +70,9 @@ type Service struct {
 	extRespMu       sync.Mutex
 	lastExtRespTime time.Time
 
+	dbcWaitMu     sync.Mutex
+	dbcWaitCancel chan struct{}
+
 	// Set when an LTC control command originated from a BLE extended
 	// command, so the USOCK response handler knows to relay the result
 	// back as an extended response.
@@ -313,6 +316,7 @@ func (s *Service) ClearFault(code int) {
 // never started.
 func (s *Service) Stop() {
 	s.StopSubscriptions()
+	s.cancelDBCWait()
 	if err := s.CloseUSock(); err != nil {
 		s.log.Errorf("Failed to close USOCK during shutdown: %v", err)
 	}

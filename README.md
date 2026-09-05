@@ -23,7 +23,16 @@ It processes these Redis/Valkey list commands on `scooter:ble`:
 - `ltc-enable`, `ltc-disable`, `ltc-force-enable`, `ltc-force-disable`, and `ltc-status`
 - `data-stream-sync` and `firmware-update`
 
-BLE extended-command requests are topic-prefixed strings. The implementation supports navigation, keycard, USB mode, time, settings, status, alarm, LTC, BLE bond removal, power-management, and capability queries. Generic settings reads and writes use the `settings:schema` value published by the settings service; writes reject unknown or read-only keys and validate the schema types that the service understands. Clients should use the `cap` query rather than hard-code the available extended-command set.
+BLE extended-command requests are topic-prefixed strings. The implementation supports navigation, keycard, USB mode, time, settings, status, alarm, LTC, BLE bond removal, power-management, DBC power, and capability queries. Generic settings reads and writes use the `settings:schema` value published by the settings service; writes reject unknown or read-only keys and validate the schema types that the service understands. Clients should use the `cap` query rather than hard-code the available extended-command set.
+
+DBC power commands do not unlock the vehicle or change its state:
+
+- `dbc:status` replies with `dbc:status:power:<on|off|unknown>:ready:<true|false|unknown>`.
+- `dbc:on` and `dbc:off` queue the power change and acknowledge it immediately.
+- `dbc:on-wait` replies once dashboard power is on and the DBC has published `ready=true`.
+- `dbc:off-wait` replies once vehicle-service reports dashboard power off.
+
+Wait commands time out after 60 seconds. DBC power-off is rejected while a DBC update is active; no force-off command is exposed over BLE.
 
 ## Configuration
 
