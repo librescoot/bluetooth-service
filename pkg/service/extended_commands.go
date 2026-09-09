@@ -27,7 +27,9 @@ func (s *Service) handleExtendedCommandMessage(msgType ble.MessageType, absSubTy
 
 	s.log.Infof("Received extended command: %s", cmdStr)
 
-	if strings.HasPrefix(cmdStr, "nav:") {
+	if strings.HasPrefix(cmdStr, "lock:") {
+		s.sendExtendedResponse(lockOverrideResponse(strings.TrimPrefix(cmdStr, "lock:"), s.callVehicleLock))
+	} else if strings.HasPrefix(cmdStr, "nav:") {
 		s.handleNavCommand(strings.TrimPrefix(cmdStr, "nav:"))
 	} else if strings.HasPrefix(cmdStr, "keycard:") {
 		s.handleKeycardCommand(strings.TrimPrefix(cmdStr, "keycard:"))
@@ -855,6 +857,7 @@ func (s *Service) handleBLEForget() {
 
 // capabilityMap maps each command category to its supported commands.
 var capabilityMap = map[string][]string{
+	"lock":    {"ignore-seatbox"}, // Availability is probed live from vehicle-service.
 	"nav":     {"dest", "clear", "fav:add", "fav:delete", "fav:navigate", "fav:list"},
 	"keycard": {"list", "count", "add:<uid>", "remove:<uid>"},
 	"usb":     {"ums", "normal"},
@@ -903,6 +906,13 @@ func capabilityCommandsFor(category string, bondDelete func() bool) []string {
 // "cap:<category>" returns the commands supported by that category.
 func (s *Service) handleCapabilityQuery(cmd string) {
 	cmd = strings.TrimSpace(cmd)
+
+	if cmd == "lock" {
+		for _, response := range lockCapabilityResponses(s.callVehicleLock) {
+			s.sendExtendedResponse(response)
+		}
+		return
+	}
 
 	if cmd == "list" {
 		categories := make([]string, 0, len(capabilityMap))
