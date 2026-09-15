@@ -211,7 +211,7 @@ func (s *Service) ensureTripResultSubscription() error {
 		return nil
 	}
 
-	sub, err := ipc.Subscribe[json.RawMessage](s.ipc, tripCommandResultKey, func(raw json.RawMessage) error {
+	sub, err := ipc.Subscribe[[]byte](s.ipc, tripCommandResultKey, func(raw []byte) error {
 		s.handleTripCommandResult(raw)
 		return nil
 	})
