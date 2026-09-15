@@ -39,6 +39,10 @@ type tripCommandResult struct {
 	Error  string `json:"error"`
 }
 
+func encodeTripResetRequest(request tripResetRequest) ([]byte, error) {
+	return json.Marshal(request)
+}
+
 func (s *Service) handleTripCommand(cmd string) {
 	switch strings.TrimSpace(cmd) {
 	case "get":
@@ -175,7 +179,14 @@ func (s *Service) handleTripReset() {
 		ID: id, Op: "counter.reset", Source: "bluetooth",
 		ExpiresAt: time.Now().Add(tripResetTimeout).UnixMilli(),
 	}
-	if err := ipc.SendRequest(s.ipc, tripCommandQueue, request); err != nil {
+	payload, err := encodeTripResetRequest(request)
+	if err != nil {
+		s.removeTripReset(id)
+		s.log.Errorf("failed to encode trip reset: %v", err)
+		s.sendExtendedResponse("trip:reset:error:internal")
+		return
+	}
+	if err := ipc.SendRequest(s.ipc, tripCommandQueue, payload); err != nil {
 		s.removeTripReset(id)
 		s.log.Warnf("failed to queue trip reset: %v", err)
 		s.sendExtendedResponse("trip:reset:error:unavailable")

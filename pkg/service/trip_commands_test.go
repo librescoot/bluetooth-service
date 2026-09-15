@@ -128,6 +128,19 @@ func TestTripCounterCapabilityRequiresReadySchema(t *testing.T) {
 	}
 }
 
+func TestTripResetRequestEncodingUsesStringCodecPayload(t *testing.T) {
+	payload, err := encodeTripResetRequest(tripResetRequest{
+		ID: "ble-test", Op: "counter.reset", Source: "bluetooth", ExpiresAt: 1234,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = `{"id":"ble-test","op":"counter.reset","source":"bluetooth","expires-at":1234}`
+	if string(payload) != want {
+		t.Fatalf("payload = %q, want %q", payload, want)
+	}
+}
+
 func TestTripResetResultCorrelationAndStaleResults(t *testing.T) {
 	s := &Service{tripResetPending: make(map[string]chan tripCommandResult)}
 	resultCh, _, ok := s.registerTripReset("ble-current")
