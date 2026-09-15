@@ -73,6 +73,13 @@ type Service struct {
 	dbcWaitMu     sync.Mutex
 	dbcWaitCancel chan struct{}
 
+	tripResetMu                   sync.Mutex
+	tripResetPending              map[string]chan tripCommandResult
+	tripResetRetryID              string
+	tripResetRetryUntil           time.Time
+	tripResetConnectionGeneration uint64
+	tripResultSubscription        interface{ Unsubscribe() error }
+
 	// Set when an LTC control command originated from a BLE extended
 	// command, so the USOCK response handler knows to relay the result
 	// back as an extended response.
@@ -317,6 +324,7 @@ func (s *Service) ClearFault(code int) {
 func (s *Service) Stop() {
 	s.StopSubscriptions()
 	s.cancelDBCWait()
+	s.stopTripResetBridge()
 	if err := s.CloseUSock(); err != nil {
 		s.log.Errorf("Failed to close USOCK during shutdown: %v", err)
 	}

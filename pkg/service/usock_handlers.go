@@ -736,6 +736,7 @@ func (s *Service) handleBLEParamMessage(msgType ble.MessageType, absSubTypeKey u
 		if msgType == ble.TypeBLEParam {
 			if statusStr, ok := convertToString(value); ok {
 				s.log.Debugf("Received BLE Status update: %s", statusStr)
+				s.noteTripResetBLEStatus(statusStr)
 				if err := s.ipc.Hash(KeyBLEStatus).Set("status", statusStr); err != nil {
 					s.log.Errorf("Failed to write BLE status to Redis: %v", err)
 				}

@@ -1,6 +1,8 @@
 package service
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -94,6 +96,150 @@ func TestDBCWaitReached(t *testing.T) {
 
 // cap:ble is what the app probes before offering to clear the scooter side of a
 // bond, so it has to track the nRF rather than what this binary was built with.
+func TestLegacyCapabilityMapDoesNotAdvertiseCapExtOnlyGroups(t *testing.T) {
+	for _, category := range []string{"nav", "keycard", "usb", "time", "config", "status", "alarm", "ltc", "ble", "pm", "dbc", "ota", "cap", "get", "set"} {
+		if _, ok := capabilityMap[category]; !ok {
+			t.Errorf("legacy capability category %q disappeared", category)
+		}
+	}
+	for _, category := range []string{"settings", "trip"} {
+		if _, ok := capabilityMap[category]; ok {
+			t.Errorf("cap:%s unexpectedly changed the deployed cap:list contract", category)
+		}
+	}
+}
+
+func TestTripCapabilityPromotesCurrentSchemaForGenericSettings(t *testing.T) {
+	staleSchema := map[string]settingSchema{
+		"legacy.setting": {Type: "bool"},
+	}
+	currentSchema := map[string]settingSchema{
+		"trip.counter-reset": {
+			Type: "enum",
+			Values: []settingSchemaValue{
+				{Value: "ride"}, {Value: "day"}, {Value: "battery"}, {Value: "manual"},
+			},
+		},
+	}
+	s := &Service{schemaCache: staleSchema}
+	cached, err := s.getSettingsSchema()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cached["trip.counter-reset"]; ok {
+		t.Fatal("test setup unexpectedly includes trip.counter-reset in stale schema")
+	}
+
+	// Capability discovery fetches the current schema independently of the
+	// generic command cache after settings-service has restarted.
+	tripSupported := tripCounterCapabilitySupported("1", "1", currentSchema)
+	if !tripSupported {
+		t.Fatal("current schema did not enable the trip capability")
+	}
+	s.promoteSettingsSchema(currentSchema)
+	if registry := capabilityRegistryFor(false, tripSupported); !strings.HasSuffix(registry, ":trip") {
+		t.Fatalf("cap:ext registry = %q, want trip capability", registry)
+	}
+
+	// Generic get and set both source their key and validation data from this
+	// shared cache, so they must see the schema that capability discovery used.
+	schema, err := s.getSettingsSchema()
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, ok := schema["trip.counter-reset"]
+	if !ok {
+		t.Fatal("generic get would reject trip.counter-reset as an unknown key")
+	}
+	if got := validateSettingValue(spec, "manual"); got != "" {
+		t.Fatalf("generic set validation = %q, want valid", got)
+	}
+}
+
+func TestGenericSetValidationSupportsTripExpungeFormat(t *testing.T) {
+	key, value, ok := splitSetPayload("trip.expunge:age:365d")
+	if !ok || key != "trip.expunge" || value != "age:365d" {
+		t.Fatalf("split generic set = (%q, %q, %v)", key, value, ok)
+	}
+
+	var schema map[string]settingSchema
+	if err := json.Unmarshal([]byte(`{"trip.expunge":{"type":"string","format":"trip-expunge"}}`), &schema); err != nil {
+		t.Fatal(err)
+	}
+	spec := schema["trip.expunge"]
+	if spec.Format != "trip-expunge" {
+		t.Fatalf("format = %q, want trip-expunge", spec.Format)
+	}
+
+	for _, value := range []string{
+		"never",
+		"age:1ns",
+		"age:1us",
+		"age:1.5ms",
+		"age:1h30m",
+		"age:1d",
+		"age:106751d",
+		"count:0",
+		"count:9223372036854775807",
+		"size:0",
+		"size:9223372036854775807",
+	} {
+		if got := validateSettingValue(spec, value); got != "" {
+			t.Errorf("validateSettingValue(%q) = %q, want valid", value, got)
+		}
+	}
+
+	for _, value := range []string{
+		"age:0",
+		"age:0ns",
+		"age:0.5ns",
+		"age:.5us",
+		"age:1.s",
+		"age:1µs",
+		"age:1μs",
+		"age:106752d",
+		"age:2562047h47m16.854775808s",
+		"count:01",
+		"count:+1",
+		"count:9223372036854775808",
+		"size:-1",
+		"size:9223372036854775808",
+		"never ",
+		"age: 1h",
+		"age:1h ",
+		"age:1h\u00a0",
+		"count: 1",
+		"size:1 ",
+		"",
+		"age:0s",
+		"age:0d",
+		"age:+1h",
+		"age:-1h",
+		"age:01d",
+		"age:01ns",
+		"age:1d1h",
+		"age:18446744073709551616d",
+		"age:1D",
+		"age:1day",
+		"age:1htrailing",
+		"age:999999999999999999999h",
+		"count:-1",
+		"count:18446744073709551616",
+		"size:1.0",
+		"size:01",
+		"size:18446744073709551616",
+		"unknown:1",
+	} {
+		if got := validateSettingValue(spec, value); got != "invalid trip expunge" {
+			t.Errorf("validateSettingValue(%q) = %q, want invalid trip expunge", value, got)
+		}
+	}
+
+	if got := validateSettingValue(settingSchema{Type: "future-type"}, "future-value"); got != "" {
+		t.Fatalf("unknown type lost compatibility: %q", got)
+	}
+}
+
 func TestCapabilityCommandsForBLETracksFirmware(t *testing.T) {
 	supported := capabilityCommandsFor("ble", func() bool { return true })
 	if len(supported) != 1 || supported[0] != "forget" {

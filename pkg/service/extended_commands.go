@@ -55,6 +55,8 @@ func (s *Service) handleExtendedCommandMessage(msgType ble.MessageType, absSubTy
 		s.handlePMCommand(strings.TrimPrefix(cmdStr, "pm:"))
 	} else if strings.HasPrefix(cmdStr, "dbc:") {
 		s.handleDBCCommand(strings.TrimPrefix(cmdStr, "dbc:"))
+	} else if strings.HasPrefix(cmdStr, "trip:") {
+		s.handleTripCommand(strings.TrimPrefix(cmdStr, "trip:"))
 	} else {
 		s.log.Warnf("Unknown extended command prefix: %s", cmdStr)
 		s.sendExtendedResponse("error:unknown command")
@@ -898,11 +900,73 @@ func capabilityCommandsFor(category string, bondDelete func() bool) []string {
 	return available
 }
 
+// capabilityRegistryFor returns the complete high-level registry for cap:ext.
+// Its fixed order is part of the response contract.
+func capabilityRegistryFor(bondDelete, tripCounter bool) string {
+	categories := []string{"nav", "keycard", "usb", "time", "config", "status", "alarm", "ltc"}
+	if bondDelete {
+		categories = append(categories, "ble")
+	}
+	categories = append(categories, "pm", "dbc", "ota", "settings")
+	if tripCounter {
+		categories = append(categories, "trip")
+	}
+	return "cap:ext:" + strings.Join(categories, ":")
+}
+
+func tripCounterCapabilitySupported(apiVersion, ready string, schema map[string]settingSchema) bool {
+	if apiVersion != "1" || ready != "1" {
+		return false
+	}
+	spec, ok := schema["trip.counter-reset"]
+	if !ok || spec.ReadOnly || spec.Type != "enum" || len(spec.Values) != 4 {
+		return false
+	}
+	values := make(map[string]bool, len(spec.Values))
+	for _, value := range spec.Values {
+		values[value.Value] = true
+	}
+	return values["ride"] && values["day"] && values["battery"] && values["manual"]
+}
+
+func (s *Service) tripCounterSupported() bool {
+	version, err := s.ipc.HGet(tripCounterKey, "api-version")
+	if err != nil {
+		s.log.Debugf("trip counter capability unavailable: %v", err)
+		return false
+	}
+	ready, err := s.ipc.Get("trip:ready")
+	if err != nil {
+		s.log.Debugf("trip readiness unavailable: %v", err)
+		return false
+	}
+	// Capability discovery must use current settings-service state rather than
+	// the get:/set: cache, which can outlive a settings-service restart.
+	schema, err := s.loadSettingsSchema()
+	if err != nil {
+		s.log.Debugf("trip settings schema unavailable: %v", err)
+		return false
+	}
+	s.promoteSettingsSchema(schema)
+	return tripCounterCapabilitySupported(version, ready, schema)
+}
+
 // handleCapabilityQuery responds with the list of supported extended command features.
 // "cap:list" returns all category names.
 // "cap:<category>" returns the commands supported by that category.
 func (s *Service) handleCapabilityQuery(cmd string) {
 	cmd = strings.TrimSpace(cmd)
+
+	if cmd == "ext" {
+		response := capabilityRegistryFor(s.nrfSupportsBondDelete(), s.tripCounterSupported())
+		if len(response) > tripResponseMaxBytes {
+			s.log.Errorf("cap:ext response exceeds limit: %d bytes", len(response))
+			s.sendExtendedResponse("cap:error:internal")
+			return
+		}
+		s.sendExtendedResponse(response)
+		return
+	}
 
 	if cmd == "list" {
 		categories := make([]string, 0, len(capabilityMap))
