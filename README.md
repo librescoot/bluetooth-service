@@ -72,7 +72,8 @@ Runtime operation requires:
 - a reachable Redis or Valkey instance;
 - the configured serial device and an nRF52 running the matching USOCK/BLE firmware;
 - write access to the firmware and OTA staging locations when updates are enabled; and
-- `timedatectl` when BLE time-setting requests are used.
+- `timedatectl` when BLE time-setting requests are used; and
+- `chronyc` for NTP trust detection used by nRF UTC holdover seeding.
 
 For a packaged target, use the installed unit rather than a hand-written unit:
 
@@ -84,7 +85,7 @@ journalctl -u librescoot-bluetooth.service
 ## Operational and security notes
 
 - The service is a privileged bridge between wireless commands and vehicle services. Restrict serial-device access and protect the Redis/Valkey IPC endpoint from untrusted clients.
-- A BLE time request invokes `timedatectl set-time`; only authorize BLE peers that may change the system clock.
+- A BLE time request invokes `timedatectl set-time`; only authorize BLE peers that may change the system clock. The nRF UTC holdover is seeded from accepted Bluetooth time, a GPS-confirmed clock update, or an external NTP reference; it never makes Linux time move backward.
 - Firmware update and OTA staging paths contain executable update inputs. Keep them service-owned and monitor update failures in the journal and Redis/Valkey fault state.
 - Send `SIGTERM` or `SIGINT` for a coordinated shutdown; the service stops the controller link before exiting.
 

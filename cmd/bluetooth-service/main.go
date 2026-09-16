@@ -125,6 +125,7 @@ func main() {
 		log.Fatalf("Failed to bootstrap service: %v", err)
 	}
 
+	svc.StartTrustedTimeMonitor()
 	go svc.WatchRedisCommands()
 
 	log.Infof("Initial state loaded via StartWithSync callbacks")

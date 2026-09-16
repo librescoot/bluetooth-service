@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"sync"
@@ -30,6 +31,8 @@ import (
 //     (wake bytes are only proven at the boot baud rate). DownshiftForSuspend
 //     follows it with a wire-silent local reopen; the fast link is renegotiated
 //     when the power state returns to running.
+
+var errLinkUnavailable = errors.New("serial link unavailable")
 
 const (
 	linkBaudDefault = 115200
@@ -63,6 +66,7 @@ type LinkManager struct {
 	caps        int
 	opBusy      bool // a negotiation or fallback is running (owns the port)
 	suspended   bool // firmware updater owns the port; refuse all operations
+	stopped     bool // terminal service shutdown; Resume cannot clear this
 	keepStop    chan struct{}
 
 	capsCh chan int
@@ -98,7 +102,7 @@ func (lm *LinkManager) resetToDefault() {
 func (lm *LinkManager) beginOp() bool {
 	lm.mu.Lock()
 	defer lm.mu.Unlock()
-	if lm.suspended || lm.opBusy {
+	if lm.stopped || lm.suspended || lm.opBusy {
 		return false
 	}
 	lm.opBusy = true
@@ -120,9 +124,20 @@ func (lm *LinkManager) Suspend() {
 	lm.mu.Lock()
 	lm.suspended = true
 	lm.mu.Unlock()
+	lm.waitIdle()
+}
 
+// Stop permanently blocks link operations for terminal service shutdown.
+func (lm *LinkManager) Stop() {
+	lm.mu.Lock()
+	lm.stopped = true
+	lm.suspended = true
+	lm.mu.Unlock()
+	lm.waitIdle()
+}
+
+func (lm *LinkManager) waitIdle() {
 	lm.stopKeepalive()
-
 	for {
 		lm.mu.Lock()
 		busy := lm.opBusy
@@ -134,12 +149,15 @@ func (lm *LinkManager) Suspend() {
 	}
 }
 
-// Resume lifts a Suspend. It does not start a negotiation by itself — the
-// updater's ReconnectUSock path does that after the port is re-established.
-func (lm *LinkManager) Resume() {
+// Resume lifts a temporary Suspend. It does not start a negotiation by itself.
+func (lm *LinkManager) Resume() bool {
 	lm.mu.Lock()
+	defer lm.mu.Unlock()
+	if lm.stopped {
+		return false
+	}
 	lm.suspended = false
-	lm.mu.Unlock()
+	return true
 }
 
 // CurrentBaud returns the baud rate the port is currently open at.
@@ -199,7 +217,17 @@ func (lm *LinkManager) negotiate() {
 	if !lm.beginOp() {
 		return
 	}
-	defer lm.endOp()
+	recoverLink := false
+	defer func() {
+		restartNegotiation := false
+		if recoverLink {
+			restartNegotiation = lm.fallbackOwned()
+		}
+		lm.endOp()
+		if restartNegotiation {
+			lm.StartNegotiation()
+		}
+	}()
 
 	lm.mu.Lock()
 	alreadyFast := lm.currentBaud != linkBaudDefault
@@ -207,12 +235,18 @@ func (lm *LinkManager) negotiate() {
 	if alreadyFast {
 		// negotiation always starts from the boot baud rate; if we are already
 		// upshifted the keepalive supervises the link
+		lm.svc.requestNRFTime()
 		return
 	}
 
 	lm.stopKeepalive()
 
-	caps, ok := lm.probeCaps()
+	caps, ok, err := lm.probeCaps()
+	if err != nil {
+		lm.svc.log.Errorf("Link: capability probe lost the serial link: %v", err)
+		recoverLink = true
+		return
+	}
 	lm.mu.Lock()
 	lm.caps = caps
 	lm.mu.Unlock()
@@ -220,17 +254,24 @@ func (lm *LinkManager) negotiate() {
 	if !ok {
 		lm.svc.log.Infof("Link: no CAPS response, legacy nRF firmware; staying at %d baud", linkBaudDefault)
 		lm.publishStatus()
+		lm.svc.requestNRFTime()
 		return
 	}
 	lm.svc.log.Infof("Link: nRF capabilities 0x%x", caps)
 
 	if caps&ble.LinkCapBaud1M == 0 {
 		lm.publishStatus()
+		lm.svc.requestNRFTime()
 		return
 	}
 
 	for attempt := 1; attempt <= 2; attempt++ {
 		if err := lm.upshift(); err != nil {
+			if errors.Is(err, errLinkUnavailable) {
+				lm.svc.log.Errorf("Link: upshift attempt %d lost the serial link: %v", attempt, err)
+				recoverLink = true
+				return
+			}
 			lm.svc.log.Warnf("Link: upshift attempt %d failed: %v", attempt, err)
 			continue
 		}
@@ -240,6 +281,7 @@ func (lm *LinkManager) negotiate() {
 		// upshift reopened the port; concurrent state writes may have been
 		// lost mid-switch — re-push everything now that the link is stable
 		lm.svc.resyncStateToNRF("baud upshift")
+		lm.svc.requestNRFTime()
 		return
 	}
 
@@ -247,24 +289,24 @@ func (lm *LinkManager) negotiate() {
 	lm.publishStatus()
 	// the failed upshift also reopened the port (possibly twice)
 	lm.svc.resyncStateToNRF("failed baud negotiation")
+	lm.svc.requestNRFTime()
 }
 
 // probeCaps sends LINK_CAPS requests and waits for a response; a timeout after
 // all retries means legacy firmware.
-func (lm *LinkManager) probeCaps() (int, bool) {
+func (lm *LinkManager) probeCaps() (int, bool, error) {
 	lm.drain(lm.capsCh)
 	for i := 0; i < linkProbeRetries; i++ {
 		if err := writeUARTMessage(lm.svc.GetUSock(), ble.TypeLink, ble.TypeLinkCaps, 0); err != nil {
-			lm.svc.log.Warnf("Link: CAPS probe write failed: %v", err)
-			return 0, false
+			return 0, false, fmt.Errorf("%w: CAPS probe write: %v", errLinkUnavailable, err)
 		}
 		select {
 		case caps := <-lm.capsCh:
-			return caps, true
+			return caps, true, nil
 		case <-time.After(linkProbeTimeout):
 		}
 	}
-	return 0, false
+	return 0, false, nil
 }
 
 // upshift commands the switch to 1 Mbaud and verifies it; on failure the port
@@ -276,7 +318,7 @@ func (lm *LinkManager) upshift() error {
 	acked := false
 	for i := 0; i < 2 && !acked; i++ {
 		if err := writeUARTMessage32(lm.svc.GetUSock(), ble.TypeLink, ble.TypeLinkBaudSet, linkBaudFast); err != nil {
-			return fmt.Errorf("BAUD_SET write: %w", err)
+			return fmt.Errorf("%w: BAUD_SET write: %v", errLinkUnavailable, err)
 		}
 		select {
 		case v := <-lm.ackCh:
@@ -297,7 +339,16 @@ func (lm *LinkManager) upshift() error {
 	time.Sleep(30 * time.Millisecond)
 
 	if err := lm.reopenAt(linkBaudFast); err != nil {
-		return fmt.Errorf("reopen at %d: %w", linkBaudFast, err)
+		// The nRF received BAUD_SET and will revert after its verify window.
+		// Wait it out, then restore a live default-baud descriptor before
+		// allowing the caller to retry or send any other traffic.
+		time.Sleep(3 * time.Second)
+		if recoveryErr := lm.reopenAt(linkBaudDefault); recoveryErr != nil {
+			return fmt.Errorf("%w: reopen at %d failed: %v; recovery at %d failed: %v",
+				errLinkUnavailable, linkBaudFast, err, linkBaudDefault, recoveryErr)
+		}
+		return fmt.Errorf("reopen at %d failed, recovered at %d: %w",
+			linkBaudFast, linkBaudDefault, err)
 	}
 
 	if lm.pingVerify(linkPingRetries, linkPingTimeout) {
@@ -308,7 +359,7 @@ func (lm *LinkManager) upshift() error {
 	// tick) so it is guaranteed back at 115200 before we reopen there
 	time.Sleep(3 * time.Second)
 	if err := lm.reopenAt(linkBaudDefault); err != nil {
-		return fmt.Errorf("reopen back at %d: %w", linkBaudDefault, err)
+		return fmt.Errorf("%w: reopen back at %d: %v", errLinkUnavailable, linkBaudDefault, err)
 	}
 	if !lm.pingVerify(linkPingRetries, linkPingTimeout) {
 		lm.svc.log.Warnf("Link: no PING echo at %d after failed upshift", linkBaudDefault)
@@ -540,18 +591,35 @@ func (lm *LinkManager) fallback() {
 		return
 	}
 
+	restartNegotiation := lm.fallbackOwned()
+	lm.endOp()
+	if restartNegotiation {
+		lm.StartNegotiation()
+	}
+}
+
+// fallbackOwned repairs an unavailable link while the caller retains opBusy.
+// This avoids a release/reacquire gap where another negotiation could take
+// ownership of the dead descriptor. A concurrent Suspend cancels recovery.
+func (lm *LinkManager) fallbackOwned() bool {
+	lm.mu.Lock()
+	unavailable := lm.stopped || lm.suspended
+	lm.mu.Unlock()
+	if unavailable {
+		lm.svc.log.Infof("Link: fallback canceled while link manager is suspended")
+		return false
+	}
+
 	if err := lm.reopenAt(linkBaudDefault); err != nil {
 		lm.svc.log.Errorf("Link: fallback reopen failed: %v", err)
-		lm.endOp()
-		return
+		return false
 	}
 	lm.publishStatus()
 
 	if err := lm.svc.InitializeNRF52(); err != nil {
 		lm.svc.log.Errorf("Link: re-initialization after fallback failed: %v", err)
 	}
-	lm.endOp()
-	lm.StartNegotiation()
+	return true
 }
 
 func (lm *LinkManager) publishStatus() {

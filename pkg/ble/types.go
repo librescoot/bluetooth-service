@@ -28,6 +28,7 @@ const (
 	TypeExtended                      MessageType = 0x0400     // BLE_SCOOTER_SERVICE_EXTENDED
 	TypeOTA                           MessageType = 0x0500     // BLE_SCOOTER_SERVICE_OTA (GATT service block; USOCK side uses raw frames)
 	TypeLink                          MessageType = 0xA0A0     // BLE_SCOOTER_SERVICE_LINK (UART link management, USOCK only)
+	TypeRTC                           MessageType = 0xA0C0     // BLE_SCOOTER_SERVICE_RTC (USOCK only)
 )
 
 // Raw (non-CBOR) USOCK frame IDs used by the OTA transfer tunnel. Payloads are
@@ -168,6 +169,11 @@ const (
 	TypeLinkBaudSet SubType = 2 // BLE_SCOOTER_SERVICE_LINK_BAUD_SET: uint32 literal baud rate
 	TypeLinkPing    SubType = 3 // BLE_SCOOTER_SERVICE_LINK_PING: uint32 nonce, echoed
 	TypeLinkStats   SubType = 4 // BLE_SCOOTER_SERVICE_LINK_STATS: int array [crc, uart, overrun, txdrop]
+
+	// Retained UTC clock sub-types (relative to TypeRTC 0xA0C0).
+	TypeRTCGet   SubType = 1
+	TypeRTCSet   SubType = 2
+	TypeRTCToken SubType = 3
 )
 
 // BLECommand represents BLE control commands

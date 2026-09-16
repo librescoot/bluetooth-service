@@ -597,16 +597,9 @@ func systemTimeArg(timestamp int64) string {
 	return time.Unix(timestamp, 0).Format("2006-01-02 15:04:05")
 }
 
-// setSystemTime parses a Unix timestamp string and sets the system clock
-// via timedatectl.
-func (s *Service) setSystemTime(timestampStr string) error {
-	timestamp, err := strconv.ParseInt(strings.TrimSpace(timestampStr), 10, 64)
-	if err != nil {
-		return fmt.Errorf("invalid timestamp: %w", err)
-	}
+func (s *Service) setSystemTimeDirect(timestamp int64) error {
 	t := time.Unix(timestamp, 0)
-	timeStr := systemTimeArg(timestamp)
-	cmd := exec.Command("timedatectl", "set-time", timeStr)
+	cmd := exec.Command("timedatectl", "set-time", systemTimeArg(timestamp))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to set time: %w (%s)", err, strings.TrimSpace(string(out)))
 	}

@@ -9,6 +9,7 @@ import (
 
 // InitializeNRF52 initializes communication with the nRF52
 func (s *Service) InitializeNRF52() error {
+	s.invalidateNRFTimeRequest()
 	s.log.Infof("Starting nRF52 initialization...")
 
 	// 1. Disable data streaming
@@ -67,6 +68,17 @@ func (s *Service) InitializeNRF52() error {
 // leaves the stream running into nothing, and if the MDB suspends while
 // bluetooth-service is down the UART frames will abort suspend.
 func (s *Service) ShutdownNRF52() {
+	// Establish terminal state before waiting for an in-flight reconnect.
+	s.mu.Lock()
+	s.stopped = true
+	s.mu.Unlock()
+	if s.link != nil {
+		s.link.Stop()
+	}
+
+	s.reconnectMu.Lock()
+	defer s.reconnectMu.Unlock()
+
 	if s.usock == nil {
 		return
 	}

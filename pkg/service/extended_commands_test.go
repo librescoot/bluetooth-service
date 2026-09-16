@@ -2,9 +2,13 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/librescoot/bluetooth-service/pkg/ble"
+	"github.com/librescoot/bluetooth-service/pkg/logger"
 )
 
 // timedatectl set-time interprets its argument in the system-local timezone.
@@ -39,10 +43,62 @@ func TestSystemTimeArgUsesLocalZone(t *testing.T) {
 	}
 }
 
-// The single-bond delete was a silent no-op in the nRF until v2.8.0-ls, so the
-// gate has to answer no for anything older and for a version it cannot read.
-// Answering yes there would have the phone report both halves of the bond
-// cleared while the scooter kept its half.
+func TestTimeSetUsesInjectedClockAndSeedsNRF(t *testing.T) {
+	mock := &mockUSOCK{}
+	calls := 0
+	s := &Service{
+		usock:       mock,
+		log:         logger.NewLogger(nil, logger.LogLevelNone),
+		nrfTimeNow:  func() time.Time { return time.Unix(testNow, 0) },
+		clockSetter: func(epoch int64) error { calls++; return nil },
+	}
+	s.handleTimeCommand("set 1735689600")
+	if calls != 1 {
+		t.Fatalf("clock setter calls = %d, want 1", calls)
+	}
+	if mock.messageCount() < 1 || mock.messages[0].frameID != byte(uint16(ble.TypeRTC)&0xff) {
+		t.Fatalf("trusted time command did not seed nRF RTC: %#v", mock.messages)
+	}
+}
+
+func TestLegacyBLETimeSetsAndSeedsNRF(t *testing.T) {
+	mock := &mockUSOCK{}
+	calls := 0
+	s := &Service{
+		usock:       mock,
+		log:         logger.NewLogger(nil, logger.LogLevelNone),
+		nrfTimeNow:  func() time.Time { return time.Unix(testNow, 0) },
+		clockSetter: func(epoch int64) error { calls++; return nil },
+	}
+	s.handleScooterInfoMessage(
+		ble.TypeScooterInfo,
+		uint16(ble.TypeScooterInfo)+uint16(ble.TypeSystemTime),
+		"1735689600",
+	)
+	if calls != 1 {
+		t.Fatalf("clock setter calls = %d, want 1", calls)
+	}
+	if mock.messageCount() != 1 || mock.messages[0].frameID != byte(uint16(ble.TypeRTC)&0xff) {
+		t.Fatalf("BLE time did not seed nRF RTC: %#v", mock.messages)
+	}
+}
+
+func TestTimeSetFailureDoesNotSeedNRF(t *testing.T) {
+	mock := &mockUSOCK{}
+	s := &Service{
+		usock:       mock,
+		log:         logger.NewLogger(nil, logger.LogLevelNone),
+		nrfTimeNow:  func() time.Time { return time.Unix(testNow, 0) },
+		clockSetter: func(int64) error { return errors.New("denied") },
+	}
+	s.handleTimeCommand("set 1735689600")
+	for _, message := range mock.messages {
+		if message.frameID == byte(uint16(ble.TypeRTC)&0xff) {
+			t.Fatal("failed explicit time set seeded nRF RTC")
+		}
+	}
+}
+
 func TestNrfBondDeleteSupported(t *testing.T) {
 	tests := []struct {
 		version string

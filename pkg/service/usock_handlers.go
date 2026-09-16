@@ -127,6 +127,11 @@ func (s *Service) HandleUSockMessage(frameID byte, payload *usock.Payload) {
 		s.log.Debugf("Received: Type=0x%04x (empty params)", msgType)
 	}
 
+	if msgType == ble.TypeRTC {
+		s.handleNRFTimeReply(paramMap)
+		return
+	}
+
 	// Handle messages based on the ABSOLUTE subtype key found in the inner map
 	if len(paramMap) > 0 {
 		for absSubTypeKey, value := range paramMap {

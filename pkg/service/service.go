@@ -35,6 +35,7 @@ type Service struct {
 	ipc             *ipc.Client // Redis IPC client
 	log             *logger.Logger
 	stopCh          chan struct{}
+	stopped         bool
 	wg              sync.WaitGroup
 	faults          *ipc.FaultReporter // Fault tracking
 	serialDevice    string
@@ -45,6 +46,19 @@ type Service struct {
 	autoUpdate      bool
 	lastMileage     string // last mileage value sent to nRF (for dedup)
 	mu              sync.RWMutex
+	reconnectMu     sync.Mutex
+
+	clockSetter  func(int64) error
+	clockMu      sync.Mutex
+	nrfTimeNow   func() time.Time
+	nrfTimeMu    sync.Mutex
+	nrfTimeState nrfTimeState
+
+	trustedTimeMu  sync.Mutex
+	trustedTimeNTP func() bool
+	trustedTimeGPS func() string
+	lastNTPTrusted bool
+	lastGPSSync    string
 
 	// Track the most recent vehicle state string for diagnostic/log paths.
 	lastVehicleState string
@@ -246,6 +260,7 @@ func (s *Service) GetFirmwareUpdater() firmwareUpdaterInterface {
 
 // CloseUSock closes the serial connection
 func (s *Service) CloseUSock() error {
+	s.invalidateNRFTimeRequest()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.usock != nil {
@@ -259,7 +274,15 @@ func (s *Service) CloseUSock() error {
 // SubscribeToRedisChannels' StartWithSync are not suppressed against values
 // that were sent to the previous (now replaced) firmware image.
 func (s *Service) ReconnectUSock() error {
+	s.reconnectMu.Lock()
+	defer s.reconnectMu.Unlock()
+
+	s.invalidateNRFTimeRequest()
 	s.mu.Lock()
+	if s.stopped {
+		s.mu.Unlock()
+		return fmt.Errorf("service stopped")
+	}
 	if s.serialDevice == "" || s.usockHandler == nil {
 		s.mu.Unlock()
 		return fmt.Errorf("serial config not set")
@@ -272,12 +295,12 @@ func (s *Service) ReconnectUSock() error {
 	s.lastVehicleState = ""
 	s.mu.Unlock()
 
-	// return port ownership to the link manager: the updater reaches this
-	// point on every exit path (success and attemptReconnect). Resume before
-	// the reopen attempt so a failed reopen can't leave the manager suspended
-	// forever; nothing acts on the port until StartNegotiation below.
+	// Return temporary DFU ownership before reopening. A terminal Stop cannot
+	// be resumed by a late firmware-update completion.
+	if !s.link.Resume() {
+		return fmt.Errorf("service stopped")
+	}
 	s.link.resetToDefault()
-	s.link.Resume()
 
 	sock, err := usock.New(device, baud, handler, s.log)
 	if err != nil {
@@ -289,6 +312,11 @@ func (s *Service) ReconnectUSock() error {
 	sock.SetSyncFrameIDs(ble.FrameOTAData, ble.FrameOTACtrl)
 
 	s.mu.Lock()
+	if s.stopped {
+		s.mu.Unlock()
+		_ = sock.Close()
+		return fmt.Errorf("service stopped")
+	}
 	s.usock = sock
 	s.mu.Unlock()
 
@@ -322,6 +350,18 @@ func (s *Service) ClearFault(code int) {
 // other goroutines to exit. Safe to call when subscriptions or USOCK were
 // never started.
 func (s *Service) Stop() {
+	s.mu.Lock()
+	s.stopped = true
+	s.mu.Unlock()
+	if s.link != nil {
+		s.link.Stop()
+	}
+
+	// A reconnect that passed its initial stopped check owns this mutex until
+	// its socket publication and initialization are complete.
+	s.reconnectMu.Lock()
+	defer s.reconnectMu.Unlock()
+
 	s.StopSubscriptions()
 	s.cancelDBCWait()
 	s.stopTripResetBridge()
