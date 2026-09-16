@@ -33,6 +33,8 @@ func (s *Service) handleExtendedCommandMessage(msgType ble.MessageType, absSubTy
 		s.handleKeycardCommand(strings.TrimPrefix(cmdStr, "keycard:"))
 	} else if strings.HasPrefix(cmdStr, "usb:") {
 		s.handleUSBCommand(strings.TrimPrefix(cmdStr, "usb:"))
+	} else if strings.HasPrefix(cmdStr, "service-mode:") {
+		s.handleServiceModeCommand(strings.TrimPrefix(cmdStr, "service-mode:"))
 	} else if strings.HasPrefix(cmdStr, "time:") {
 		s.handleTimeCommand(strings.TrimPrefix(cmdStr, "time:"))
 	} else if strings.HasPrefix(cmdStr, "config:") {
@@ -848,23 +850,49 @@ func (s *Service) handleBLEForget() {
 	}()
 }
 
+func serviceModeOverlayCommand(cmd string) (string, bool) {
+	switch strings.TrimSpace(cmd) {
+	case "on":
+		return "apply:service", true
+	case "off":
+		return "clear:service", true
+	default:
+		return "", false
+	}
+}
+
+func (s *Service) handleServiceModeCommand(cmd string) {
+	value, ok := serviceModeOverlayCommand(cmd)
+	if !ok {
+		s.sendExtendedResponse("service-mode:error:invalid command")
+		return
+	}
+	if err := ipc.SendRequest(s.ipc, "settings:overlay", value); err != nil {
+		s.log.Errorf("Failed to set service mode: %v", err)
+		s.sendExtendedResponse("service-mode:error:redis")
+		return
+	}
+	s.sendExtendedResponse("service-mode:ok")
+}
+
 // capabilityMap maps each command category to its supported commands.
 var capabilityMap = map[string][]string{
-	"nav":     {"dest", "clear", "fav:add", "fav:delete", "fav:navigate", "fav:list"},
-	"keycard": {"list", "count", "add:<uid>", "remove:<uid>"},
-	"usb":     {"ums", "normal"},
-	"time":    {"set"},
-	"config":  {"apn", "hibernate-timer", "update-channel", "auto-standby-seconds"},
-	"status":  {"maps-available", "navigation-available", "version:mdb", "version:dbc"},
-	"alarm":   {"enable", "disable", "arm", "disarm", "start", "start:<seconds>", "stop"},
-	"ltc":     {"enable", "disable", "force-enable", "force-disable", "status"},
-	"ble":     {"forget"},
-	"pm":      {"hibernate-for <duration>", "hibernate-cancel"},
-	"dbc":     {"status", "on", "off", "on-wait", "off-wait"},
-	"ota":     {"transfer"}, // BLE OTA bundle transfer via the 0x0500 GATT service
-	"cap":     {"list", "<category>"},
-	"get":     {"<key>", "list", "list:<prefix>"},
-	"set":     {"<key>:<value>"},
+	"nav":          {"dest", "clear", "fav:add", "fav:delete", "fav:navigate", "fav:list"},
+	"keycard":      {"list", "count", "add:<uid>", "remove:<uid>"},
+	"usb":          {"ums", "normal"},
+	"service-mode": {"on", "off"},
+	"time":         {"set"},
+	"config":       {"apn", "hibernate-timer", "update-channel", "auto-standby-seconds"},
+	"status":       {"maps-available", "navigation-available", "version:mdb", "version:dbc"},
+	"alarm":        {"enable", "disable", "arm", "disarm", "start", "start:<seconds>", "stop"},
+	"ltc":          {"enable", "disable", "force-enable", "force-disable", "status"},
+	"ble":          {"forget"},
+	"pm":           {"hibernate-for <duration>", "hibernate-cancel"},
+	"dbc":          {"status", "on", "off", "on-wait", "off-wait"},
+	"ota":          {"transfer"}, // BLE OTA bundle transfer via the 0x0500 GATT service
+	"cap":          {"list", "<category>"},
+	"get":          {"<key>", "list", "list:<prefix>"},
+	"set":          {"<key>:<value>"},
 }
 
 // capabilityCommands returns the commands a category can serve right now.
@@ -896,7 +924,7 @@ func capabilityCommandsFor(category string, bondDelete func() bool) []string {
 // capabilityRegistryFor returns the complete high-level registry for cap:ext.
 // Its fixed order is part of the response contract.
 func capabilityRegistryFor(bondDelete, tripCounter bool) string {
-	categories := []string{"nav", "keycard", "usb", "time", "config", "status", "alarm", "ltc"}
+	categories := []string{"nav", "keycard", "usb", "service-mode", "time", "config", "status", "alarm", "ltc"}
 	if bondDelete {
 		categories = append(categories, "ble")
 	}
