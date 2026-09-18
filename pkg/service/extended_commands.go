@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"fmt"
 	"os/exec"
 	"strconv"
@@ -99,6 +100,190 @@ func (s *Service) sendExtendedResponse(response string) {
 	s.lastExtRespTime = time.Now()
 }
 
+// A single plan stop, matching the JSON the dashboard reads from the
+// navigation hash's "waypoints" field.
+type navStop struct {
+	Lat   float64 `json:"lat"`
+	Lon   float64 `json:"lon"`
+	Label string  `json:"label,omitempty"`
+}
+
+// handleNavRouteCommand edits the multi-hop plan incrementally. The BLE
+// extended command is capped at 100 bytes, so a whole plan cannot be pushed in
+// one command; the phone adds, removes, and skips stops instead.
+func (s *Service) handleNavRouteCommand(cmd string) {
+	switch {
+	case strings.HasPrefix(cmd, "add "):
+		stop, err := parseNavStop(strings.TrimSpace(strings.TrimPrefix(cmd, "add ")))
+		if err != nil {
+			s.sendExtendedResponse("nav:error:" + err.Error())
+			return
+		}
+		stops, step, err := s.readNavPlan()
+		if err != nil {
+			s.sendExtendedResponse("nav:error:redis")
+			return
+		}
+		stops = append(stops, stop)
+		if err := s.writeNavPlan(stops, step); err != nil {
+			s.sendExtendedResponse("nav:error:redis")
+			return
+		}
+		s.log.Infof("Added navigation stop, plan now has %d stops", len(stops))
+		s.sendExtendedResponse(fmt.Sprintf("nav:route:count:%d:%d", len(stops), step))
+
+	case strings.HasPrefix(cmd, "remove "):
+		index, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(cmd, "remove ")))
+		if err != nil {
+			s.sendExtendedResponse("nav:error:invalid index")
+			return
+		}
+		stops, step, err := s.readNavPlan()
+		if err != nil {
+			s.sendExtendedResponse("nav:error:redis")
+			return
+		}
+		if index < 1 || index > len(stops) {
+			s.sendExtendedResponse("nav:error:index out of range")
+			return
+		}
+		zero := index - 1
+		stops = append(stops[:zero], stops[zero+1:]...)
+		if zero < step {
+			step--
+		}
+		if err := s.writeNavPlan(stops, step); err != nil {
+			s.sendExtendedResponse("nav:error:redis")
+			return
+		}
+		s.sendExtendedResponse(fmt.Sprintf("nav:route:count:%d:%d", len(stops), step))
+
+	case cmd == "skip":
+		stops, step, err := s.readNavPlan()
+		if err != nil {
+			s.sendExtendedResponse("nav:error:redis")
+			return
+		}
+		if len(stops) == 0 {
+			s.sendExtendedResponse("nav:error:no route plan")
+			return
+		}
+		if step+1 >= len(stops) {
+			s.sendExtendedResponse("nav:error:already at the last stop")
+			return
+		}
+		step++
+		if err := s.writeNavPlan(stops, step); err != nil {
+			s.sendExtendedResponse("nav:error:redis")
+			return
+		}
+		s.sendExtendedResponse(fmt.Sprintf("nav:route:count:%d:%d", len(stops), step))
+
+	case cmd == "list":
+		stops, step, err := s.readNavPlan()
+		if err != nil {
+			s.sendExtendedResponse("nav:error:redis")
+			return
+		}
+		s.sendExtendedResponse(fmt.Sprintf("nav:route:count:%d:%d", len(stops), step))
+		for i, stop := range stops {
+			s.sendExtendedResponse(fmt.Sprintf("nav:route:%d:%s,%s,%s", i,
+				strconv.FormatFloat(stop.Lat, 'f', 6, 64),
+				strconv.FormatFloat(stop.Lon, 'f', 6, 64), stop.Label))
+		}
+
+	case cmd == "clear":
+		if err := s.writeNavPlan(nil, 0); err != nil {
+			s.sendExtendedResponse("nav:error:redis")
+			return
+		}
+		s.sendExtendedResponse("nav:ok")
+
+	default:
+		s.sendExtendedResponse("nav:error:unknown route command")
+	}
+}
+
+// parseNavStop parses "lat,lon[,name]". The name may contain commas.
+func parseNavStop(entry string) (navStop, error) {
+	parts := strings.SplitN(entry, ",", 3)
+	if len(parts) < 2 {
+		return navStop{}, fmt.Errorf("invalid stop")
+	}
+	lat, errLat := strconv.ParseFloat(strings.TrimSpace(parts[0]), 64)
+	lon, errLon := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
+	if errLat != nil || errLon != nil {
+		return navStop{}, fmt.Errorf("invalid coordinates")
+	}
+	if lat < -90 || lat > 90 || lon < -180 || lon > 180 || (lat == 0 && lon == 0) {
+		return navStop{}, fmt.Errorf("coordinates out of range")
+	}
+	label := ""
+	if len(parts) == 3 {
+		label = strings.TrimSpace(parts[2])
+	}
+	return navStop{Lat: lat, Lon: lon, Label: label}, nil
+}
+
+// readNavPlan returns the stored stops and current step.
+func (s *Service) readNavPlan() ([]navStop, int, error) {
+	raw, err := s.ipc.HGet(KeyNavigation, "waypoints")
+	if err != nil {
+		return nil, 0, err
+	}
+	var stops []navStop
+	if raw != "" {
+		if err := json.Unmarshal([]byte(raw), &stops); err != nil {
+			return nil, 0, err
+		}
+	}
+	stepStr, _ := s.ipc.HGet(KeyNavigation, "current-step")
+	step, _ := strconv.Atoi(stepStr)
+	return stops, step, nil
+}
+
+// writeNavPlan stores the stop list, the current step, and the target fields
+// the dashboard reads for the current hop. An empty list clears the plan.
+func (s *Service) writeNavPlan(stops []navStop, step int) error {
+	hash := s.ipc.Hash(KeyNavigation)
+	if len(stops) == 0 {
+		for _, field := range []string{"waypoints", "current-step", "latitude",
+			"longitude", "destination", "address", "timestamp"} {
+			if err := hash.Set(field, ""); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if step < 0 {
+		step = 0
+	}
+	if step >= len(stops) {
+		step = len(stops) - 1
+	}
+	encoded, err := json.Marshal(stops)
+	if err != nil {
+		return err
+	}
+	target := stops[step]
+	for field, value := range map[string]string{
+		"waypoints":    string(encoded),
+		"current-step": strconv.Itoa(step),
+		"latitude":     strconv.FormatFloat(target.Lat, 'f', 6, 64),
+		"longitude":    strconv.FormatFloat(target.Lon, 'f', 6, 64),
+		"destination":  fmt.Sprintf("%.6f,%.6f", target.Lat, target.Lon),
+		"timestamp":    time.Now().UTC().Format(time.RFC3339),
+	} {
+		if err := hash.Set(field, value); err != nil {
+			return err
+		}
+	}
+	if target.Label != "" {
+		return hash.Set("address", target.Label)
+	}
+	return nil
+}
+
 // handleNavCommand processes navigation commands.
 func (s *Service) handleNavCommand(cmd string) {
 	if strings.HasPrefix(cmd, "dest ") {
@@ -129,6 +314,12 @@ func (s *Service) handleNavCommand(cmd string) {
 		if err := hash.Set("destination", coords); err != nil {
 			s.log.Errorf("Failed to set navigation destination: %v", err)
 		}
+		// A single destination replaces any multi-stop plan.
+		for _, field := range []string{"waypoints", "current-step"} {
+			if err := hash.Set(field, ""); err != nil {
+				s.log.Errorf("Failed to clear navigation field %s: %v", field, err)
+			}
+		}
 
 		if len(parts) == 3 {
 			name := strings.TrimSpace(parts[2])
@@ -146,13 +337,16 @@ func (s *Service) handleNavCommand(cmd string) {
 		// HiredisWorker::doHdel issues HDEL without a follow-up PUBLISH, so
 		// subscribers (this service's HashWatcher, scootui-qt's own SyncableStore)
 		// never wake up. Setting "" goes through HSET+PUBLISH and reaches both.
-		for _, field := range []string{"latitude", "longitude", "destination", "address", "timestamp"} {
+		for _, field := range []string{"latitude", "longitude", "destination", "address", "timestamp", "waypoints", "current-step"} {
 			if err := hash.Set(field, ""); err != nil {
 				s.log.Errorf("Failed to clear navigation field %s: %v", field, err)
 			}
 		}
 		s.log.Infof("Cleared navigation destination")
 		s.sendExtendedResponse("nav:ok")
+
+	} else if strings.HasPrefix(cmd, "route:") {
+		s.handleNavRouteCommand(strings.TrimPrefix(cmd, "route:"))
 
 	} else if strings.HasPrefix(cmd, "fav:") {
 		s.handleNavFavouriteCommand(strings.TrimPrefix(cmd, "fav:"))
@@ -877,7 +1071,7 @@ func (s *Service) handleServiceModeCommand(cmd string) {
 
 // capabilityMap maps each command category to its supported commands.
 var capabilityMap = map[string][]string{
-	"nav":          {"dest", "clear", "fav:add", "fav:delete", "fav:navigate", "fav:list"},
+	"nav":          {"dest", "clear", "route:add", "route:remove", "route:skip", "route:list", "route:clear", "fav:add", "fav:delete", "fav:navigate", "fav:list"},
 	"keycard":      {"list", "count", "add:<uid>", "remove:<uid>"},
 	"usb":          {"ums", "normal"},
 	"service-mode": {"on", "off"},

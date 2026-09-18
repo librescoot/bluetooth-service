@@ -343,3 +343,42 @@ func TestCapabilityCommandsForBLETracksFirmware(t *testing.T) {
 		t.Errorf("dbc capabilities = %v, want five commands", dbc)
 	}
 }
+
+// parseNavStop is the BLE side of a multi-stop plan. One stop per command,
+// because the extended command is capped at 100 bytes.
+func TestParseNavStop(t *testing.T) {
+	tests := []struct {
+		name    string
+		entry   string
+		wantErr bool
+		want    navStop
+	}{
+		{name: "coordinates and name", entry: "52.51,13.41,Home", want: navStop{52.51, 13.41, "Home"}},
+		{name: "coordinates only with whitespace", entry: " 52.51 , 13.41 ", want: navStop{52.51, 13.41, ""}},
+		{name: "name may contain a comma", entry: "52.51,13.41,Home, sweet home",
+			want: navStop{52.51, 13.41, "Home, sweet home"}},
+		{name: "missing longitude", entry: "52.51", wantErr: true},
+		{name: "non-numeric", entry: "north,13.41", wantErr: true},
+		{name: "out of range", entry: "91,13.41", wantErr: true},
+		{name: "origin reserved", entry: "0,0", wantErr: true},
+		{name: "empty", entry: "", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseNavStop(tt.entry)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected an error, got %+v", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("stop = %+v want %+v", got, tt.want)
+			}
+		})
+	}
+}
