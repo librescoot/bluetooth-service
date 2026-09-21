@@ -85,14 +85,11 @@ func TestShutdownWaitsForReconnectBeforeDisablingStream(t *testing.T) {
 		s.mu.RLock()
 		serviceStopped := s.stopped
 		s.mu.RUnlock()
-		s.link.mu.Lock()
-		linkStopped := s.link.stopped
-		s.link.mu.Unlock()
-		if serviceStopped && linkStopped {
+		if serviceStopped {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("shutdown did not establish terminal state")
+			t.Fatal("shutdown did not establish terminal service state")
 		}
 		time.Sleep(time.Millisecond)
 	}
@@ -114,6 +111,13 @@ func TestShutdownWaitsForReconnectBeforeDisablingStream(t *testing.T) {
 	}
 	if len(mock.messages) != 1 {
 		t.Fatalf("shutdown wrote %d messages, want stream disable", len(mock.messages))
+	}
+	s.link.mu.Lock()
+	linkStopped := s.link.stopped
+	linkSuspended := s.link.suspended
+	s.link.mu.Unlock()
+	if !linkStopped || !linkSuspended {
+		t.Fatal("shutdown left link manager active")
 	}
 }
 

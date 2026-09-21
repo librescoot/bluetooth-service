@@ -65,32 +65,41 @@ func (s *Service) InitializeNRF52() error {
 	return nil
 }
 
-// ShutdownNRF52 tells the nRF to stop its autonomous data stream before
-// bluetooth-service exits. Without this, a restart of bluetooth-service
-// leaves the stream running into nothing, and if the MDB suspends while
-// bluetooth-service is down the UART frames will abort suspend.
+// ShutdownNRF52 leaves the persistent nRF UART quiet at its 115200 boot baud
+// before bluetooth-service exits. This allows either service implementation to
+// initialize immediately after a process restart or MDB soft reboot.
 func (s *Service) ShutdownNRF52() {
-	// Establish terminal state before waiting for an in-flight reconnect.
+	// Block new reconnects before waiting for the current lifecycle owner.
 	s.mu.Lock()
 	s.stopped = true
 	s.mu.Unlock()
-	if s.link != nil {
-		s.link.Stop()
-	}
 
 	s.reconnectMu.Lock()
 	defer s.reconnectMu.Unlock()
+
+	if s.link != nil {
+		// Stop keepalives and wait for any negotiation or fallback to release the
+		// UART, but retain direct access for the shutdown commands below.
+		s.link.Suspend()
+		defer s.link.Stop()
+	}
 
 	if s.usock == nil {
 		return
 	}
 	if err := writeUARTMessage(s.usock, ble.TypeDataStream, ble.TypeDataStreamEnable, 0); err != nil {
 		s.log.Warnf("failed to disable data stream on shutdown: %v", err)
-		return
+	} else {
+		s.log.Infof("Disabled nRF data stream on shutdown")
+		// Keep BAUD_SET behind the stream-disable frame on the wire.
+		time.Sleep(50 * time.Millisecond)
 	}
-	s.log.Infof("Disabled nRF data stream on shutdown")
-	// Give the nRF a moment to process before we close the serial port.
-	time.Sleep(50 * time.Millisecond)
+
+	if s.link != nil {
+		if err := s.link.EnsureLinkBaud(linkBaudDefault); err != nil {
+			s.log.Warnf("failed to restore nRF boot baud on shutdown: %v", err)
+		}
+	}
 }
 
 // RestartAdvertisingWithoutWhitelist sends command to restart advertising without whitelist
