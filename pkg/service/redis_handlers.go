@@ -25,6 +25,7 @@ func (s *Service) SubscribeToRedisChannels() {
 		KeyPowerManager,    // "power-manager"
 		KeyMileage,         // "engine-ecu"
 		KeyFirmwareVersion, // "system"
+		KeyMDBVersion,      // "version:mdb"
 		KeyBLEPairingPin,   // "ble" - Keep for pin removal notification
 		KeyNavigation,      // "navigation"
 		KeyUSB,             // "usb"
@@ -135,6 +136,13 @@ func (s *Service) SubscribeToRedisChannels() {
 					if field == "mdb-version" {
 						if err := s.UpdateFirmwareVersion(value); err != nil {
 							s.log.Errorf("Error sending firmware version update triggered by Redis: %v", err)
+						}
+					}
+
+				case KeyMDBVersion:
+					if field == "version" || field == "version_id" {
+						if err := s.pushMDBVersion(); err != nil {
+							s.log.Errorf("Error sending MDB version update triggered by Redis: %v", err)
 						}
 					}
 
