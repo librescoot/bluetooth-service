@@ -33,6 +33,7 @@ type firmwareUpdaterInterface interface {
 type Service struct {
 	usock           usockCloser
 	ipc             *ipc.Client // Redis IPC client
+	destIPC         *ipc.Client // JSON-codec IPC client for destination RPC
 	log             *logger.Logger
 	stopCh          chan struct{}
 	stopped         bool
@@ -132,10 +133,12 @@ const (
 	FaultFirmwareUpdate = 3 // Firmware update error
 )
 
-// New creates a new Service instance
-func New(ipcClient *ipc.Client, log *logger.Logger) *Service {
+// New creates a new Service instance. destinationClient is the JSON-codec
+// IPC client used for destination RPC.
+func New(ipcClient *ipc.Client, destinationClient *ipc.Client, log *logger.Logger) *Service {
 	s := &Service{
 		ipc:              ipcClient,
+		destIPC:          destinationClient,
 		log:              log,
 		stopCh:           make(chan struct{}),
 		faults:           ipcClient.NewFaultReporter("ble"),

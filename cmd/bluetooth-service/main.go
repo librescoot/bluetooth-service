@@ -80,7 +80,15 @@ func main() {
 	defer ipcClient.Close()
 	log.Infof("Connected to Redis")
 
-	svc := service.New(ipcClient, log)
+	destinationClient, err := ipc.New(
+		ipc.WithURL(*redisAddr),
+	)
+	if err != nil {
+		log.Fatalf("Failed to connect destination client: %v", err)
+	}
+	defer destinationClient.Close()
+
+	svc := service.New(ipcClient, destinationClient, log)
 
 	usockHandler := func(payload *usock.Payload) {
 		svc.HandleUSockMessage(payload.ID, payload)

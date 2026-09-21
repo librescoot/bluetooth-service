@@ -1,19 +1,15 @@
 package service
 
 import (
-	"context"
-	"crypto/rand"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"time"
+
+	ipc "github.com/librescoot/redis-ipc"
 )
 
 // Destination records are managed by settings-service over the redis-ipc call
-// channel. This service builds its ipc client with a string codec, so the
-// calls carry hand-built JSON envelopes in the shape the CallServer
-// dispatches: {id, method, reply_channel, deadline, payload} answered with
-// {ok, payload, error} on the reply channel.
+// channel. Calls ride a JSON-codec client; the service's own client uses a
+// string codec for its command payloads.
 
 const destinationChannel = "settings:destinations"
 const destinationCallTimeout = 5 * time.Second
@@ -36,70 +32,17 @@ type destinationIDRequest struct {
 
 type destinationEmptyResponse struct{}
 
-type destinationReply struct {
-	OK      bool            `json:"ok"`
-	Payload json.RawMessage `json:"payload"`
-	Error   string          `json:"error"`
-}
-
-func (s *Service) callDestination(method string, request, response any) error {
-	payload, err := json.Marshal(request)
-	if err != nil {
-		return fmt.Errorf("encode %s request: %w", method, err)
+// destinationCall performs one typed RPC against settings-service.
+func destinationCall[Req, Resp any](client *ipc.Client, method string, request Req,
+	response *Resp) error {
+	if client == nil {
+		return fmt.Errorf("destination client not configured")
 	}
-	callID, err := newDestinationCallID()
+	result, err := ipc.CallMethod[Req, Resp](client, destinationChannel, method,
+		request, destinationCallTimeout)
 	if err != nil {
 		return err
 	}
-	replyChannel := destinationChannel + ":reply:" + callID
-	envelope, err := json.Marshal(map[string]any{
-		"id":            callID,
-		"method":        method,
-		"reply_channel": replyChannel,
-		"deadline":      time.Now().Add(destinationCallTimeout).UnixMilli(),
-		"payload":       json.RawMessage(payload),
-	})
-	if err != nil {
-		return fmt.Errorf("encode %s envelope: %w", method, err)
-	}
-
-	ctx, cancel := context.WithTimeout(s.ipc.Context(), destinationCallTimeout)
-	defer cancel()
-	rdb := s.ipc.Raw()
-
-	sub := rdb.Subscribe(ctx, replyChannel)
-	defer sub.Close()
-	if _, err := sub.Receive(ctx); err != nil {
-		return fmt.Errorf("subscribe %s reply: %w", method, err)
-	}
-	if err := rdb.LPush(ctx, destinationChannel, envelope).Err(); err != nil {
-		return fmt.Errorf("queue %s call: %w", method, err)
-	}
-	msg, err := sub.ReceiveMessage(ctx)
-	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			return fmt.Errorf("%s timed out", method)
-		}
-		return fmt.Errorf("receive %s reply: %w", method, err)
-	}
-
-	var reply destinationReply
-	if err := json.Unmarshal([]byte(msg.Payload), &reply); err != nil {
-		return fmt.Errorf("decode %s reply: %w", method, err)
-	}
-	if !reply.OK {
-		return fmt.Errorf("%s failed: %s", method, reply.Error)
-	}
-	if err := json.Unmarshal(reply.Payload, response); err != nil {
-		return fmt.Errorf("decode %s response: %w", method, err)
-	}
+	*response = result
 	return nil
-}
-
-func newDestinationCallID() (string, error) {
-	var raw [8]byte
-	if _, err := rand.Read(raw[:]); err != nil {
-		return "", fmt.Errorf("generate call id: %w", err)
-	}
-	return hex.EncodeToString(raw[:]), nil
 }

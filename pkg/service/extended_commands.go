@@ -413,7 +413,7 @@ func (s *Service) addSavedLocation(lat, lon, name string) (int, error) {
 		return 0, fmt.Errorf("invalid longitude %q", lon)
 	}
 	var saved destinationSaveResponse
-	if err := s.callDestination("destination.save",
+	if err := destinationCall(s.destIPC, "destination.save",
 		destinationSaveRequest{Latitude: latitude, Longitude: longitude, Label: name},
 		&saved); err != nil {
 		return 0, err
@@ -428,8 +428,9 @@ func (s *Service) deleteSavedLocation(id string) error {
 	if err != nil {
 		return fmt.Errorf("invalid location id %q", id)
 	}
-	if err := s.callDestination("destination.delete", destinationIDRequest{ID: slot},
-		&destinationEmptyResponse{}); err != nil {
+	var deleted destinationEmptyResponse
+	if err := destinationCall(s.destIPC, "destination.delete", destinationIDRequest{ID: slot},
+		&deleted); err != nil {
 		return err
 	}
 	s.log.Infof("Deleted saved location %d", slot)
