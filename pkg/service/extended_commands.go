@@ -433,7 +433,7 @@ func (s *Service) addSavedLocation(lat, lon, name string) (int, error) {
 func (s *Service) deleteSavedLocation(id string) error {
 	settings := s.ipc.Hash("settings")
 	prefix := fmt.Sprintf("dashboard.saved-locations.%s", id)
-	for _, field := range []string{".latitude", ".longitude", ".label", ".created-at", ".last-used-at"} {
+	for _, field := range []string{".latitude", ".longitude", ".label", ".created-at", ".last-used-at", ".uuid", ".quick-slot", ".quick-icon"} {
 		if err := settings.Delete(prefix + field); err != nil {
 			s.log.Warnf("Failed to delete %s%s: %v", prefix, field, err)
 		}
