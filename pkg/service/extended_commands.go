@@ -401,44 +401,38 @@ func (s *Service) handleNavFavouriteCommand(cmd string) {
 	}
 }
 
-// addSavedLocation adds a new saved location to Redis settings.
-// Returns the assigned ID.
+// addSavedLocation saves a new record through the destination service, which
+// owns slot allocation and UUID assignment. Returns the assigned ID.
 func (s *Service) addSavedLocation(lat, lon, name string) (int, error) {
-	// Find next available ID by scanning existing entries
-	settings := s.ipc.Hash("settings")
-	id := 0
-	for {
-		existing, err := s.ipc.HGet("settings", fmt.Sprintf("dashboard.saved-locations.%d.latitude", id))
-		if err != nil || existing == "" {
-			break
-		}
-		id++
+	latitude, err := strconv.ParseFloat(strings.TrimSpace(lat), 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid latitude %q", lat)
 	}
-
-	prefix := fmt.Sprintf("dashboard.saved-locations.%d", id)
-	if err := settings.Set(prefix+".latitude", lat); err != nil {
-		return 0, fmt.Errorf("failed to set latitude: %w", err)
+	longitude, err := strconv.ParseFloat(strings.TrimSpace(lon), 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid longitude %q", lon)
 	}
-	if err := settings.Set(prefix+".longitude", lon); err != nil {
-		return 0, fmt.Errorf("failed to set longitude: %w", err)
+	var saved destinationSaveResponse
+	if err := s.callDestination("destination.save",
+		destinationSaveRequest{Latitude: latitude, Longitude: longitude, Label: name},
+		&saved); err != nil {
+		return 0, err
 	}
-	if err := settings.Set(prefix+".label", name); err != nil {
-		return 0, fmt.Errorf("failed to set label: %w", err)
-	}
-
-	return id, nil
+	return saved.ID, nil
 }
 
-// deleteSavedLocation removes a saved location by ID.
+// deleteSavedLocation removes the whole record through the destination
+// service, which also prunes the record's shortcut-menu item.
 func (s *Service) deleteSavedLocation(id string) error {
-	settings := s.ipc.Hash("settings")
-	prefix := fmt.Sprintf("dashboard.saved-locations.%s", id)
-	for _, field := range []string{".latitude", ".longitude", ".label", ".created-at", ".last-used-at", ".uuid", ".quick-slot", ".quick-icon"} {
-		if err := settings.Delete(prefix + field); err != nil {
-			s.log.Warnf("Failed to delete %s%s: %v", prefix, field, err)
-		}
+	slot, err := strconv.Atoi(strings.TrimSpace(id))
+	if err != nil {
+		return fmt.Errorf("invalid location id %q", id)
 	}
-	s.log.Infof("Deleted saved location %s", id)
+	if err := s.callDestination("destination.delete", destinationIDRequest{ID: slot},
+		&destinationEmptyResponse{}); err != nil {
+		return err
+	}
+	s.log.Infof("Deleted saved location %d", slot)
 	return nil
 }
 
