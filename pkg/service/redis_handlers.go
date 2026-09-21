@@ -460,6 +460,24 @@ func (s *Service) UpdateFirmwareVersion(version string) error {
 	return nil
 }
 
+// pushMDBVersion publishes the MDB version to the nRF, which exposes it as
+// the iMX Software Version characteristic. version:mdb is version-service's
+// mirror of /etc/os-release.
+func (s *Service) pushMDBVersion() error {
+	fields, err := s.ipc.HGetAll(KeyMDBVersion)
+	if err != nil {
+		return fmt.Errorf("failed to read version:mdb: %v", err)
+	}
+	version := fields["version"]
+	if version == "" {
+		version = fields["version_id"]
+	}
+	if version == "" {
+		return fmt.Errorf("version:mdb carries no version")
+	}
+	return s.UpdateFirmwareVersion(version)
+}
+
 // UpdateBatteryActiveStatus sends the battery active status to nRF52
 func (s *Service) UpdateBatteryActiveStatus(slot int, stateStr string) error {
 	baseSubType := ble.TypeBatterySlot0State

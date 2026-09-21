@@ -30,7 +30,13 @@ func (s *Service) InitializeNRF52() error {
 	}
 	time.Sleep(50 * time.Millisecond)
 
-	// 3. Request BLE MAC address
+	// 3. Publish the MDB version; the nRF does not re-request it after a restart.
+	if err := s.pushMDBVersion(); err != nil {
+		s.log.Warnf(" failed to send MDB firmware version: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	// 4. Request BLE MAC address
 	if err := writeUARTMessage(s.usock, ble.TypeBLEParam, ble.TypeBLEParamMACAddress, 0); err != nil {
 		s.log.Warnf(" failed to request BLE MAC address: %v", err)
 	} else {
@@ -38,7 +44,7 @@ func (s *Service) InitializeNRF52() error {
 	}
 	time.Sleep(50 * time.Millisecond)
 
-	// 4. Enable data streaming
+	// 5. Enable data streaming
 	if err := writeUARTMessage(s.usock, ble.TypeDataStream, ble.TypeDataStreamEnable, 1); err != nil {
 		s.log.Warnf(" failed to enable data streaming: %v", err)
 	} else {
@@ -46,7 +52,7 @@ func (s *Service) InitializeNRF52() error {
 	}
 	time.Sleep(50 * time.Millisecond)
 
-	// 5. Sync data stream
+	// 6. Sync data stream
 	if err := writeUARTMessage(s.usock, ble.TypeDataStream, ble.TypeDataStreamSync, 1); err != nil {
 		s.log.Warnf(" Failed to sync data stream: %v", err)
 	} else {
@@ -54,7 +60,7 @@ func (s *Service) InitializeNRF52() error {
 	}
 	time.Sleep(50 * time.Millisecond)
 
-	// 6. Start advertising (No Whitelist)
+	// 7. Start advertising (No Whitelist)
 	if err := writeUARTMessage(s.usock, ble.TypeBLECommand, ble.SubType(ble.BLECommandAdvRestartNoWhitelist), 0); err != nil {
 		s.log.Warnf(" failed to send command to restart advertising without whitelist: %v", err)
 	} else {
