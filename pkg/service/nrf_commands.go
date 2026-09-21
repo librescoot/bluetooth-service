@@ -20,8 +20,10 @@ func (s *Service) InitializeNRF52() error {
 	}
 	time.Sleep(50 * time.Millisecond)
 
-	// 2. Request BLE firmware version
-	if err := writeUARTMessage(s.usock, ble.TypeBLEVersion, ble.TypeBLEVersionString, 0); err != nil {
+	// 2. Request the firmware version and negotiate optional host capabilities.
+	// Firmware without HOST_SESSION support ignores the additional parameter and
+	// still returns its version string.
+	if err := s.negotiateHostSession(); err != nil {
 		s.log.Warnf(" failed to request BLE firmware version: %v", err)
 	} else {
 		s.log.Debugf("Sent Request BLE Firmware Version command")

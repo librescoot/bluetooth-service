@@ -109,6 +109,11 @@ type Service struct {
 	// UART link manager: baud negotiation with the nRF and automatic fallback
 	link *LinkManager
 
+	hostSessionInitMu sync.Mutex
+	hostSessionMu     sync.Mutex
+	hostSessionAckCh  chan hostSessionAck
+	hostCapabilities  int32
+
 	// OTA receiver: phone -> scooter firmware transfer over the OTA tunnel
 	ota otaReceiver
 }
@@ -130,10 +135,11 @@ const (
 // New creates a new Service instance
 func New(ipcClient *ipc.Client, log *logger.Logger) *Service {
 	s := &Service{
-		ipc:    ipcClient,
-		log:    log,
-		stopCh: make(chan struct{}),
-		faults: ipcClient.NewFaultReporter("ble"),
+		ipc:              ipcClient,
+		log:              log,
+		stopCh:           make(chan struct{}),
+		faults:           ipcClient.NewFaultReporter("ble"),
+		hostSessionAckCh: make(chan hostSessionAck, 4),
 	}
 	s.link = newLinkManager(s)
 	return s

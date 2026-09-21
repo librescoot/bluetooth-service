@@ -385,6 +385,12 @@ func (s *Service) handleScooterInfoMessage(msgType ble.MessageType, absSubTypeKe
 func (s *Service) handleBLEVersionMessage(msgType ble.MessageType, absSubTypeKey uint16, value interface{}) {
 	s.log.Debugf("Handling BLE version message (Type 0x%04x). Absolute subtype key: 0x%04x", msgType, absSubTypeKey)
 
+	hostSessionAbsSubType := uint16(ble.TypeBLEVersion) + uint16(ble.TypeBLEVersionHostSession)
+	if absSubTypeKey == hostSessionAbsSubType {
+		s.handleHostSessionAck(value)
+		return
+	}
+
 	expectedAbsSubType := uint16(ble.TypeBLEVersion) + uint16(ble.TypeBLEVersionString) // 0xA001
 
 	// v1.8.x and earlier emit VERSION_STRING under absolute key 0x0000.

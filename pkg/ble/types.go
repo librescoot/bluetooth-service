@@ -113,8 +113,9 @@ const (
 	TypeBLEDebugResetAck SubType = 3 // BLE_SCOOTER_SERVICE_DEBUG_RESET_ACK
 
 	// BLE version sub-types
-	TypeBLEVersionString  SubType = 1 // BLE_SCOOTER_SERVICE_VERSION_STRING
-	TypeBLEVersionRequest SubType = 2 // BLE_SCOOTER_SERVICE_VERSION_REQUEST
+	TypeBLEVersionString      SubType = 1 // BLE_SCOOTER_SERVICE_VERSION_STRING
+	TypeBLEVersionRequest     SubType = 2 // BLE_SCOOTER_SERVICE_VERSION_REQUEST
+	TypeBLEVersionHostSession SubType = 3 // BLE_SCOOTER_SERVICE_VERSION_HOST_SESSION
 
 	// Aux battery sub-types
 	TypeAuxBatteryVoltage       SubType = 1 // BLE_SCOOTER_SERVICE_AUX_BATTERY_VOLTAGE
