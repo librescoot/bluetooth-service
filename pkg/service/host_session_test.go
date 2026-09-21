@@ -6,6 +6,7 @@ import (
 	"github.com/fxamacker/cbor/v2"
 	"github.com/librescoot/bluetooth-service/pkg/ble"
 	"github.com/librescoot/bluetooth-service/pkg/logger"
+	"github.com/librescoot/bluetooth-service/pkg/usock"
 )
 
 type hostSessionTestUSOCK struct {
@@ -93,6 +94,36 @@ func TestHostSessionNegotiationAcceptsMatchingAck(t *testing.T) {
 	s.hostSessionMu.Unlock()
 	if capabilities != hostCapExternalTemperature {
 		t.Fatalf("negotiated capabilities = %#x, want %#x", capabilities, hostCapExternalTemperature)
+	}
+}
+
+func TestHostSessionAckDispatch(t *testing.T) {
+	s := &Service{log: logger.NewLogger(nil, logger.LogLevelNone)}
+	key := uint16(ble.TypeBLEVersion) + uint16(ble.TypeBLEVersionHostSession)
+	data, err := cbor.Marshal(map[uint16]map[uint16][]int32{
+		uint16(ble.TypeBLEVersion): {
+			key: {hostSessionProtocolVersion, hostCapExternalTemperature, 42},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	frameID := byte(ble.TypeBLEVersion & 0xff)
+	s.HandleUSockMessage(frameID, &usock.Payload{
+		ID:   frameID,
+		Data: data,
+		Size: len(data),
+	})
+
+	select {
+	case ack := <-s.hostSessionChannel():
+		if ack.version != hostSessionProtocolVersion ||
+			ack.capabilities != hostCapExternalTemperature || ack.nonce != 42 {
+			t.Fatalf("unexpected acknowledgment: %+v", ack)
+		}
+	default:
+		t.Fatal("host-session acknowledgment was not dispatched")
 	}
 }
 
