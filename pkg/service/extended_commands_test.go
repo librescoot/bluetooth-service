@@ -137,62 +137,23 @@ func TestForwardedKeycardCommand(t *testing.T) {
 	}
 }
 
-func TestKeycardV2CapabilityRequiresLiveBackend(t *testing.T) {
-	s, mr := newVersionPushService(t)
-	if s.keycardV2Supported() || len(s.capabilityCommands("keycard")) != 4 {
-		t.Fatal("v2 commands advertised without a backend")
-	}
-	mr.Set("keycard:protocol-version", "1")
-	if s.keycardV2Supported() || len(s.capabilityCommands("keycard")) != 4 {
-		t.Fatal("v1 backend advertised v2 commands")
-	}
-	mr.Set("keycard:protocol-version", "2")
-	if !s.keycardV2Supported() {
-		t.Fatal("v2 backend not detected")
-	}
+func TestKeycardV2Capabilities(t *testing.T) {
+	s, _ := newVersionPushService(t)
 	if got := s.capabilityCommands("keycard"); len(got) != 10 || got[4] != "phone:list" || got[7] != "alias:list" {
-		t.Fatalf("v2 commands = %v", got)
+		t.Fatalf("keycard commands = %v", got)
 	}
-	mr.Del("keycard:protocol-version")
-	if s.keycardV2Supported() || len(s.capabilityCommands("keycard")) != 4 {
-		t.Fatal("stale v2 capability survived backend removal")
-	}
-	for _, cmd := range []string{"phone:list", "phone:remove:ABCD", "master:list", "alias:list", "alias:set:card:AABB:QQ", "alias:clear:card:AABB"} {
-		if !v2KeycardCommand(cmd) {
-			t.Errorf("v2 command %q not gated", cmd)
-		}
-	}
-	if v2KeycardCommand("list") || v2KeycardCommand("remove:AABB") {
-		t.Fatal("v1 commands mistakenly require v2")
+	if got := capabilityRegistryFor(false, false); !strings.Contains(got, ":keycard=2:") {
+		t.Fatalf("keycard v2 missing from registry: %q", got)
 	}
 }
 
-func TestKeycardV1ForwardsCardsButRejectsV2Requests(t *testing.T) {
+func TestKeycardCommandsForward(t *testing.T) {
 	s, mr := newVersionPushService(t)
-	s.handleKeycardCommand("phone:list")
-	message := s.usock.(*mockUSOCK).lastMessage()
-	if message == nil {
-		t.Fatal("missing unsupported response")
+	for _, cmd := range []string{"phone:list", "list", "alias:list"} {
+		s.handleKeycardCommand(cmd)
 	}
-	decoded, err := decodeCBORMessageString(message.data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	key := uint16(ble.TypeExtended) + uint16(ble.TypeExtendedResponse)
-	if got := decoded[uint16(ble.TypeExtended)][key]; got != "keycard:error:unsupported" {
-		t.Fatalf("phone request without v2 = %q", got)
-	}
-	if mr.Exists("scooter:keycard") {
-		t.Fatal("v2 request reached a v1 backend")
-	}
-	s.handleKeycardCommand("list")
-	if !mr.Exists("scooter:keycard") {
-		t.Fatal("v1 card list was not forwarded")
-	}
-	mr.Set("keycard:protocol-version", "2")
-	s.handleKeycardCommand("alias:list")
 	commands, err := mr.List("scooter:keycard")
-	if err != nil || len(commands) != 2 || commands[0] != `"alias:list"` || commands[1] != `"list"` {
+	if err != nil || len(commands) != 3 || commands[0] != `"alias:list"` || commands[1] != `"list"` || commands[2] != `"phone:list"` {
 		t.Fatalf("forwarded commands = %v, %v", commands, err)
 	}
 }
@@ -285,7 +246,7 @@ func TestTripCapabilityPromotesCurrentSchemaForGenericSettings(t *testing.T) {
 		t.Fatal("current schema did not enable the trip capability")
 	}
 	s.promoteSettingsSchema(currentSchema)
-	if registry := capabilityRegistryFor(false, tripSupported, false); !strings.HasSuffix(registry, ":trip") {
+	if registry := capabilityRegistryFor(false, tripSupported); !strings.HasSuffix(registry, ":trip") {
 		t.Fatalf("cap:ext registry = %q, want trip capability", registry)
 	}
 

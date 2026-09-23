@@ -535,21 +535,11 @@ func (s *Service) handleKeycardCommand(cmd string) {
 		s.sendExtendedResponse("keycard:error:unknown command")
 		return
 	}
-	if v2KeycardCommand(cmd) && !s.keycardV2Supported() {
-		s.sendExtendedResponse("keycard:error:unsupported")
-		return
-	}
 	if err := ipc.SendRequest(s.ipc, "scooter:keycard", cmd); err != nil {
 		s.log.Errorf("Failed to forward keycard command: %v", err)
 		s.sendExtendedResponse("keycard:error:redis")
 	}
 	// Response comes asynchronously via keycard hash subscription.
-}
-
-func v2KeycardCommand(cmd string) bool {
-	return cmd == "phone:list" || cmd == "master:list" || cmd == "alias:list" ||
-		strings.HasPrefix(cmd, "phone:remove:") || strings.HasPrefix(cmd, "alias:set:") ||
-		strings.HasPrefix(cmd, "alias:clear:")
 }
 
 func forwardedKeycardCommand(cmd string) bool {
@@ -1108,19 +1098,9 @@ var capabilityMap = map[string][]string{
 	"set":          {"<key>:<value>"},
 }
 
-// The keycard service advertises its live protocol version with a TTL; the
-// BLE binary alone cannot establish which credential commands will answer.
-func (s *Service) keycardV2Supported() bool {
-	if s.ipc == nil {
-		return false
-	}
-	version, err := s.ipc.Get("keycard:protocol-version")
-	return err == nil && version == "2"
-}
-
 func (s *Service) capabilityCommands(category string) []string {
 	commands := capabilityCommandsFor(category, s.nrfSupportsBondDelete)
-	if category != "keycard" || !s.keycardV2Supported() {
+	if category != "keycard" {
 		return commands
 	}
 	return append(append([]string(nil), commands...),
@@ -1147,12 +1127,8 @@ func capabilityCommandsFor(category string, bondDelete func() bool) []string {
 
 // capabilityRegistryFor returns the complete high-level registry for cap:ext.
 // Its fixed order is part of the response contract.
-func capabilityRegistryFor(bondDelete, tripCounter, keycardV2 bool) string {
-	keycard := "keycard"
-	if keycardV2 {
-		keycard = "keycard=2"
-	}
-	categories := []string{"nav=2", keycard, "usb", "service-mode", "time", "config", "status", "alarm", "ltc"}
+func capabilityRegistryFor(bondDelete, tripCounter bool) string {
+	categories := []string{"nav=2", "keycard=2", "usb", "service-mode", "time", "config", "status", "alarm", "ltc"}
 	if bondDelete {
 		categories = append(categories, "ble")
 	}
@@ -1207,7 +1183,7 @@ func (s *Service) handleCapabilityQuery(cmd string) {
 	cmd = strings.TrimSpace(cmd)
 
 	if cmd == "ext" {
-		response := capabilityRegistryFor(s.nrfSupportsBondDelete(), s.tripCounterSupported(), s.keycardV2Supported())
+		response := capabilityRegistryFor(s.nrfSupportsBondDelete(), s.tripCounterSupported())
 		if len(response) > tripResponseMaxBytes {
 			s.log.Errorf("cap:ext response exceeds limit: %d bytes", len(response))
 			s.sendExtendedResponse("cap:error:internal")
