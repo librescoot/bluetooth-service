@@ -535,7 +535,7 @@ func (s *Service) handleKeycardCommand(cmd string) {
 		s.sendExtendedResponse("keycard:error:unknown command")
 		return
 	}
-	if (strings.HasPrefix(cmd, "alias:") || cmd == "master:list") && !s.keyAliasSupported() {
+	if v2KeycardCommand(cmd) && !s.keycardV2Supported() {
 		s.sendExtendedResponse("keycard:error:unsupported")
 		return
 	}
@@ -544,6 +544,12 @@ func (s *Service) handleKeycardCommand(cmd string) {
 		s.sendExtendedResponse("keycard:error:redis")
 	}
 	// Response comes asynchronously via keycard hash subscription.
+}
+
+func v2KeycardCommand(cmd string) bool {
+	return cmd == "phone:list" || cmd == "master:list" || cmd == "alias:list" ||
+		strings.HasPrefix(cmd, "phone:remove:") || strings.HasPrefix(cmd, "alias:set:") ||
+		strings.HasPrefix(cmd, "alias:clear:")
 }
 
 func forwardedKeycardCommand(cmd string) bool {
@@ -1086,8 +1092,6 @@ func (s *Service) handleServiceModeCommand(cmd string) {
 var capabilityMap = map[string][]string{
 	"nav":          {"dest", "clear", "route:add", "route:remove", "route:skip", "route:list", "route:clear", "fav:add", "fav:delete", "fav:navigate", "fav:list"},
 	"keycard":      {"list", "count", "add:<uid>", "remove:<uid>"},
-	"phone-key":    {"list", "remove:<fingerprint>"},
-	"key-alias":    {"list", "master:list", "set:<kind>:<id>:<name>", "clear:<kind>:<id>"},
 	"usb":          {"ums", "normal"},
 	"service-mode": {"on", "off"},
 	"time":         {"set"},
@@ -1104,24 +1108,24 @@ var capabilityMap = map[string][]string{
 	"set":          {"<key>:<value>"},
 }
 
-// capabilityCommands returns the commands a category can serve right now.
-// Most categories are fixed at build time. "ble" is not: the bond delete it
-// offers needs an nRF new enough to act on it, and the nRF carries its own
-// version. Reporting it regardless would make the probe worthless, since the
-// answer the phone is probing for is exactly the one that varies.
-func (s *Service) capabilityCommands(category string) []string {
-	if category == "key-alias" && !s.keyAliasSupported() {
-		return nil
-	}
-	return capabilityCommandsFor(category, s.nrfSupportsBondDelete)
-}
-
-func (s *Service) keyAliasSupported() bool {
+// The keycard service advertises its live protocol version with a TTL; the
+// BLE binary alone cannot establish which credential commands will answer.
+func (s *Service) keycardV2Supported() bool {
 	if s.ipc == nil {
 		return false
 	}
-	ready, err := s.ipc.Get("keycard:alias-ready")
-	return err == nil && ready == "1"
+	version, err := s.ipc.Get("keycard:protocol-version")
+	return err == nil && version == "2"
+}
+
+func (s *Service) capabilityCommands(category string) []string {
+	commands := capabilityCommandsFor(category, s.nrfSupportsBondDelete)
+	if category != "keycard" || !s.keycardV2Supported() {
+		return commands
+	}
+	return append(append([]string(nil), commands...),
+		"phone:list", "phone:remove:<fingerprint>", "master:list",
+		"alias:list", "alias:set:<kind>:<id>:<name>", "alias:clear:<kind>:<id>")
 }
 
 // capabilityCommandsFor is the version-dependent filtering, split out so it can
@@ -1143,12 +1147,12 @@ func capabilityCommandsFor(category string, bondDelete func() bool) []string {
 
 // capabilityRegistryFor returns the complete high-level registry for cap:ext.
 // Its fixed order is part of the response contract.
-func capabilityRegistryFor(bondDelete, tripCounter, keyAlias bool) string {
-	categories := []string{"nav=2", "keycard", "phone-key"}
-	if keyAlias {
-		categories = append(categories, "key-alias=1")
+func capabilityRegistryFor(bondDelete, tripCounter, keycardV2 bool) string {
+	keycard := "keycard"
+	if keycardV2 {
+		keycard = "keycard=2"
 	}
-	categories = append(categories, "usb", "service-mode", "time", "config", "status", "alarm", "ltc")
+	categories := []string{"nav=2", keycard, "usb", "service-mode", "time", "config", "status", "alarm", "ltc"}
 	if bondDelete {
 		categories = append(categories, "ble")
 	}
@@ -1203,7 +1207,7 @@ func (s *Service) handleCapabilityQuery(cmd string) {
 	cmd = strings.TrimSpace(cmd)
 
 	if cmd == "ext" {
-		response := capabilityRegistryFor(s.nrfSupportsBondDelete(), s.tripCounterSupported(), s.keyAliasSupported())
+		response := capabilityRegistryFor(s.nrfSupportsBondDelete(), s.tripCounterSupported(), s.keycardV2Supported())
 		if len(response) > tripResponseMaxBytes {
 			s.log.Errorf("cap:ext response exceeds limit: %d bytes", len(response))
 			s.sendExtendedResponse("cap:error:internal")
@@ -1219,9 +1223,7 @@ func (s *Service) handleCapabilityQuery(cmd string) {
 	if cmd == "list" {
 		categories := make([]string, 0, len(capabilityMap))
 		for cat := range capabilityMap {
-			if cat != "key-alias" || s.keyAliasSupported() {
-				categories = append(categories, cat)
-			}
+			categories = append(categories, cat)
 		}
 		s.sendExtendedResponse(fmt.Sprintf("cap:count:%d", len(categories)))
 		for _, cat := range categories {
@@ -1230,7 +1232,7 @@ func (s *Service) handleCapabilityQuery(cmd string) {
 		return
 	}
 
-	if _, ok := capabilityMap[cmd]; ok && (cmd != "key-alias" || s.keyAliasSupported()) {
+	if _, ok := capabilityMap[cmd]; ok {
 		commands := s.capabilityCommands(cmd)
 		s.sendExtendedResponse(fmt.Sprintf("cap:%s:count:%d", cmd, len(commands)))
 		for _, c := range commands {

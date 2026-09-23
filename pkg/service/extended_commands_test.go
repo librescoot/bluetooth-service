@@ -137,21 +137,33 @@ func TestForwardedKeycardCommand(t *testing.T) {
 	}
 }
 
-func TestKeyAliasCapabilityRequiresLiveBackend(t *testing.T) {
+func TestKeycardV2CapabilityRequiresLiveBackend(t *testing.T) {
 	s, mr := newVersionPushService(t)
-	if s.keyAliasSupported() {
-		t.Fatal("key names advertised without a backend")
+	if s.keycardV2Supported() || len(s.capabilityCommands("keycard")) != 4 {
+		t.Fatal("v2 commands advertised without a backend")
 	}
-	mr.Set("keycard:alias-ready", "1")
-	if !s.keyAliasSupported() {
-		t.Fatal("ready backend not detected")
+	mr.Set("keycard:protocol-version", "1")
+	if s.keycardV2Supported() || len(s.capabilityCommands("keycard")) != 4 {
+		t.Fatal("v1 backend advertised v2 commands")
 	}
-	if got := s.capabilityCommands("key-alias"); len(got) != 4 {
-		t.Fatalf("alias commands = %v", got)
+	mr.Set("keycard:protocol-version", "2")
+	if !s.keycardV2Supported() {
+		t.Fatal("v2 backend not detected")
 	}
-	mr.Del("keycard:alias-ready")
-	if s.keyAliasSupported() || len(s.capabilityCommands("key-alias")) != 0 {
-		t.Fatal("stale alias capability survived backend removal")
+	if got := s.capabilityCommands("keycard"); len(got) != 10 || got[4] != "phone:list" || got[7] != "alias:list" {
+		t.Fatalf("v2 commands = %v", got)
+	}
+	mr.Del("keycard:protocol-version")
+	if s.keycardV2Supported() || len(s.capabilityCommands("keycard")) != 4 {
+		t.Fatal("stale v2 capability survived backend removal")
+	}
+	for _, cmd := range []string{"phone:list", "phone:remove:ABCD", "master:list", "alias:list", "alias:set:card:AABB:QQ", "alias:clear:card:AABB"} {
+		if !v2KeycardCommand(cmd) {
+			t.Errorf("v2 command %q not gated", cmd)
+		}
+	}
+	if v2KeycardCommand("list") || v2KeycardCommand("remove:AABB") {
+		t.Fatal("v1 commands mistakenly require v2")
 	}
 }
 
@@ -202,13 +214,13 @@ func TestDBCWaitReached(t *testing.T) {
 
 // cap:ble is what the app probes before offering to clear the scooter side of a
 // bond, so it has to track the nRF rather than what this binary was built with.
-func TestLegacyCapabilityMapDoesNotAdvertiseCapExtOnlyGroups(t *testing.T) {
-	for _, category := range []string{"nav", "keycard", "phone-key", "key-alias", "usb", "service-mode", "time", "config", "status", "alarm", "ltc", "ble", "pm", "dbc", "ota", "cap", "get", "set"} {
+func TestLegacyCapabilityMapRetainsKeycardCategory(t *testing.T) {
+	for _, category := range []string{"nav", "keycard", "usb", "service-mode", "time", "config", "status", "alarm", "ltc", "ble", "pm", "dbc", "ota", "cap", "get", "set"} {
 		if _, ok := capabilityMap[category]; !ok {
 			t.Errorf("legacy capability category %q disappeared", category)
 		}
 	}
-	for _, category := range []string{"settings", "trip"} {
+	for _, category := range []string{"settings", "trip", "phone-key", "key-alias"} {
 		if _, ok := capabilityMap[category]; ok {
 			t.Errorf("cap:%s unexpectedly changed the deployed cap:list contract", category)
 		}

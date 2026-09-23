@@ -23,12 +23,12 @@ func validTripCounterFields() map[string]string {
 
 func TestCapabilityRegistryForIsDeterministicAndDynamic(t *testing.T) {
 	withoutDynamic := capabilityRegistryFor(false, false, false)
-	const wantWithoutDynamic = "cap:ext:nav=2:keycard:phone-key:usb:service-mode:time:config:status:alarm:ltc:pm:dbc:ota:settings"
+	const wantWithoutDynamic = "cap:ext:nav=2:keycard:usb:service-mode:time:config:status:alarm:ltc:pm:dbc:ota:settings"
 	if withoutDynamic != wantWithoutDynamic {
 		t.Fatalf("registry = %q, want %q", withoutDynamic, wantWithoutDynamic)
 	}
 	withDynamic := capabilityRegistryFor(true, true, true)
-	const wantWithDynamic = "cap:ext:nav=2:keycard:phone-key:key-alias=1:usb:service-mode:time:config:status:alarm:ltc:ble:pm:dbc:ota:settings:trip"
+	const wantWithDynamic = "cap:ext:nav=2:keycard=2:usb:service-mode:time:config:status:alarm:ltc:ble:pm:dbc:ota:settings:trip"
 	if withDynamic != wantWithDynamic {
 		t.Fatalf("registry = %q, want %q", withDynamic, wantWithDynamic)
 	}
