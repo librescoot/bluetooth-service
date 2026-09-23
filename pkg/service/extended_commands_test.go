@@ -124,6 +124,19 @@ func TestNrfBondDeleteSupported(t *testing.T) {
 	}
 }
 
+func TestForwardedKeycardCommand(t *testing.T) {
+	for _, command := range []string{"list", "count", "add:CAFE", "remove:CAFE", "phone:list", "phone:remove:0123456789ABCDEF0123456789ABCDEF", "phone:remove:0123456789ABCDEF0123456789ABCDEF:force"} {
+		if !forwardedKeycardCommand(command) {
+			t.Errorf("supported command %q rejected", command)
+		}
+	}
+	for _, command := range []string{"phone:reset", "phone:add:AA", "master:list", "reset"} {
+		if forwardedKeycardCommand(command) {
+			t.Errorf("unsupported command %q forwarded", command)
+		}
+	}
+}
+
 func TestServiceModeOverlayCommand(t *testing.T) {
 	tests := []struct {
 		command string

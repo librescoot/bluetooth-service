@@ -519,25 +519,25 @@ func (s *Service) handleUSBCommand(cmd string) {
 	}
 }
 
-// handleKeycardCommand processes keycard management commands.
-// Commands are forwarded to the scooter:keycard Redis list for
-// processing by keycard-service.
+// handleKeycardCommand forwards supported credential commands to keycard-service.
 func (s *Service) handleKeycardCommand(cmd string) {
 	s.log.Infof("Received keycard command: %s", cmd)
 
-	switch {
-	case cmd == "list", cmd == "count",
-		strings.HasPrefix(cmd, "add:"),
-		strings.HasPrefix(cmd, "remove:"):
-		if err := ipc.SendRequest(s.ipc, "scooter:keycard", cmd); err != nil {
-			s.log.Errorf("Failed to forward keycard command: %v", err)
-			s.sendExtendedResponse("keycard:error:redis")
-			return
-		}
-		// Response comes asynchronously via keycard hash subscription
-	default:
+	if !forwardedKeycardCommand(cmd) {
 		s.sendExtendedResponse("keycard:error:unknown command")
+		return
 	}
+	if err := ipc.SendRequest(s.ipc, "scooter:keycard", cmd); err != nil {
+		s.log.Errorf("Failed to forward keycard command: %v", err)
+		s.sendExtendedResponse("keycard:error:redis")
+	}
+	// Response comes asynchronously via keycard hash subscription.
+}
+
+func forwardedKeycardCommand(cmd string) bool {
+	return cmd == "list" || cmd == "count" || cmd == "phone:list" ||
+		strings.HasPrefix(cmd, "add:") || strings.HasPrefix(cmd, "remove:") ||
+		strings.HasPrefix(cmd, "phone:remove:")
 }
 
 // handlePMCommand processes power-management commands from the mobile app.
