@@ -97,7 +97,11 @@ func (s *Service) sendExtendedResponse(response string) {
 		// extended-command problem worth debugging. The nRF drops a
 		// notification it cannot queue and reports nothing back, so this is
 		// the last point where the reply is known to exist.
-		s.log.Infof("Sent extended response: %s", response)
+		if strings.HasPrefix(response, "keycard:alias:") {
+			s.log.Infof("Sent extended response: keycard:alias:<redacted>")
+		} else {
+			s.log.Infof("Sent extended response: %s", response)
+		}
 	}
 	s.lastExtRespTime = time.Now()
 }
@@ -521,10 +525,18 @@ func (s *Service) handleUSBCommand(cmd string) {
 
 // handleKeycardCommand forwards supported credential commands to keycard-service.
 func (s *Service) handleKeycardCommand(cmd string) {
-	s.log.Infof("Received keycard command: %s", cmd)
+	if strings.HasPrefix(cmd, "alias:set:") {
+		s.log.Infof("Received keycard command: alias:set:<redacted>")
+	} else {
+		s.log.Infof("Received keycard command: %s", cmd)
+	}
 
 	if !forwardedKeycardCommand(cmd) {
 		s.sendExtendedResponse("keycard:error:unknown command")
+		return
+	}
+	if strings.HasPrefix(cmd, "alias:") && !s.keyAliasSupported() {
+		s.sendExtendedResponse("keycard:error:unsupported")
 		return
 	}
 	if err := ipc.SendRequest(s.ipc, "scooter:keycard", cmd); err != nil {
@@ -535,9 +547,10 @@ func (s *Service) handleKeycardCommand(cmd string) {
 }
 
 func forwardedKeycardCommand(cmd string) bool {
-	return cmd == "list" || cmd == "count" || cmd == "phone:list" ||
+	return cmd == "list" || cmd == "count" || cmd == "phone:list" || cmd == "alias:list" ||
 		strings.HasPrefix(cmd, "add:") || strings.HasPrefix(cmd, "remove:") ||
-		strings.HasPrefix(cmd, "phone:remove:")
+		strings.HasPrefix(cmd, "phone:remove:") || strings.HasPrefix(cmd, "alias:set:") ||
+		strings.HasPrefix(cmd, "alias:clear:")
 }
 
 // handlePMCommand processes power-management commands from the mobile app.
@@ -1074,6 +1087,7 @@ var capabilityMap = map[string][]string{
 	"nav":          {"dest", "clear", "route:add", "route:remove", "route:skip", "route:list", "route:clear", "fav:add", "fav:delete", "fav:navigate", "fav:list"},
 	"keycard":      {"list", "count", "add:<uid>", "remove:<uid>"},
 	"phone-key":    {"list", "remove:<fingerprint>"},
+	"key-alias":    {"list", "set:<kind>:<id>:<name>", "clear:<kind>:<id>"},
 	"usb":          {"ums", "normal"},
 	"service-mode": {"on", "off"},
 	"time":         {"set"},
@@ -1096,7 +1110,18 @@ var capabilityMap = map[string][]string{
 // version. Reporting it regardless would make the probe worthless, since the
 // answer the phone is probing for is exactly the one that varies.
 func (s *Service) capabilityCommands(category string) []string {
+	if category == "key-alias" && !s.keyAliasSupported() {
+		return nil
+	}
 	return capabilityCommandsFor(category, s.nrfSupportsBondDelete)
+}
+
+func (s *Service) keyAliasSupported() bool {
+	if s.ipc == nil {
+		return false
+	}
+	ready, err := s.ipc.Get("keycard:alias-ready")
+	return err == nil && ready == "1"
 }
 
 // capabilityCommandsFor is the version-dependent filtering, split out so it can
@@ -1118,8 +1143,12 @@ func capabilityCommandsFor(category string, bondDelete func() bool) []string {
 
 // capabilityRegistryFor returns the complete high-level registry for cap:ext.
 // Its fixed order is part of the response contract.
-func capabilityRegistryFor(bondDelete, tripCounter bool) string {
-	categories := []string{"nav=2", "keycard", "phone-key", "usb", "service-mode", "time", "config", "status", "alarm", "ltc"}
+func capabilityRegistryFor(bondDelete, tripCounter, keyAlias bool) string {
+	categories := []string{"nav=2", "keycard", "phone-key"}
+	if keyAlias {
+		categories = append(categories, "key-alias=1")
+	}
+	categories = append(categories, "usb", "service-mode", "time", "config", "status", "alarm", "ltc")
 	if bondDelete {
 		categories = append(categories, "ble")
 	}
@@ -1174,7 +1203,7 @@ func (s *Service) handleCapabilityQuery(cmd string) {
 	cmd = strings.TrimSpace(cmd)
 
 	if cmd == "ext" {
-		response := capabilityRegistryFor(s.nrfSupportsBondDelete(), s.tripCounterSupported())
+		response := capabilityRegistryFor(s.nrfSupportsBondDelete(), s.tripCounterSupported(), s.keyAliasSupported())
 		if len(response) > tripResponseMaxBytes {
 			s.log.Errorf("cap:ext response exceeds limit: %d bytes", len(response))
 			s.sendExtendedResponse("cap:error:internal")
@@ -1190,7 +1219,9 @@ func (s *Service) handleCapabilityQuery(cmd string) {
 	if cmd == "list" {
 		categories := make([]string, 0, len(capabilityMap))
 		for cat := range capabilityMap {
-			categories = append(categories, cat)
+			if cat != "key-alias" || s.keyAliasSupported() {
+				categories = append(categories, cat)
+			}
 		}
 		s.sendExtendedResponse(fmt.Sprintf("cap:count:%d", len(categories)))
 		for _, cat := range categories {
@@ -1199,7 +1230,7 @@ func (s *Service) handleCapabilityQuery(cmd string) {
 		return
 	}
 
-	if _, ok := capabilityMap[cmd]; ok {
+	if _, ok := capabilityMap[cmd]; ok && (cmd != "key-alias" || s.keyAliasSupported()) {
 		commands := s.capabilityCommands(cmd)
 		s.sendExtendedResponse(fmt.Sprintf("cap:%s:count:%d", cmd, len(commands)))
 		for _, c := range commands {

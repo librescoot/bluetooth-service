@@ -125,15 +125,33 @@ func TestNrfBondDeleteSupported(t *testing.T) {
 }
 
 func TestForwardedKeycardCommand(t *testing.T) {
-	for _, command := range []string{"list", "count", "add:CAFE", "remove:CAFE", "phone:list", "phone:remove:0123456789ABCDEF0123456789ABCDEF", "phone:remove:0123456789ABCDEF0123456789ABCDEF:force"} {
+	for _, command := range []string{"list", "count", "add:CAFE", "remove:CAFE", "phone:list", "phone:remove:0123456789ABCDEF0123456789ABCDEF", "phone:remove:0123456789ABCDEF0123456789ABCDEF:force", "alias:list", "alias:set:card:04010203:U3BhcmU", "alias:clear:phone:0123456789ABCDEF0123456789ABCDEF"} {
 		if !forwardedKeycardCommand(command) {
 			t.Errorf("supported command %q rejected", command)
 		}
 	}
-	for _, command := range []string{"phone:reset", "phone:add:AA", "master:list", "reset"} {
+	for _, command := range []string{"phone:reset", "phone:add:AA", "master:list", "reset", "alias:reset"} {
 		if forwardedKeycardCommand(command) {
 			t.Errorf("unsupported command %q forwarded", command)
 		}
+	}
+}
+
+func TestKeyAliasCapabilityRequiresLiveBackend(t *testing.T) {
+	s, mr := newVersionPushService(t)
+	if s.keyAliasSupported() {
+		t.Fatal("key names advertised without a backend")
+	}
+	mr.Set("keycard:alias-ready", "1")
+	if !s.keyAliasSupported() {
+		t.Fatal("ready backend not detected")
+	}
+	if got := s.capabilityCommands("key-alias"); len(got) != 3 {
+		t.Fatalf("alias commands = %v", got)
+	}
+	mr.Del("keycard:alias-ready")
+	if s.keyAliasSupported() || len(s.capabilityCommands("key-alias")) != 0 {
+		t.Fatal("stale alias capability survived backend removal")
 	}
 }
 
@@ -185,7 +203,7 @@ func TestDBCWaitReached(t *testing.T) {
 // cap:ble is what the app probes before offering to clear the scooter side of a
 // bond, so it has to track the nRF rather than what this binary was built with.
 func TestLegacyCapabilityMapDoesNotAdvertiseCapExtOnlyGroups(t *testing.T) {
-	for _, category := range []string{"nav", "keycard", "phone-key", "usb", "service-mode", "time", "config", "status", "alarm", "ltc", "ble", "pm", "dbc", "ota", "cap", "get", "set"} {
+	for _, category := range []string{"nav", "keycard", "phone-key", "key-alias", "usb", "service-mode", "time", "config", "status", "alarm", "ltc", "ble", "pm", "dbc", "ota", "cap", "get", "set"} {
 		if _, ok := capabilityMap[category]; !ok {
 			t.Errorf("legacy capability category %q disappeared", category)
 		}
@@ -225,7 +243,7 @@ func TestTripCapabilityPromotesCurrentSchemaForGenericSettings(t *testing.T) {
 		t.Fatal("current schema did not enable the trip capability")
 	}
 	s.promoteSettingsSchema(currentSchema)
-	if registry := capabilityRegistryFor(false, tripSupported); !strings.HasSuffix(registry, ":trip") {
+	if registry := capabilityRegistryFor(false, tripSupported, false); !strings.HasSuffix(registry, ":trip") {
 		t.Fatalf("cap:ext registry = %q, want trip capability", registry)
 	}
 
