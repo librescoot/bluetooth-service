@@ -125,12 +125,12 @@ func TestNrfBondDeleteSupported(t *testing.T) {
 }
 
 func TestForwardedKeycardCommand(t *testing.T) {
-	for _, command := range []string{"list", "count", "add:CAFE", "remove:CAFE", "phone:list", "phone:remove:0123456789ABCDEF0123456789ABCDEF", "phone:remove:0123456789ABCDEF0123456789ABCDEF:force", "alias:list", "alias:set:card:04010203:U3BhcmU", "alias:clear:phone:0123456789ABCDEF0123456789ABCDEF"} {
+	for _, command := range []string{"list", "count", "add:CAFE", "remove:CAFE", "phone:list", "phone:remove:0123456789ABCDEF0123456789ABCDEF", "phone:remove:0123456789ABCDEF0123456789ABCDEF:force", "alias:list", "master:list", "alias:set:card:04010203:U3BhcmU", "alias:clear:phone:0123456789ABCDEF0123456789ABCDEF"} {
 		if !forwardedKeycardCommand(command) {
 			t.Errorf("supported command %q rejected", command)
 		}
 	}
-	for _, command := range []string{"phone:reset", "phone:add:AA", "master:list", "reset", "alias:reset"} {
+	for _, command := range []string{"phone:reset", "phone:add:AA", "master:remove:AA", "reset", "alias:reset"} {
 		if forwardedKeycardCommand(command) {
 			t.Errorf("unsupported command %q forwarded", command)
 		}
@@ -146,7 +146,7 @@ func TestKeyAliasCapabilityRequiresLiveBackend(t *testing.T) {
 	if !s.keyAliasSupported() {
 		t.Fatal("ready backend not detected")
 	}
-	if got := s.capabilityCommands("key-alias"); len(got) != 3 {
+	if got := s.capabilityCommands("key-alias"); len(got) != 4 {
 		t.Fatalf("alias commands = %v", got)
 	}
 	mr.Del("keycard:alias-ready")

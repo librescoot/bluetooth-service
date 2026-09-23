@@ -535,7 +535,7 @@ func (s *Service) handleKeycardCommand(cmd string) {
 		s.sendExtendedResponse("keycard:error:unknown command")
 		return
 	}
-	if strings.HasPrefix(cmd, "alias:") && !s.keyAliasSupported() {
+	if (strings.HasPrefix(cmd, "alias:") || cmd == "master:list") && !s.keyAliasSupported() {
 		s.sendExtendedResponse("keycard:error:unsupported")
 		return
 	}
@@ -547,7 +547,7 @@ func (s *Service) handleKeycardCommand(cmd string) {
 }
 
 func forwardedKeycardCommand(cmd string) bool {
-	return cmd == "list" || cmd == "count" || cmd == "phone:list" || cmd == "alias:list" ||
+	return cmd == "list" || cmd == "count" || cmd == "phone:list" || cmd == "master:list" || cmd == "alias:list" ||
 		strings.HasPrefix(cmd, "add:") || strings.HasPrefix(cmd, "remove:") ||
 		strings.HasPrefix(cmd, "phone:remove:") || strings.HasPrefix(cmd, "alias:set:") ||
 		strings.HasPrefix(cmd, "alias:clear:")
@@ -1087,7 +1087,7 @@ var capabilityMap = map[string][]string{
 	"nav":          {"dest", "clear", "route:add", "route:remove", "route:skip", "route:list", "route:clear", "fav:add", "fav:delete", "fav:navigate", "fav:list"},
 	"keycard":      {"list", "count", "add:<uid>", "remove:<uid>"},
 	"phone-key":    {"list", "remove:<fingerprint>"},
-	"key-alias":    {"list", "set:<kind>:<id>:<name>", "clear:<kind>:<id>"},
+	"key-alias":    {"list", "master:list", "set:<kind>:<id>:<name>", "clear:<kind>:<id>"},
 	"usb":          {"ums", "normal"},
 	"service-mode": {"on", "off"},
 	"time":         {"set"},
