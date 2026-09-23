@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strconv"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	ipc "github.com/librescoot/redis-ipc"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/librescoot/bluetooth-service/pkg/ble"
 )
@@ -228,7 +230,7 @@ func parseNavStop(entry string) (navStop, error) {
 // readNavPlan returns the stored stops and current step.
 func (s *Service) readNavPlan() ([]navStop, int, error) {
 	raw, err := s.ipc.HGet(KeyNavigation, "waypoints")
-	if err != nil {
+	if err != nil && !errors.Is(err, redis.Nil) {
 		return nil, 0, err
 	}
 	var stops []navStop
@@ -237,7 +239,10 @@ func (s *Service) readNavPlan() ([]navStop, int, error) {
 			return nil, 0, err
 		}
 	}
-	stepStr, _ := s.ipc.HGet(KeyNavigation, "current-step")
+	stepStr, err := s.ipc.HGet(KeyNavigation, "current-step")
+	if err != nil && !errors.Is(err, redis.Nil) {
+		return nil, 0, err
+	}
 	step, _ := strconv.Atoi(stepStr)
 	return stops, step, nil
 }
@@ -1113,7 +1118,7 @@ func capabilityCommandsFor(category string, bondDelete func() bool) []string {
 // capabilityRegistryFor returns the complete high-level registry for cap:ext.
 // Its fixed order is part of the response contract.
 func capabilityRegistryFor(bondDelete, tripCounter bool) string {
-	categories := []string{"nav", "keycard", "usb", "service-mode", "time", "config", "status", "alarm", "ltc"}
+	categories := []string{"nav=2", "keycard", "usb", "service-mode", "time", "config", "status", "alarm", "ltc"}
 	if bondDelete {
 		categories = append(categories, "ble")
 	}
