@@ -25,6 +25,16 @@ It processes these Redis/Valkey list commands on `scooter:ble`:
 
 BLE extended-command requests are topic-prefixed strings. The implementation supports navigation, keycard, USB mode, time, settings, status, alarm, LTC, BLE bond removal, power-management, DBC power, and capability queries. Generic settings reads and writes use the `settings:schema` value published by the settings service; writes reject unknown or read-only keys and validate the schema types that the service understands. Clients should use the `cap` query rather than hard-code the available extended-command set. The full `cap:ext:...` registry is also published to the local Redis `system` hash as `capabilities` at startup and refreshed on `cap:ext` queries. `nav=2` advertises multi-hop navigation; a missing registry or a different nav version must not enable route controls.
 
+Credential names use `key-alias=1` in `cap:ext`, or `key-alias` in the
+legacy `cap:list`. This category is offered only while keycard-service renews
+its `keycard:alias-ready` version marker in Redis; older backends do not
+support the alias commands even when this BLE binary is installed.
+`cap:key-alias` reports `list`, `master:list`, `set:<kind>:<id>:<name>`, and
+`clear:<kind>:<id>`. The corresponding extended commands are prefixed with
+`keycard:alias:` except `keycard:master:list`. Clients must keep an alias set
+command within the 100-byte extended-command limit: names are capped at
+32 UTF-8 bytes and base64url-encoded without padding.
+
 DBC power commands do not unlock the vehicle or change its state:
 
 - `dbc:status` replies with `dbc:status:power:<on|off|unknown>:ready:<true|false|unknown>`.
