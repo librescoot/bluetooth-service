@@ -148,6 +148,12 @@ func New(ipcClient *ipc.Client, destinationClient *ipc.Client, log *logger.Logge
 	return s
 }
 
+// PublishCapabilities exposes the BLE navigation protocol version to local
+// services without requiring an nRF round trip.
+func (s *Service) PublishCapabilities() error {
+	return s.ipc.Hash("system").Set("capabilities", capabilityRegistryFor(s.nrfSupportsBondDelete(), s.tripCounterSupported()), ipc.Sync())
+}
+
 // SetOTAReceiver wires the OTA transfer receiver into the USOCK dispatch.
 func (s *Service) SetOTAReceiver(r otaReceiver) {
 	s.mu.Lock()

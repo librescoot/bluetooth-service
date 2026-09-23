@@ -132,6 +132,9 @@ func main() {
 	if err := svc.Bootstrap(); err != nil {
 		log.Fatalf("Failed to bootstrap service: %v", err)
 	}
+	if err := svc.PublishCapabilities(); err != nil {
+		log.Errorf("Failed to publish local BLE capabilities: %v", err)
+	}
 
 	svc.StartTrustedTimeMonitor()
 	go svc.WatchRedisCommands()

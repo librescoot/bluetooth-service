@@ -1179,6 +1179,9 @@ func (s *Service) handleCapabilityQuery(cmd string) {
 			s.sendExtendedResponse("cap:error:internal")
 			return
 		}
+		if err := s.ipc.Hash("system").Set("capabilities", response, ipc.Sync()); err != nil {
+			s.log.Errorf("Failed to refresh local BLE capabilities: %v", err)
+		}
 		s.sendExtendedResponse(response)
 		return
 	}

@@ -23,7 +23,7 @@ It processes these Redis/Valkey list commands on `scooter:ble`:
 - `ltc-enable`, `ltc-disable`, `ltc-force-enable`, `ltc-force-disable`, and `ltc-status`
 - `data-stream-sync` and `firmware-update`
 
-BLE extended-command requests are topic-prefixed strings. The implementation supports navigation, keycard, USB mode, time, settings, status, alarm, LTC, BLE bond removal, power-management, DBC power, and capability queries. Generic settings reads and writes use the `settings:schema` value published by the settings service; writes reject unknown or read-only keys and validate the schema types that the service understands. Clients should use the `cap` query rather than hard-code the available extended-command set.
+BLE extended-command requests are topic-prefixed strings. The implementation supports navigation, keycard, USB mode, time, settings, status, alarm, LTC, BLE bond removal, power-management, DBC power, and capability queries. Generic settings reads and writes use the `settings:schema` value published by the settings service; writes reject unknown or read-only keys and validate the schema types that the service understands. Clients should use the `cap` query rather than hard-code the available extended-command set. The full `cap:ext:...` registry is also published to the local Redis `system` hash as `capabilities` at startup and refreshed on `cap:ext` queries. `nav=2` advertises multi-hop navigation; a missing registry or a different nav version must not enable route controls.
 
 DBC power commands do not unlock the vehicle or change its state:
 
