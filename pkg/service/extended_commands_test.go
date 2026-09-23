@@ -185,7 +185,7 @@ func TestDBCWaitReached(t *testing.T) {
 // cap:ble is what the app probes before offering to clear the scooter side of a
 // bond, so it has to track the nRF rather than what this binary was built with.
 func TestLegacyCapabilityMapDoesNotAdvertiseCapExtOnlyGroups(t *testing.T) {
-	for _, category := range []string{"nav", "keycard", "usb", "service-mode", "time", "config", "status", "alarm", "ltc", "ble", "pm", "dbc", "ota", "cap", "get", "set"} {
+	for _, category := range []string{"nav", "keycard", "phone-key", "usb", "service-mode", "time", "config", "status", "alarm", "ltc", "ble", "pm", "dbc", "ota", "cap", "get", "set"} {
 		if _, ok := capabilityMap[category]; !ok {
 			t.Errorf("legacy capability category %q disappeared", category)
 		}

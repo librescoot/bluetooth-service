@@ -1073,6 +1073,7 @@ func (s *Service) handleServiceModeCommand(cmd string) {
 var capabilityMap = map[string][]string{
 	"nav":          {"dest", "clear", "route:add", "route:remove", "route:skip", "route:list", "route:clear", "fav:add", "fav:delete", "fav:navigate", "fav:list"},
 	"keycard":      {"list", "count", "add:<uid>", "remove:<uid>"},
+	"phone-key":    {"list", "remove:<fingerprint>"},
 	"usb":          {"ums", "normal"},
 	"service-mode": {"on", "off"},
 	"time":         {"set"},
@@ -1118,7 +1119,7 @@ func capabilityCommandsFor(category string, bondDelete func() bool) []string {
 // capabilityRegistryFor returns the complete high-level registry for cap:ext.
 // Its fixed order is part of the response contract.
 func capabilityRegistryFor(bondDelete, tripCounter bool) string {
-	categories := []string{"nav=2", "keycard", "usb", "service-mode", "time", "config", "status", "alarm", "ltc"}
+	categories := []string{"nav=2", "keycard", "phone-key", "usb", "service-mode", "time", "config", "status", "alarm", "ltc"}
 	if bondDelete {
 		categories = append(categories, "ble")
 	}
