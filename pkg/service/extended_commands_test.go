@@ -167,6 +167,36 @@ func TestKeycardV2CapabilityRequiresLiveBackend(t *testing.T) {
 	}
 }
 
+func TestKeycardV1ForwardsCardsButRejectsV2Requests(t *testing.T) {
+	s, mr := newVersionPushService(t)
+	s.handleKeycardCommand("phone:list")
+	message := s.usock.(*mockUSOCK).lastMessage()
+	if message == nil {
+		t.Fatal("missing unsupported response")
+	}
+	decoded, err := decodeCBORMessageString(message.data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := uint16(ble.TypeExtended) + uint16(ble.TypeExtendedResponse)
+	if got := decoded[uint16(ble.TypeExtended)][key]; got != "keycard:error:unsupported" {
+		t.Fatalf("phone request without v2 = %q", got)
+	}
+	if mr.Exists("scooter:keycard") {
+		t.Fatal("v2 request reached a v1 backend")
+	}
+	s.handleKeycardCommand("list")
+	if !mr.Exists("scooter:keycard") {
+		t.Fatal("v1 card list was not forwarded")
+	}
+	mr.Set("keycard:protocol-version", "2")
+	s.handleKeycardCommand("alias:list")
+	commands, err := mr.List("scooter:keycard")
+	if err != nil || len(commands) != 2 || commands[0] != `"alias:list"` || commands[1] != `"list"` {
+		t.Fatalf("forwarded commands = %v, %v", commands, err)
+	}
+}
+
 func TestServiceModeOverlayCommand(t *testing.T) {
 	tests := []struct {
 		command string
