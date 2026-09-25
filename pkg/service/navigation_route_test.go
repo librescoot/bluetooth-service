@@ -97,7 +97,7 @@ func TestNavRouteConflictAndUnavailable(t *testing.T) {
 		switch env.Method {
 		case "plan.get":
 			return routeReply(routePlan{ID: "old", Revision: 2, Stops: []routeStop{{ID: "a"}, {ID: "b"}}})
-		case "plan.remove", "plan.reached":
+		case "plan.remove", "plan.advance":
 			return []byte(`{"ok":false,"error":"stale plan"}`)
 		default:
 			t.Errorf("unexpected %s", env.Method)
@@ -162,10 +162,6 @@ func TestNavRouteSkipGuardsCurrentStop(t *testing.T) {
 		switch env.Method {
 		case "plan.get":
 			return routeReply(plan)
-		case "plan.reached":
-			plan.Stops[0].Reached = true
-			plan.Revision++
-			return routeReply(plan)
 		case "plan.advance":
 			plan.CurrentStep = 1
 			plan.Revision++
@@ -182,7 +178,7 @@ func TestNavRouteSkipGuardsCurrentStop(t *testing.T) {
 	if got := routeResponse(t, sock); got != "nav:route:count:2:1" {
 		t.Errorf("response = %q", got)
 	}
-	for _, method := range []string{"plan.get", "plan.reached", "plan.advance"} {
+	for _, method := range []string{"plan.get", "plan.advance"} {
 		env := <-envelopes
 		if env.Method != method {
 			t.Errorf("method = %q, want %q", env.Method, method)

@@ -161,10 +161,6 @@ func (s *Service) handleNavRouteCommand(cmd string) {
 		}
 		progress := routeProgressRequest{ExpectedPlanID: plan.ID, ExpectedStopID: plan.Stops[plan.CurrentStep].ID}
 		var updated routePlan
-		if err := routeCall(s.destIPC, "plan.reached", progress, &updated); err != nil {
-			s.navRPCError(err)
-			return
-		}
 		if err := routeCall(s.destIPC, "plan.advance", progress, &updated); err != nil {
 			s.navRPCError(err)
 			return

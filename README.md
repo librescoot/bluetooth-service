@@ -101,7 +101,7 @@ journalctl -u librescoot-bluetooth.service
 
 BLE `nav:dest` and saved-location navigate replace the plan with one stop;
 `nav:route:add` appends atomically, `remove` sends the revision from `plan.get`,
-`skip` marks the current stop reached and advances it with its plan and stop IDs,
+`skip` advances the current stop with its plan and stop IDs, leaving it unreached,
 and `nav:clear`/`nav:route:clear` clear the plan. Legacy `navi:start` also
 replaces the plan. These operations call settings-service via redis-ipc on
 `settings:route-plan` with a five-second timeout. The service does not write
