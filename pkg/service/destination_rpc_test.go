@@ -30,6 +30,11 @@ type destinationEnvelope struct {
 func startDestinationServer(t *testing.T, mr *miniredis.Miniredis,
 	handler func(env destinationEnvelope) []byte) chan destinationEnvelope {
 	t.Helper()
+	return startCallServer(t, mr, destinationChannel, handler)
+}
+
+func startCallServer(t *testing.T, mr *miniredis.Miniredis, channel string, handler func(env destinationEnvelope) []byte) chan destinationEnvelope {
+	t.Helper()
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { rdb.Close() })
 	ctx, cancel := context.WithCancel(context.Background())
@@ -38,7 +43,7 @@ func startDestinationServer(t *testing.T, mr *miniredis.Miniredis,
 	envelopes := make(chan destinationEnvelope, 8)
 	go func() {
 		for {
-			result, err := rdb.BRPop(ctx, 0, destinationChannel).Result()
+			result, err := rdb.BRPop(ctx, 0, channel).Result()
 			if err != nil {
 				return
 			}

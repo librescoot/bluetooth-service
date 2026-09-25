@@ -1,8 +1,6 @@
 package service
 
 import (
-	"encoding/json"
-	"errors"
 	"fmt"
 	"os/exec"
 	"strconv"
@@ -10,7 +8,6 @@ import (
 	"time"
 
 	ipc "github.com/librescoot/redis-ipc"
-	"github.com/redis/go-redis/v9"
 
 	"github.com/librescoot/bluetooth-service/pkg/ble"
 )
@@ -106,17 +103,13 @@ func (s *Service) sendExtendedResponse(response string) {
 	s.lastExtRespTime = time.Now()
 }
 
-// A single plan stop, matching the JSON the dashboard reads from the
-// navigation hash's "waypoints" field.
+// navStop is the BLE coordinate input; plan IDs and progress are assigned by settings-service.
 type navStop struct {
 	Lat   float64 `json:"lat"`
 	Lon   float64 `json:"lon"`
-	Label string  `json:"label,omitempty"`
+	Label string  `json:"label"`
 }
 
-// handleNavRouteCommand edits the multi-hop plan incrementally. The BLE
-// extended command is capped at 100 bytes, so a whole plan cannot be pushed in
-// one command; the phone adds, removes, and skips stops instead.
 func (s *Service) handleNavRouteCommand(cmd string) {
 	switch {
 	case strings.HasPrefix(cmd, "add "):
@@ -125,89 +118,87 @@ func (s *Service) handleNavRouteCommand(cmd string) {
 			s.sendExtendedResponse("nav:error:" + err.Error())
 			return
 		}
-		stops, step, err := s.readNavPlan()
-		if err != nil {
-			s.sendExtendedResponse("nav:error:redis")
+		var plan routePlan
+		if err := routeCall(s.destIPC, "plan.append", routeAppendRequest{Stop: stop}, &plan); err != nil {
+			s.navRPCError(err)
 			return
 		}
-		stops = append(stops, stop)
-		if err := s.writeNavPlan(stops, step); err != nil {
-			s.sendExtendedResponse("nav:error:redis")
-			return
-		}
-		s.log.Infof("Added navigation stop, plan now has %d stops", len(stops))
-		s.sendExtendedResponse(fmt.Sprintf("nav:route:count:%d:%d", len(stops), step))
-
+		s.sendRouteCount(plan)
 	case strings.HasPrefix(cmd, "remove "):
 		index, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(cmd, "remove ")))
 		if err != nil {
 			s.sendExtendedResponse("nav:error:invalid index")
 			return
 		}
-		stops, step, err := s.readNavPlan()
+		plan, err := s.getRoutePlan()
 		if err != nil {
-			s.sendExtendedResponse("nav:error:redis")
+			s.navRPCError(err)
 			return
 		}
-		if index < 1 || index > len(stops) {
+		if index < 1 || index > len(plan.Stops) {
 			s.sendExtendedResponse("nav:error:index out of range")
 			return
 		}
-		zero := index - 1
-		stops = append(stops[:zero], stops[zero+1:]...)
-		if zero < step {
-			step--
-		}
-		if err := s.writeNavPlan(stops, step); err != nil {
-			s.sendExtendedResponse("nav:error:redis")
+		var updated routePlan
+		if err := routeCall(s.destIPC, "plan.remove", routeRemoveRequest{Index: index - 1, ExpectedRevision: plan.Revision}, &updated); err != nil {
+			s.navRPCError(err)
 			return
 		}
-		s.sendExtendedResponse(fmt.Sprintf("nav:route:count:%d:%d", len(stops), step))
-
+		s.sendRouteCount(updated)
 	case cmd == "skip":
-		stops, step, err := s.readNavPlan()
+		plan, err := s.getRoutePlan()
 		if err != nil {
-			s.sendExtendedResponse("nav:error:redis")
+			s.navRPCError(err)
 			return
 		}
-		if len(stops) == 0 {
+		if len(plan.Stops) == 0 {
 			s.sendExtendedResponse("nav:error:no route plan")
 			return
 		}
-		if step+1 >= len(stops) {
+		if plan.CurrentStep+1 >= len(plan.Stops) {
 			s.sendExtendedResponse("nav:error:already at the last stop")
 			return
 		}
-		step++
-		if err := s.writeNavPlan(stops, step); err != nil {
-			s.sendExtendedResponse("nav:error:redis")
+		progress := routeProgressRequest{ExpectedPlanID: plan.ID, ExpectedStopID: plan.Stops[plan.CurrentStep].ID}
+		var updated routePlan
+		if err := routeCall(s.destIPC, "plan.reached", progress, &updated); err != nil {
+			s.navRPCError(err)
 			return
 		}
-		s.sendExtendedResponse(fmt.Sprintf("nav:route:count:%d:%d", len(stops), step))
-
+		if err := routeCall(s.destIPC, "plan.advance", progress, &updated); err != nil {
+			s.navRPCError(err)
+			return
+		}
+		s.sendRouteCount(updated)
 	case cmd == "list":
-		stops, step, err := s.readNavPlan()
+		plan, err := s.getRoutePlan()
 		if err != nil {
-			s.sendExtendedResponse("nav:error:redis")
+			s.navRPCError(err)
 			return
 		}
-		s.sendExtendedResponse(fmt.Sprintf("nav:route:count:%d:%d", len(stops), step))
-		for i, stop := range stops {
+		s.sendRouteCount(plan)
+		for i, stop := range plan.Stops {
 			s.sendExtendedResponse(fmt.Sprintf("nav:route:%d:%s,%s,%s", i,
-				strconv.FormatFloat(stop.Lat, 'f', 6, 64),
-				strconv.FormatFloat(stop.Lon, 'f', 6, 64), stop.Label))
+				strconv.FormatFloat(stop.Lat, 'f', 6, 64), strconv.FormatFloat(stop.Lon, 'f', 6, 64), stop.Label))
 		}
-
 	case cmd == "clear":
-		if err := s.writeNavPlan(nil, 0); err != nil {
-			s.sendExtendedResponse("nav:error:redis")
+		if err := s.clearRoutePlan(); err != nil {
+			s.navRPCError(err)
 			return
 		}
 		s.sendExtendedResponse("nav:ok")
-
 	default:
 		s.sendExtendedResponse("nav:error:unknown route command")
 	}
+}
+
+func (s *Service) sendRouteCount(plan routePlan) {
+	s.sendExtendedResponse(fmt.Sprintf("nav:route:count:%d:%d", len(plan.Stops), plan.CurrentStep))
+}
+
+func (s *Service) navRPCError(err error) {
+	s.log.Errorf("Route plan RPC failed: %v", err)
+	s.sendExtendedResponse("nav:error:service unavailable or plan conflict")
 }
 
 // parseNavStop parses "lat,lon[,name]". The name may contain commas.
@@ -231,132 +222,27 @@ func parseNavStop(entry string) (navStop, error) {
 	return navStop{Lat: lat, Lon: lon, Label: label}, nil
 }
 
-// readNavPlan returns the stored stops and current step.
-func (s *Service) readNavPlan() ([]navStop, int, error) {
-	raw, err := s.ipc.HGet(KeyNavigation, "waypoints")
-	if err != nil && !errors.Is(err, redis.Nil) {
-		return nil, 0, err
-	}
-	var stops []navStop
-	if raw != "" {
-		if err := json.Unmarshal([]byte(raw), &stops); err != nil {
-			return nil, 0, err
-		}
-	}
-	stepStr, err := s.ipc.HGet(KeyNavigation, "current-step")
-	if err != nil && !errors.Is(err, redis.Nil) {
-		return nil, 0, err
-	}
-	step, _ := strconv.Atoi(stepStr)
-	return stops, step, nil
-}
-
-// writeNavPlan stores the stop list, the current step, and the target fields
-// the dashboard reads for the current hop. An empty list clears the plan.
-func (s *Service) writeNavPlan(stops []navStop, step int) error {
-	hash := s.ipc.Hash(KeyNavigation)
-	if len(stops) == 0 {
-		for _, field := range []string{"waypoints", "current-step", "latitude",
-			"longitude", "destination", "address", "timestamp"} {
-			if err := hash.Set(field, ""); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-	if step < 0 {
-		step = 0
-	}
-	if step >= len(stops) {
-		step = len(stops) - 1
-	}
-	encoded, err := json.Marshal(stops)
-	if err != nil {
-		return err
-	}
-	target := stops[step]
-	for field, value := range map[string]string{
-		"waypoints":    string(encoded),
-		"current-step": strconv.Itoa(step),
-		"latitude":     strconv.FormatFloat(target.Lat, 'f', 6, 64),
-		"longitude":    strconv.FormatFloat(target.Lon, 'f', 6, 64),
-		"destination":  fmt.Sprintf("%.6f,%.6f", target.Lat, target.Lon),
-		"timestamp":    time.Now().UTC().Format(time.RFC3339),
-	} {
-		if err := hash.Set(field, value); err != nil {
-			return err
-		}
-	}
-	if target.Label != "" {
-		return hash.Set("address", target.Label)
-	}
-	return nil
-}
-
 // handleNavCommand processes navigation commands.
 func (s *Service) handleNavCommand(cmd string) {
 	if strings.HasPrefix(cmd, "dest ") {
-		// "dest lat,lon" or "dest lat,lon,name"
-		payload := strings.TrimPrefix(cmd, "dest ")
-		parts := strings.SplitN(payload, ",", 3)
-		if len(parts) < 2 {
-			s.sendExtendedResponse("nav:error:invalid destination format")
+		stop, err := parseNavStop(strings.TrimSpace(strings.TrimPrefix(cmd, "dest ")))
+		if err != nil {
+			s.sendExtendedResponse("nav:error:" + err.Error())
 			return
 		}
-
-		lat := strings.TrimSpace(parts[0])
-		lon := strings.TrimSpace(parts[1])
-
-		hash := s.ipc.Hash(KeyNavigation)
-		if err := hash.Set("latitude", lat); err != nil {
-			s.log.Errorf("Failed to set navigation latitude: %v", err)
-			s.sendExtendedResponse("nav:error:redis")
+		if err := s.replaceRoutePlan(stop); err != nil {
+			s.navRPCError(err)
 			return
 		}
-		if err := hash.Set("longitude", lon); err != nil {
-			s.log.Errorf("Failed to set navigation longitude: %v", err)
-			s.sendExtendedResponse("nav:error:redis")
-			return
-		}
-		// Legacy format
-		coords := lat + "," + lon
-		if err := hash.Set("destination", coords); err != nil {
-			s.log.Errorf("Failed to set navigation destination: %v", err)
-		}
-		// A single destination replaces any multi-stop plan.
-		for _, field := range []string{"waypoints", "current-step"} {
-			if err := hash.Set(field, ""); err != nil {
-				s.log.Errorf("Failed to clear navigation field %s: %v", field, err)
-			}
-		}
-
-		if len(parts) == 3 {
-			name := strings.TrimSpace(parts[2])
-			if err := hash.Set("address", name); err != nil {
-				s.log.Errorf("Failed to set navigation address: %v", err)
-			}
-		}
-
-		s.log.Infof("Set navigation destination: %s", payload)
 		s.sendExtendedResponse("nav:ok")
-
 	} else if cmd == "clear" {
-		hash := s.ipc.Hash(KeyNavigation)
-		// Set fields to empty strings instead of deleting them. scootui-qt's
-		// HiredisWorker::doHdel issues HDEL without a follow-up PUBLISH, so
-		// subscribers (this service's HashWatcher, scootui-qt's own SyncableStore)
-		// never wake up. Setting "" goes through HSET+PUBLISH and reaches both.
-		for _, field := range []string{"latitude", "longitude", "destination", "address", "timestamp", "waypoints", "current-step"} {
-			if err := hash.Set(field, ""); err != nil {
-				s.log.Errorf("Failed to clear navigation field %s: %v", field, err)
-			}
+		if err := s.clearRoutePlan(); err != nil {
+			s.navRPCError(err)
+			return
 		}
-		s.log.Infof("Cleared navigation destination")
 		s.sendExtendedResponse("nav:ok")
-
 	} else if strings.HasPrefix(cmd, "route:") {
 		s.handleNavRouteCommand(strings.TrimPrefix(cmd, "route:"))
-
 	} else if strings.HasPrefix(cmd, "fav:") {
 		s.handleNavFavouriteCommand(strings.TrimPrefix(cmd, "fav:"))
 	} else {
@@ -458,15 +344,12 @@ func (s *Service) navigateToSavedLocation(id string) error {
 		return fmt.Errorf("saved location %s missing longitude", id)
 	}
 
-	hash := s.ipc.Hash(KeyNavigation)
-	if err := hash.Set("latitude", lat); err != nil {
-		return fmt.Errorf("failed to set latitude: %w", err)
+	stop, err := parseNavStop(lat + "," + lon)
+	if err != nil {
+		return err
 	}
-	if err := hash.Set("longitude", lon); err != nil {
-		return fmt.Errorf("failed to set longitude: %w", err)
-	}
-	if err := hash.Set("destination", lat+","+lon); err != nil {
-		return fmt.Errorf("failed to set destination: %w", err)
+	if err := s.replaceRoutePlan(stop); err != nil {
+		return fmt.Errorf("route plan: %w", err)
 	}
 
 	s.log.Infof("Navigating to saved location %s: %s,%s", id, lat, lon)

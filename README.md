@@ -97,6 +97,21 @@ journalctl -u librescoot-bluetooth.service
 - Firmware update and OTA staging paths contain executable update inputs. Keep them service-owned and monitor update failures in the journal and Redis/Valkey fault state.
 - Send `SIGTERM` or `SIGINT` for a coordinated shutdown; the service stops the controller link before exiting.
 
+### Navigation plan ownership
+
+BLE `nav:dest` and saved-location navigate replace the plan with one stop;
+`nav:route:add` appends atomically, `remove` sends the revision from `plan.get`,
+`skip` marks the current stop reached and advances it with its plan and stop IDs,
+and `nav:clear`/`nav:route:clear` clear the plan. Legacy `navi:start` also
+replaces the plan. These operations call settings-service via redis-ipc on
+`settings:route-plan` with a five-second timeout. The service does not write
+`navigation` fields: settings-service persists the plan and publishes its
+projection. A missing owner or rejected mutation is an error, never a direct
+Redis fallback. BLE response strings and zero-based list / one-based remove
+indices remain unchanged. The complete RPC wire contract is documented in
+settings-service's README.
+
+
 ## License
 
 This project is licensed under the [Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License](LICENSE).

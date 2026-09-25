@@ -1108,12 +1108,12 @@ func (s *Service) handleEventMessage(msgType ble.MessageType, absSubTypeKey uint
 		// Check if it's a navigation start event
 		if strings.HasPrefix(eventStr, "navi:start ") {
 			coords := strings.TrimPrefix(eventStr, "navi:start ")
-			// Use WriteAndPublishString to atomically HSET and PUBLISH
-			err := s.ipc.Hash("navigation").Set("destination", coords)
+			stop, err := parseNavStop(coords)
+			if err == nil {
+				err = s.replaceRoutePlan(stop)
+			}
 			if err != nil {
 				s.log.Errorf("Failed to set navigation destination: %v", err)
-			} else {
-				s.log.Debugf("Set navigation destination: %s", coords)
 			}
 			return
 		}
