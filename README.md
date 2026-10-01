@@ -33,6 +33,12 @@ legacy `cap:list` retains the unversioned `keycard` category. Clients must
 keep an alias set command within the 100-byte extended-command limit: names
 are capped at 32 UTF-8 bytes and base64url-encoded without padding.
 
+`cap:ext` reports `alarm=2` for the bundled alarm-service semantics: `alarm:stop`
+ends the episode with a five-minute cooldown; `alarm:disarm` holds disarmed until
+the next park cycle, hibernation starts, or eight hours pass. Neither changes
+`alarm.enabled`; `alarm:disable` switches it off persistently. Legacy `cap:list`
+retains the unversioned `alarm` category.
+
 DBC power commands do not unlock the vehicle or change its state:
 
 - `dbc:status` replies with `dbc:status:power:<on|off|unknown>:ready:<true|false|unknown>`.

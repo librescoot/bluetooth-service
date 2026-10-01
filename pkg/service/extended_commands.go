@@ -1007,7 +1007,7 @@ func capabilityCommandsFor(category string, bondDelete func() bool) []string {
 // capabilityRegistryFor returns the complete high-level registry for cap:ext.
 // Its fixed order is part of the response contract.
 func capabilityRegistryFor(bondDelete, tripCounter bool) string {
-	categories := []string{"nav=2", "keycard=2", "usb", "service-mode", "time", "config", "status", "alarm", "ltc"}
+	categories := []string{"nav=2", "keycard=2", "usb", "service-mode", "time", "config", "status", "alarm=2", "ltc"}
 	if bondDelete {
 		categories = append(categories, "ble")
 	}
