@@ -39,6 +39,10 @@ the next park cycle, hibernation starts, or eight hours pass. Neither changes
 `alarm.enabled`; `alarm:disable` switches it off persistently. Legacy `cap:list`
 retains the unversioned `alarm` category.
 
+Explicit BLE hibernation forwards `hibernate-manual` to PM regardless of vehicle state; extended `pm:hibernate-for <duration>` forwards `hibernate-for:<seconds>`. PM owns parked-state admission and graceful vehicle preparation. Controller-originated automatic hibernation forwards `hibernate-auto` and does not initiate vehicle locking.
+
+Wake-timer acknowledgements publish the nRF's duration echo as `power-manager[wake-timer-ack-seconds]`, alongside `wake-timer-armed` for telemetry. PM requires the echoed duration to match its request; deploy the corresponding PM and vehicle-service preparation handlers together.
+
 DBC power commands do not unlock the vehicle or change its state:
 
 - `dbc:status` replies with `dbc:status:power:<on|off|unknown>:ready:<true|false|unknown>`.

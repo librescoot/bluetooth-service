@@ -640,27 +640,10 @@ func (s *Service) handlePowerManagementMessage(subType ble.SubType, value interf
 			}
 			s.log.Debugf("Received hibernation request from nRF: type=%s (%d)", hibernationTypeStr, hibernationType)
 
-			// Forward hibernation request to power manager via Redis
-			var command string
-			var listKey string
-
+			listKey := "scooter:power"
+			command := "hibernate-auto"
 			if hibernationType == int(ble.HibernationRequestManual) {
-				// Check vehicle state for manual hibernation
-				vehicleState, err := s.ipc.HGet(KeyVehicle, "state")
-				if err == nil && vehicleState == "parked" {
-					// If parked, send lock-hibernate to vehicle state handler
-					listKey = "scooter:state"
-					command = "lock-hibernate"
-				} else {
-
-					// Otherwise send to power manager
-					listKey = "scooter:power"
-					command = "hibernate-manual"
-				}
-			} else {
-				// Automatic hibernation always goes to power manager
-				listKey = "scooter:power"
-				command = "hibernate"
+				command = "hibernate-manual"
 			}
 
 			if err := ipc.SendRequest(s.ipc, listKey, command); err != nil {
@@ -690,7 +673,10 @@ func (s *Service) handlePowerManagementMessage(subType ble.SubType, value interf
 		if ackVal > 0 {
 			armed = "true"
 		}
-		if err := s.ipc.Hash(KeyPowerManager).Set("wake-timer-armed", armed); err != nil {
+		if err := s.ipc.Hash(KeyPowerManager).SetMany(map[string]any{
+			"wake-timer-armed":       armed,
+			"wake-timer-ack-seconds": ackVal,
+		}, ipc.Sync()); err != nil {
 			s.log.Errorf("Failed to write wake-timer-armed to Redis: %v", err)
 		} else {
 			s.log.Debugf("Wake-timer ACK from nRF: %d seconds → wake-timer-armed=%s", ackVal, armed)
