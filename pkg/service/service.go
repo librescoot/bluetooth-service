@@ -8,6 +8,7 @@ import (
 	ipc "github.com/librescoot/redis-ipc"
 
 	"github.com/librescoot/bluetooth-service/pkg/ble"
+	"github.com/librescoot/bluetooth-service/pkg/filetransfer"
 	"github.com/librescoot/bluetooth-service/pkg/logger"
 	"github.com/librescoot/bluetooth-service/pkg/usock"
 )
@@ -116,7 +117,9 @@ type Service struct {
 	hostCapabilities  int32
 
 	// OTA receiver: phone -> scooter firmware transfer over the OTA tunnel
-	ota otaReceiver
+	ota        otaReceiver
+	files      *filetransfer.Server
+	transferMu sync.Mutex
 }
 
 // otaReceiver is the subset of *ota.Receiver used by the USOCK dispatch
@@ -151,7 +154,7 @@ func New(ipcClient *ipc.Client, destinationClient *ipc.Client, log *logger.Logge
 // PublishCapabilities exposes the BLE navigation protocol version to local
 // services without requiring an nRF round trip.
 func (s *Service) PublishCapabilities() error {
-	return s.ipc.Hash("system").Set("capabilities", capabilityRegistryFor(s.nrfSupportsBondDelete(), s.tripCounterSupported()), ipc.Sync())
+	return s.ipc.Hash("system").Set("capabilities", s.capabilityRegistry(), ipc.Sync())
 }
 
 // SetOTAReceiver wires the OTA transfer receiver into the USOCK dispatch.
@@ -211,7 +214,7 @@ func (s *Service) reopenUSockAtBaud(baud int) error {
 	if errHandler != nil {
 		sock.SetErrorHandler(errHandler)
 	}
-	sock.SetSyncFrameIDs(ble.FrameOTAData, ble.FrameOTACtrl)
+	sock.SetSyncFrameIDs(ble.FrameOTAData, ble.FrameOTACtrl, filetransfer.FrameData, filetransfer.FrameControl)
 
 	s.mu.Lock()
 	s.usock = sock
@@ -324,7 +327,7 @@ func (s *Service) ReconnectUSock() error {
 	if errHandler != nil {
 		sock.SetErrorHandler(errHandler)
 	}
-	sock.SetSyncFrameIDs(ble.FrameOTAData, ble.FrameOTACtrl)
+	sock.SetSyncFrameIDs(ble.FrameOTAData, ble.FrameOTACtrl, filetransfer.FrameData, filetransfer.FrameControl)
 
 	s.mu.Lock()
 	if s.stopped {
@@ -382,6 +385,9 @@ func (s *Service) Stop() {
 	s.stopTripResetBridge()
 	if err := s.CloseUSock(); err != nil {
 		s.log.Errorf("Failed to close USOCK during shutdown: %v", err)
+	}
+	if s.files != nil {
+		s.files.Close()
 	}
 	close(s.stopCh)
 }
@@ -451,7 +457,7 @@ func (s *Service) startNormally() error {
 	if errHandler != nil {
 		sock.SetErrorHandler(errHandler)
 	}
-	sock.SetSyncFrameIDs(ble.FrameOTAData, ble.FrameOTACtrl)
+	sock.SetSyncFrameIDs(ble.FrameOTAData, ble.FrameOTACtrl, filetransfer.FrameData, filetransfer.FrameControl)
 	s.SetUSock(sock)
 	s.ClearFault(FaultSerialPort)
 	s.log.Infof("Connected to nRF52 via USOCK")

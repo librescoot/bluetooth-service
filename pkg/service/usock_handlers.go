@@ -11,6 +11,8 @@ import (
 
 	"github.com/fxamacker/cbor/v2"
 	"github.com/librescoot/bluetooth-service/pkg/ble"
+	"github.com/librescoot/bluetooth-service/pkg/filetransfer"
+	"github.com/librescoot/bluetooth-service/pkg/ota"
 	"github.com/librescoot/bluetooth-service/pkg/usock"
 )
 
@@ -19,12 +21,32 @@ func (s *Service) HandleUSockMessage(frameID byte, payload *usock.Payload) {
 	// OTA tunnel frames are raw binary (not CBOR); intercept before decode.
 	// Mirrors the nRF firmware's pre-decode hook for frame 0xB2.
 	switch frameID {
+	case filetransfer.FrameData:
+		if s.files != nil {
+			s.files.HandleData(payload.Data)
+		}
+		return
+	case filetransfer.FrameControl:
+		if s.files != nil {
+			s.files.HandleControl(payload.Data)
+		}
+		return
 	case ble.FrameOTAData:
 		if s.ota != nil {
 			s.ota.HandleData(payload.Data)
 		}
 		return
 	case ble.FrameOTACtrl:
+		if len(payload.Data) > 0 && payload.Data[0] == ota.OpStart {
+			s.transferMu.Lock()
+			defer s.transferMu.Unlock()
+		}
+		if len(payload.Data) > 0 && payload.Data[0] == ota.OpStart && s.files != nil && s.files.Busy() {
+			if writer := s.GetUSock(); writer != nil {
+				_ = writer.WriteWithFrameID(ble.FrameOTAStatus, ota.EncodeStartAck(ota.StartBusy, 0, 0, 0, ota.MaxChunkSize))
+			}
+			return
+		}
 		if s.ota != nil {
 			s.ota.HandleControl(payload.Data)
 		}
@@ -734,6 +756,9 @@ func (s *Service) handleBLEParamMessage(msgType ble.MessageType, absSubTypeKey u
 			if statusStr, ok := convertToString(value); ok {
 				s.log.Debugf("Received BLE Status update: %s", statusStr)
 				s.noteTripResetBLEStatus(statusStr)
+				if statusStr == "disconnected" && s.files != nil {
+					s.files.Disconnect()
+				}
 				if err := s.ipc.Hash(KeyBLEStatus).Set("status", statusStr); err != nil {
 					s.log.Errorf("Failed to write BLE status to Redis: %v", err)
 				}

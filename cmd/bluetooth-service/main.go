@@ -125,6 +125,9 @@ func main() {
 		ota.ComponentDBC: &ota.DBCInstaller{IPC: ipcClient, Log: log},
 	})
 	svc.SetOTAReceiver(otaReceiver)
+	if err := svc.EnableFileTransfer("/data/log-bundles", "/data/ble-files/inbox"); err != nil {
+		log.Fatalf("Failed to initialize file transfer: %v", err)
+	}
 
 	// Probe for DFU mode -> either recover (if nRF is stuck in DFU with no
 	// working app) or open USOCK and run the normal init sequence. Bootstrap

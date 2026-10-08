@@ -1062,7 +1062,7 @@ func (s *Service) handleCapabilityQuery(cmd string) {
 	cmd = strings.TrimSpace(cmd)
 
 	if cmd == "ext" {
-		response := capabilityRegistryFor(s.nrfSupportsBondDelete(), s.tripCounterSupported())
+		response := s.capabilityRegistry()
 		if len(response) > tripResponseMaxBytes {
 			s.log.Errorf("cap:ext response exceeds limit: %d bytes", len(response))
 			s.sendExtendedResponse("cap:error:internal")

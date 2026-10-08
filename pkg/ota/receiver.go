@@ -127,6 +127,12 @@ func New(log *logger.Logger, ipcCli *ipc.Client, writer func() FrameWriter, stag
 	return r
 }
 
+func (r *Receiver) Busy() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.state != stateIdle
+}
+
 // send transmits a status message to the phone; drops silently when the link
 // is down (cumulative ACKs are loss-tolerant by design).
 func (r *Receiver) send(payload []byte) {

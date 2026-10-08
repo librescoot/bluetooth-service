@@ -52,6 +52,22 @@ DBC power commands do not unlock the vehicle or change its state:
 
 Wait commands time out after 60 seconds. DBC power-off is rejected while a DBC update is active; no force-off command is exposed over BLE.
 
+## File transfer
+
+`cap:ext` reports `files=1` when the connected controller supports the binary
+file tunnel. The separate file service supports listing, SHA-256 metadata,
+uploads and downloads with bounded windows, cancellation and chunk-aligned
+resume. Its USOCK frames are `0xB3` (data), `0xB4` (control) and `0xB5` (status).
+
+Named stores confine access: `logs` exposes completed `.tar.gz` archives in
+`/data/log-bundles` read-only; `inbox` stages uploads in `/data/ble-files/inbox`.
+Uploads are verified before non-overwriting publication. Transfers never install
+firmware or activate maps. Log archives contain sensitive diagnostic data.
+
+Active transfers hold the `ble-files` block power inhibitor. Cancellation,
+completion and BLE disconnect release it. File transfers and firmware OTA
+transfers are mutually exclusive; the OTA wire protocol remains separate.
+
 ## Configuration
 
 Configuration is supplied as command-line flags:
