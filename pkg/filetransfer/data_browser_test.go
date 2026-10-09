@@ -126,9 +126,6 @@ func TestDataUploadResumesAfterDisconnectAndHidesStaging(t *testing.T) {
 	if err != nil || !bytes.Equal(got, data) {
 		t.Fatalf("published %q %v", got, err)
 	}
-	s.HandleControl(EncodeRequest(Request{Version: Version2, Op: OpOpenRoot, ID: 19, Budget: 20}))
-	reply := message(t, writer, 19)
-	copy(dir[:], reply[2:18])
 	s.HandleControl(EncodeRequest(Request{Version: Version2, Op: OpListDir, ID: 20, Budget: 244, DirectoryID: dir}))
 	listing := message(t, writer, 20)
 	if len(listing) < 28 || listing[0] != RespListDir || string(listing[28:]) != "resume.bin" {

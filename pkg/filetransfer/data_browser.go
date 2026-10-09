@@ -25,6 +25,8 @@ type fileIdentity struct {
 	size     int64
 	modified int64
 }
+
+// identity pins the directory object; a listing snapshot separately tracks its changing contents.
 type dataDirectory struct {
 	path     string
 	identity fileIdentity
@@ -58,12 +60,14 @@ type pendingResolve struct {
 }
 type directoryListing struct {
 	dir      [16]byte
+	snapshot fileIdentity
 	cursor   uint32
 	name     string
 	kind     byte
 	size     uint64
 	modified int64
 	request  uint32
+	end      bool
 	touched  time.Time
 }
 
@@ -308,20 +312,46 @@ func (s *Server) controlV2(req Request, generation uint64) bool {
 		}
 		d.touched = time.Now()
 		info, err := s.checkedInfo(d.path)
-		if err != nil || !info.IsDir() || identityOf(info) != d.identity {
+		if err != nil || !info.IsDir() || !sameDirectoryObject(identityOf(info), d.identity) {
 			s.fail(req, ErrChanged)
 			return true
 		}
-		if req.NameOffset > 0 && (s.listState == nil || s.listState.dir != req.DirectoryID || s.listState.cursor != req.Cursor || s.listState.request != req.ID) {
-			s.fail(req, ErrChanged)
-			return true
+		current := identityOf(info)
+		state := s.listState
+		fresh := req.Cursor == 0 && req.NameOffset == 0 && (state == nil || state.dir != req.DirectoryID || state.cursor != 0 || state.request != req.ID)
+		if fresh {
+			state = &directoryListing{dir: req.DirectoryID, snapshot: current, request: req.ID, touched: time.Now()}
+			s.listState = state
+		} else {
+			if state == nil || state.dir != req.DirectoryID || state.snapshot != current {
+				s.fail(req, ErrChanged)
+				return true
+			}
+			switch {
+			case req.NameOffset > 0:
+				if state.cursor != req.Cursor || state.request != req.ID || state.name == "" || state.end {
+					s.fail(req, ErrChanged)
+					return true
+				}
+			case req.Cursor == state.cursor:
+				state.request = req.ID
+			case req.Cursor == state.cursor+1:
+				state.cursor = req.Cursor
+				state.name = ""
+				state.end = false
+				state.request = req.ID
+			default:
+				s.fail(req, ErrChanged)
+				return true
+			}
 		}
+		state.touched = time.Now()
 		directoryCheck := func() error {
 			if err := check(); err != nil {
 				return err
 			}
-			current, err := s.checkedInfo(d.path)
-			if err != nil || !current.IsDir() || identityOf(current) != d.identity {
+			latest, err := s.checkedInfo(d.path)
+			if err != nil || !latest.IsDir() || !sameDirectoryObject(identityOf(latest), d.identity) || identityOf(latest) != state.snapshot {
 				return errChanged
 			}
 			return nil
@@ -332,6 +362,8 @@ func (s *Server) controlV2(req Request, generation uint64) bool {
 			return true
 		}
 		if entry == nil {
+			state.end = true
+			state.request = req.ID
 			body := []byte{RespListDir, OK}
 			body = binary.LittleEndian.AppendUint32(body, req.Cursor)
 			body = append(body, 0)
@@ -339,7 +371,7 @@ func (s *Server) controlV2(req Request, generation uint64) bool {
 			return true
 		}
 		if req.NameOffset == 0 {
-			s.listState.request = req.ID
+			state.request = req.ID
 		}
 		if int(req.NameOffset) >= len(entry.name) {
 			s.fail(req, ErrInvalid)
@@ -480,10 +512,16 @@ type listedEntry struct {
 }
 
 func (s *Server) listEntry(d *dataDirectory, cursor uint32, check func() error) (*listedEntry, error) {
-	if s.listState != nil && s.listState.dir == [16]byte{} {
-		s.listState = nil
+	if s.listState != nil && s.listState.dir == findDirectoryID(s.dataDirs, d) && s.listState.cursor == cursor && s.listState.end && time.Since(s.listState.touched) < time.Minute {
+		if err := check(); err != nil {
+			return nil, err
+		}
+		return nil, nil
 	}
-	if s.listState != nil && s.listState.dir == findDirectoryID(s.dataDirs, d) && s.listState.cursor == cursor && time.Since(s.listState.touched) < time.Minute {
+	if s.listState != nil && s.listState.dir == findDirectoryID(s.dataDirs, d) && s.listState.cursor == cursor && s.listState.name != "" && !s.listState.end && time.Since(s.listState.touched) < time.Minute {
+		if err := check(); err != nil {
+			return nil, err
+		}
 		s.listState.touched = time.Now()
 		e := s.listState
 		return &listedEntry{name: e.name, kind: e.kind, size: e.size, modified: e.modified}, nil
@@ -494,7 +532,7 @@ func (s *Server) listEntry(d *dataDirectory, cursor uint32, check func() error) 
 	}
 	defer root.Close()
 	openedInfo, err := root.Stat()
-	if err != nil || identityOf(openedInfo) != d.identity {
+	if err != nil || identityOf(openedInfo) != s.listState.snapshot {
 		return nil, errChanged
 	}
 	visible := uint32(0)
@@ -507,7 +545,10 @@ func (s *Server) listEntry(d *dataDirectory, cursor uint32, check func() error) 
 			if err != nil && err != io.EOF {
 				return nil, err
 			}
-			s.listState = nil
+			if err := check(); err != nil {
+				return nil, err
+			}
+			s.listState.end = true
 			return nil, nil
 		}
 		e := entries[0]
@@ -534,8 +575,16 @@ func (s *Server) listEntry(d *dataDirectory, cursor uint32, check func() error) 
 				}
 			}
 		}
-		id := findDirectoryID(s.dataDirs, d)
-		s.listState = &directoryListing{dir: id, cursor: cursor, name: name, kind: kind, size: size, modified: modified, touched: time.Now()}
+		if err := check(); err != nil {
+			return nil, err
+		}
+		s.listState.cursor = cursor
+		s.listState.name = name
+		s.listState.kind = kind
+		s.listState.size = size
+		s.listState.modified = modified
+		s.listState.end = false
+		s.listState.touched = time.Now()
 		return &listedEntry{name: name, kind: kind, size: size, modified: modified}, nil
 	}
 }

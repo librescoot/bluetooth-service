@@ -175,6 +175,11 @@ func (f *storedFile) commitData() error {
 		}
 	}
 	if f.intent == IntentCreate {
+		if f.check != nil {
+			if err := f.check(); err != nil {
+				return err
+			}
+		}
 		if err := root.Link(f.stagePath, f.targetPath); err != nil {
 			return err
 		}
@@ -204,6 +209,11 @@ func (f *storedFile) commitData() error {
 		mode := f.oldMode.Perm() | f.oldMode&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky)
 		if err := f.file.Chmod(mode); err != nil {
 			return err
+		}
+		if f.check != nil {
+			if err := f.check(); err != nil {
+				return err
+			}
 		}
 		if err := root.Rename(f.stagePath, f.targetPath); err != nil {
 			return err
