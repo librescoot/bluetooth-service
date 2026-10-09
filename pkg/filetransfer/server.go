@@ -126,6 +126,7 @@ func (s *Server) run() {
 	defer close(s.done)
 	defer s.finish()
 	defer s.closeDataRoot()
+	defer s.resetDataHandles()
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 	generation := s.generation.Load()

@@ -61,7 +61,9 @@ type pendingResolve struct {
 type directoryListing struct {
 	dir      [16]byte
 	snapshot fileIdentity
+	iterator *os.File
 	cursor   uint32
+	position uint32
 	name     string
 	kind     byte
 	size     uint64
@@ -91,6 +93,7 @@ func (s *Server) SetDataRoot(path string) error {
 		}
 		return os.ErrPermission
 	}
+	s.resetDataHandles()
 	if s.dataRoot != nil {
 		s.dataRoot.Close()
 	}
@@ -100,7 +103,15 @@ func (s *Server) SetDataRoot(path string) error {
 	return nil
 }
 
+func (s *Server) clearListing() {
+	if s.listState != nil && s.listState.iterator != nil {
+		_ = s.listState.iterator.Close()
+	}
+	s.listState = nil
+}
+
 func (s *Server) resetDataHandles() {
+	s.clearListing()
 	s.dataDirs = make(map[[16]byte]*dataDirectory)
 	s.dataNodes = make(map[[16]byte]*dataNode)
 	s.pendingName = nil
@@ -188,6 +199,9 @@ func (s *Server) evictDirectory() {
 		}
 	}
 	delete(s.dataDirs, key)
+	if s.listState != nil && s.listState.dir == key {
+		s.clearListing()
+	}
 }
 func (s *Server) addNode(path string, kind byte, info os.FileInfo) ([16]byte, error) {
 	var zero [16]byte
@@ -245,7 +259,7 @@ func (s *Server) expireDataHandles() {
 		s.resolveReplay = nil
 	}
 	if s.listState != nil && s.listState.touched.Before(cutoff) {
-		s.listState = nil
+		s.clearListing()
 	}
 }
 
@@ -283,7 +297,7 @@ func (s *Server) controlV2(req Request, generation uint64) bool {
 				s.resolveReplay = nil
 			}
 			if s.listState != nil && s.listState.request == req.ID {
-				s.listState = nil
+				s.clearListing()
 			}
 		}
 		return false
@@ -313,6 +327,9 @@ func (s *Server) controlV2(req Request, generation uint64) bool {
 		d.touched = time.Now()
 		info, err := s.checkedInfo(d.path)
 		if err != nil || !info.IsDir() || !sameDirectoryObject(identityOf(info), d.identity) {
+			if s.listState != nil && s.listState.dir == req.DirectoryID {
+				s.clearListing()
+			}
 			s.fail(req, ErrChanged)
 			return true
 		}
@@ -320,10 +337,16 @@ func (s *Server) controlV2(req Request, generation uint64) bool {
 		state := s.listState
 		fresh := req.Cursor == 0 && req.NameOffset == 0 && (state == nil || state.dir != req.DirectoryID || state.cursor != 0 || state.request != req.ID)
 		if fresh {
+			s.clearListing()
 			state = &directoryListing{dir: req.DirectoryID, snapshot: current, request: req.ID, touched: time.Now()}
 			s.listState = state
 		} else {
-			if state == nil || state.dir != req.DirectoryID || state.snapshot != current {
+			if state == nil || state.dir != req.DirectoryID {
+				s.fail(req, ErrChanged)
+				return true
+			}
+			if state.snapshot != current {
+				s.clearListing()
 				s.fail(req, ErrChanged)
 				return true
 			}
@@ -419,7 +442,7 @@ func (s *Server) controlV2(req Request, generation uint64) bool {
 		}
 		delete(s.dataDirs, req.DirectoryID)
 		if s.listState != nil && s.listState.dir == req.DirectoryID {
-			s.listState = nil
+			s.clearListing()
 		}
 		s.send(req, []byte{RespCloseDir, OK})
 	case OpStatNode:
@@ -512,51 +535,65 @@ type listedEntry struct {
 }
 
 func (s *Server) listEntry(d *dataDirectory, cursor uint32, check func() error) (*listedEntry, error) {
-	if s.listState != nil && s.listState.dir == findDirectoryID(s.dataDirs, d) && s.listState.cursor == cursor && s.listState.end && time.Since(s.listState.touched) < time.Minute {
+	state := s.listState
+	if state == nil || state.dir != findDirectoryID(s.dataDirs, d) {
+		return nil, errChanged
+	}
+	if state.cursor == cursor && state.end {
 		if err := check(); err != nil {
+			s.clearListing()
 			return nil, err
 		}
 		return nil, nil
 	}
-	if s.listState != nil && s.listState.dir == findDirectoryID(s.dataDirs, d) && s.listState.cursor == cursor && s.listState.name != "" && !s.listState.end && time.Since(s.listState.touched) < time.Minute {
+	if state.cursor == cursor && state.name != "" {
 		if err := check(); err != nil {
+			s.clearListing()
 			return nil, err
 		}
-		s.listState.touched = time.Now()
-		e := s.listState
-		return &listedEntry{name: e.name, kind: e.kind, size: e.size, modified: e.modified}, nil
+		state.touched = time.Now()
+		return &listedEntry{name: state.name, kind: state.kind, size: state.size, modified: state.modified}, nil
 	}
-	root, err := s.dataRoot.Open(d.path)
-	if err != nil {
-		return nil, err
-	}
-	defer root.Close()
-	openedInfo, err := root.Stat()
-	if err != nil || identityOf(openedInfo) != s.listState.snapshot {
+	if cursor != state.position {
+		s.clearListing()
 		return nil, errChanged
 	}
-	visible := uint32(0)
-	for {
-		if err := check(); err != nil {
+	if state.iterator == nil {
+		iterator, err := s.dataRoot.Open(d.path)
+		if err != nil {
+			s.clearListing()
 			return nil, err
 		}
-		entries, err := root.ReadDir(1)
+		openedInfo, err := iterator.Stat()
+		if err != nil || identityOf(openedInfo) != state.snapshot {
+			iterator.Close()
+			s.clearListing()
+			return nil, errChanged
+		}
+		state.iterator = iterator
+	}
+	for {
+		if err := check(); err != nil {
+			s.clearListing()
+			return nil, err
+		}
+		entries, err := state.iterator.ReadDir(1)
 		if len(entries) == 0 {
 			if err != nil && err != io.EOF {
+				s.clearListing()
 				return nil, err
 			}
 			if err := check(); err != nil {
+				s.clearListing()
 				return nil, err
 			}
-			s.listState.end = true
+			_ = state.iterator.Close()
+			state.iterator = nil
+			state.end = true
 			return nil, nil
 		}
 		e := entries[0]
 		if e.Name() == ".partial" || e.Name() == ".ble-transfer" || strings.HasPrefix(e.Name(), ".ble-transfer-") || !utf8.ValidString(e.Name()) {
-			continue
-		}
-		if visible < cursor {
-			visible++
 			continue
 		}
 		name := e.Name()
@@ -576,15 +613,16 @@ func (s *Server) listEntry(d *dataDirectory, cursor uint32, check func() error) 
 			}
 		}
 		if err := check(); err != nil {
+			s.clearListing()
 			return nil, err
 		}
-		s.listState.cursor = cursor
-		s.listState.name = name
-		s.listState.kind = kind
-		s.listState.size = size
-		s.listState.modified = modified
-		s.listState.end = false
-		s.listState.touched = time.Now()
+		state.name = name
+		state.kind = kind
+		state.size = size
+		state.modified = modified
+		state.position++
+		state.end = false
+		state.touched = time.Now()
 		return &listedEntry{name: name, kind: kind, size: size, modified: modified}, nil
 	}
 }
@@ -728,6 +766,7 @@ func (s *Server) openDataRead(path string, check func() error) (*storedFile, err
 }
 
 func (s *Server) closeDataRoot() {
+	s.clearListing()
 	if s.dataRoot != nil {
 		s.dataRoot.Close()
 		s.dataRoot = nil
