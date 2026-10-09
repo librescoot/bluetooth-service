@@ -64,6 +64,40 @@ Named stores confine access: `logs` exposes completed `.tar.gz` archives in
 Uploads are verified before non-overwriting publication. Transfers never install
 firmware or activate maps. Log archives contain sensitive diagnostic data.
 
+Legacy read-only Logs listing and downloads remain available whenever the BLE
+file tunnel is supported; they do not depend on the `/data` opt-in. The
+administrative `/data` browser uses protocol v2 and is disabled by default.
+Enable it only for a root-administered development session by adding a local
+systemd override:
+
+```sh
+sudo systemctl edit librescoot-bluetooth.service
+```
+
+Set the override to:
+
+```ini
+[Service]
+ExecStart=
+ExecStart=/usr/bin/bluetooth-service --serial=/dev/ttymxc1 --baud=115200 --redis-addr=localhost:6379 --log-level=3 --firmware-dir=/usr/share/nrf-fw --auto-update=true --ota-staging-dir=/data/ota --enable-data-browser
+```
+
+Then restart `librescoot-bluetooth.service`; remove the override to disable the
+browser. The service advertises `data=1` only while this option is enabled and
+the nRF file tunnel is available. This grants paired BLE clients administrative
+read/write access across `/data`; uploaded files may affect other services that
+consume them, but are never automatically installed or executed. File replacement
+requires explicit client intent and a match against the target's expected size
+and SHA-256. Publication is atomic after complete-file verification. A separate,
+uncooperative process can still race the final target check and atomic rename; the
+service does not claim a portable filesystem compare-and-swap guarantee. Non-UTF-8
+directory names and special files are not transferable; unsupported entries may be
+omitted or marked unsupported. The `.ble-transfer` name prefix is reserved for
+private transfer staging and is not addressable through the browser; legacy
+`.partial` staging names are reserved as well. The kernel's aggregate path-length
+limit still applies; an overlong path returns the protocol's invalid-request error
+without falling back to a host path.
+
 Active transfers hold the `ble-files` block power inhibitor. Cancellation,
 completion and BLE disconnect release it. File transfers and firmware OTA
 transfers are mutually exclusive; the OTA wire protocol remains separate.
@@ -80,7 +114,8 @@ Configuration is supplied as command-line flags:
 | `--log-level` | `3` | Log level: `0` none through `4` debug |
 | `--firmware-dir` | service default | Directory containing nRF firmware files |
 | `--auto-update` | `true` | Update nRF firmware at startup when a newer version is available |
-| `--ota-staging-dir` | service default | Directory for incoming BLE OTA bundles |
+| `--ota-staging-dir` | `/data/ota` | Directory for incoming BLE OTA bundles |
+| `--enable-data-browser` | `false` | Enable administrative BLE browser rooted at `/data` |
 | `--version` | — | Print the build version and exit |
 
 The production recipe installs the firmware updater and bundled firmware under `/usr/share/nrf-fw/`; its systemd unit starts `/usr/bin/bluetooth-service`.

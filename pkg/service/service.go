@@ -3,6 +3,7 @@ package service
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	ipc "github.com/librescoot/redis-ipc"
@@ -117,9 +118,10 @@ type Service struct {
 	hostCapabilities  int32
 
 	// OTA receiver: phone -> scooter firmware transfer over the OTA tunnel
-	ota        otaReceiver
-	files      *filetransfer.Server
-	transferMu sync.Mutex
+	ota                otaReceiver
+	files              *filetransfer.Server
+	dataBrowserEnabled atomic.Bool
+	transferMu         sync.Mutex
 }
 
 // otaReceiver is the subset of *ota.Receiver used by the USOCK dispatch

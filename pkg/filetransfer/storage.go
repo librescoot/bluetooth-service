@@ -39,18 +39,29 @@ type identity struct {
 	Hash string
 }
 type storedFile struct {
-	root    *os.Root
-	file    *os.File
-	info    FileInfo
-	partial string
-	check   func() error
+	root         *os.Root
+	file         *os.File
+	info         FileInfo
+	partial      string
+	check        func() error
+	isData       bool
+	targetPath   string
+	stagePath    string
+	intent       byte
+	oldSize      uint64
+	oldHash      [32]byte
+	oldIdentity  fileIdentity
+	oldUID       int
+	oldGID       int
+	oldMode      os.FileMode
+	borrowedRoot bool
 }
 
 func (f *storedFile) close() {
 	if f.file != nil {
 		f.file.Close()
 	}
-	if f.root != nil {
+	if f.root != nil && !f.borrowedRoot {
 		f.root.Close()
 	}
 }
@@ -285,6 +296,9 @@ func syncRoot(root *os.Root) error {
 	return d.Sync()
 }
 func (f *storedFile) commit() error {
+	if f.isData {
+		return f.commitData()
+	}
 	if err := f.file.Sync(); err != nil {
 		return err
 	}

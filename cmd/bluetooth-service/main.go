@@ -19,14 +19,15 @@ import (
 var version = "dev"
 
 var (
-	serialDevice = flag.String("serial", "/dev/ttymxc1", "Serial device path")
-	baudRate     = flag.Int("baud", 115200, "Serial baud rate")
-	redisAddr    = flag.String("redis-addr", "localhost:6379", "Redis server address")
-	logLevel     = flag.Int("log-level", int(logger.LogLevelInfo), "Log level (0=none, 1=error, 2=warning, 3=info, 4=debug)")
-	showVersion  = flag.Bool("version", false, "Print version and exit")
-	firmwareDir  = flag.String("firmware-dir", service.DefaultFirmwareDir, "Directory containing firmware files")
-	autoUpdate   = flag.Bool("auto-update", true, "Automatically update firmware on startup if newer version available")
-	otaStaging   = flag.String("ota-staging-dir", ota.DefaultStagingDir, "Staging directory for BLE OTA bundle transfers")
+	serialDevice      = flag.String("serial", "/dev/ttymxc1", "Serial device path")
+	baudRate          = flag.Int("baud", 115200, "Serial baud rate")
+	redisAddr         = flag.String("redis-addr", "localhost:6379", "Redis server address")
+	logLevel          = flag.Int("log-level", int(logger.LogLevelInfo), "Log level (0=none, 1=error, 2=warning, 3=info, 4=debug)")
+	showVersion       = flag.Bool("version", false, "Print version and exit")
+	firmwareDir       = flag.String("firmware-dir", service.DefaultFirmwareDir, "Directory containing firmware files")
+	autoUpdate        = flag.Bool("auto-update", true, "Automatically update firmware on startup if newer version available")
+	otaStaging        = flag.String("ota-staging-dir", ota.DefaultStagingDir, "Staging directory for BLE OTA bundle transfers")
+	enableDataBrowser = flag.Bool("enable-data-browser", false, "Enable administrative BLE browsing and file writes rooted at /data")
 )
 
 const (
@@ -127,6 +128,11 @@ func main() {
 	svc.SetOTAReceiver(otaReceiver)
 	if err := svc.EnableFileTransfer("/data/log-bundles", "/data/ble-files/inbox"); err != nil {
 		log.Fatalf("Failed to initialize file transfer: %v", err)
+	}
+	if *enableDataBrowser {
+		if err := svc.EnableDataBrowser(); err != nil {
+			log.Fatalf("Failed to enable administrative data browser: %v", err)
+		}
 	}
 
 	// Probe for DFU mode -> either recover (if nRF is stuck in DFU with no

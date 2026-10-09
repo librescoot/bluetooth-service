@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/librescoot/bluetooth-service/pkg/filetransfer"
@@ -10,10 +11,20 @@ import (
 
 const fileTunnelCapability = 0x04
 
+func fileTransferCapabilities(tunnel, dataEnabled bool) string {
+	if !tunnel {
+		return ""
+	}
+	if dataEnabled {
+		return ":files=1:data=1"
+	}
+	return ":files=1"
+}
+
 func (s *Service) capabilityRegistry() string {
 	registry := capabilityRegistryFor(s.nrfSupportsBondDelete(), s.tripCounterSupported())
-	if s.files != nil && s.link != nil && s.link.Caps()&fileTunnelCapability != 0 {
-		registry += ":files=1"
+	if s.files != nil && s.link != nil {
+		registry += fileTransferCapabilities(s.link.Caps()&fileTunnelCapability != 0, s.dataBrowserEnabled.Load())
 	}
 	return registry
 }
@@ -40,5 +51,17 @@ func (s *Service) EnableFileTransfer(logDir, inboxDir string) error {
 		}
 		return s.ipc.Hash("power:inhibits").Set("ble-files", string(data), ipc.Sync())
 	}})
+	return nil
+}
+
+// EnableDataBrowser enables administrative access rooted at /data.
+func (s *Service) EnableDataBrowser() error {
+	if s.files == nil {
+		return errors.New("file transfer is not enabled")
+	}
+	if err := s.files.SetDataRoot("/data"); err != nil {
+		return err
+	}
+	s.dataBrowserEnabled.Store(true)
 	return nil
 }

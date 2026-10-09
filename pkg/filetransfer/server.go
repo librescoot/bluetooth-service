@@ -51,6 +51,14 @@ type Server struct {
 	completedID      uint32
 	completedRequest uint32
 	completedAt      time.Time
+	idSource         io.Reader
+	dataRoot         *os.Root
+	dataPath         string
+	dataDirs         map[[16]byte]*dataDirectory
+	dataNodes        map[[16]byte]*dataNode
+	pendingName      *pendingResolve
+	resolveReplay    *resolveReplay
+	listState        *directoryListing
 }
 
 func New(writer func() Writer, stores map[byte]Store, hooks Hooks) *Server {
@@ -58,7 +66,7 @@ func New(writer func() Writer, stores map[byte]Store, hooks Hooks) *Server {
 	for id, store := range stores {
 		ownedStores[id] = store
 	}
-	s := &Server{writer: writer, stores: ownedStores, hooks: hooks, queue: make(chan packet, 128), reset: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{})}
+	s := &Server{writer: writer, stores: ownedStores, hooks: hooks, queue: make(chan packet, 128), reset: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{}), idSource: rand.Reader}
 	go s.run()
 	return s
 }
@@ -117,6 +125,7 @@ func (s *Server) finish() {
 func (s *Server) run() {
 	defer close(s.done)
 	defer s.finish()
+	defer s.closeDataRoot()
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 	generation := s.generation.Load()
@@ -127,11 +136,13 @@ func (s *Server) run() {
 		case <-s.reset:
 			s.finish()
 			s.catalog = nil
+			s.resetDataHandles()
 			generation = s.generation.Load()
 		case p := <-s.queue:
 			if generation != s.generation.Load() {
 				s.finish()
 				s.catalog = nil
+				s.resetDataHandles()
 				generation = s.generation.Load()
 			}
 			if p.generation != generation {
@@ -145,6 +156,7 @@ func (s *Server) run() {
 		case now := <-ticker.C:
 			if generation != s.generation.Load() {
 				s.finish()
+				s.resetDataHandles()
 				generation = s.generation.Load()
 			}
 			t := s.session
@@ -155,7 +167,7 @@ func (s *Server) run() {
 				s.finish()
 				continue
 			}
-			if t.request.Op == OpGet && t.sent > t.offset && now.Sub(t.last) > 2*time.Second {
+			if isDownload(t.request.Op) && t.sent > t.offset && now.Sub(t.last) > 2*time.Second {
 				if t.retries >= 10 {
 					s.fail(t.request, ErrIO)
 					s.finish()
@@ -186,6 +198,7 @@ func (s *Server) send(req Request, body []byte) {
 	}
 }
 func (s *Server) fail(req Request, code byte) { s.send(req, []byte{RespError, code}) }
+func isDownload(op byte) bool                 { return op == OpGet || op == OpGetNode }
 func codeFor(err error) byte {
 	switch {
 	case errors.Is(err, os.ErrNotExist):
@@ -196,6 +209,8 @@ func codeFor(err error) byte {
 		return ErrIntegrity
 	case errors.Is(err, errChanged), errors.Is(err, os.ErrExist):
 		return ErrChanged
+	case errors.Is(err, syscall.ENAMETOOLONG):
+		return ErrInvalid
 	case errors.Is(err, ErrTransportBusy):
 		return ErrBusy
 	case errors.Is(err, os.ErrPermission):
@@ -241,9 +256,19 @@ func (s *Server) check(id uint32, generation uint64) error {
 func (s *Server) control(p []byte, generation uint64) {
 	req, err := DecodeRequest(p)
 	if err != nil {
+		if len(p) >= 8 && p[1] == Version2 {
+			id := binary.LittleEndian.Uint32(p[2:6])
+			budget := binary.LittleEndian.Uint16(p[6:8])
+			if id != 0 && budget >= 20 && budget <= MaxPayload {
+				s.fail(Request{Version: Version2, ID: id, Budget: budget}, ErrInvalid)
+			}
+		}
 		return
 	}
 	check := func() error { return s.check(req.ID, generation) }
+	if req.Version == Version2 && s.controlV2(req, generation) {
+		return
+	}
 	if req.Op == OpList || req.Op == OpStat || req.Op == OpPut || req.Op == OpGet {
 		if err := check(); err != nil {
 			s.fail(req, codeFor(err))
@@ -363,7 +388,7 @@ func (s *Server) control(p []byte, generation uint64) {
 		}
 		s.session = &transfer{request: req, id: id, stored: file, offset: offset, sent: offset, synced: offset, last: time.Now()}
 		s.startAck(s.session)
-		if req.Op == OpGet {
+		if isDownload(req.Op) {
 			s.pump()
 		}
 	case OpComplete, OpCancel, OpAck, OpStatus:
@@ -389,7 +414,7 @@ func (s *Server) control(p []byte, generation uint64) {
 		case OpStatus:
 			s.ack(t, false)
 		case OpAck:
-			if t.request.Op != OpGet || req.Offset < t.offset || req.Offset > t.sent || (req.Offset != t.stored.info.Size && req.Offset%uint64(t.request.Chunk) != 0) {
+			if !isDownload(t.request.Op) || req.Offset < t.offset || req.Offset > t.sent || (req.Offset != t.stored.info.Size && req.Offset%uint64(t.request.Chunk) != 0) {
 				s.fail(req, ErrInvalid)
 				return
 			}
@@ -403,12 +428,16 @@ func (s *Server) control(p []byte, generation uint64) {
 				s.fail(req, ErrInvalid)
 				return
 			}
-			if t.request.Op == OpPut {
+			if !isDownload(t.request.Op) {
 				if err := t.stored.commit(); err != nil {
 					s.fail(req, codeFor(err))
 					if errors.Is(err, errChecksum) {
-						_ = t.stored.root.Remove(t.stored.partial)
-						_ = t.stored.root.Remove(".partial/" + t.stored.info.Name + ".json")
+						if t.stored.isData {
+							_ = t.stored.root.Remove(t.stored.stagePath)
+						} else {
+							_ = t.stored.root.Remove(t.stored.partial)
+							_ = t.stored.root.Remove(".partial/" + t.stored.info.Name + ".json")
+						}
 					}
 					s.finish()
 					return
@@ -424,7 +453,7 @@ func (s *Server) control(p []byte, generation uint64) {
 }
 func (s *Server) data(p []byte) {
 	t := s.session
-	if t == nil || t.request.Op != OpPut {
+	if t == nil || isDownload(t.request.Op) {
 		return
 	}
 	if t.stored.check != nil {
@@ -475,7 +504,7 @@ func (s *Server) data(p []byte) {
 }
 func (s *Server) pump() {
 	t := s.session
-	if t == nil || t.request.Op != OpGet {
+	if t == nil || !isDownload(t.request.Op) {
 		return
 	}
 	if t.stored.check != nil {
@@ -491,6 +520,13 @@ func (s *Server) pump() {
 	}
 	limit := min(t.stored.info.Size, t.offset+uint64(Window)*uint64(t.request.Chunk))
 	for t.sent < limit {
+		if t.stored.check != nil {
+			if err := t.stored.check(); err != nil {
+				s.fail(t.request, codeFor(err))
+				s.finish()
+				return
+			}
+		}
 		size := min(uint64(t.request.Chunk), t.stored.info.Size-t.sent)
 		data := make([]byte, size)
 		n, err := t.stored.file.ReadAt(data, int64(t.sent))

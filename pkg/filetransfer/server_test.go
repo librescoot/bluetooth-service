@@ -50,8 +50,8 @@ func message(t *testing.T, w *testWriter, id uint32) []byte {
 	var sequence uint32
 	for {
 		f := next(t, w)
-		if f.kind != FrameStatus || len(f.data) < StatusHeader {
-			t.Fatal("not a status fragment")
+		if f.kind != FrameStatus || len(f.data) < StatusHeader || len(f.data) > MaxStatusPayload {
+			t.Fatal("not a bounded status fragment")
 		}
 		p := f.data
 		if binary.LittleEndian.Uint32(p) != id {

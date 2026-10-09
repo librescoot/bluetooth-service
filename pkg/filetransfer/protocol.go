@@ -10,6 +10,7 @@ import (
 
 const (
 	Version               = 1
+	Version2              = 2
 	FrameData        byte = 0xB3
 	FrameControl     byte = 0xB4
 	FrameStatus      byte = 0xB5
@@ -26,6 +27,24 @@ const (
 	OpCancel         byte = 6
 	OpAck            byte = 7
 	OpStatus         byte = 8
+	OpOpenRoot       byte = 0x20
+	OpListDir        byte = 0x21
+	OpOpenDir        byte = 0x22
+	OpResolveName    byte = 0x23
+	OpStatNode       byte = 0x24
+	OpGetNode        byte = 0x25
+	OpPutNode        byte = 0x26
+	OpMkdir          byte = 0x27
+	OpCloseDir       byte = 0x28
+	RespOpenRoot     byte = 0xA0
+	RespListDir      byte = 0xA1
+	RespOpenDir      byte = 0xA2
+	RespResolveName  byte = 0xA3
+	RespStatNode     byte = 0xA4
+	RespMkdir        byte = 0xA7
+	RespCloseDir     byte = 0xA8
+	IntentCreate     byte = 0
+	IntentReplace    byte = 1
 	RespList         byte = 0x81
 	RespStat         byte = 0x82
 	RespStart        byte = 0x83
@@ -51,6 +70,7 @@ var errMalformed = errors.New("malformed file-transfer request")
 
 type Request struct {
 	Op           byte
+	Version      byte
 	ID           uint32
 	Budget       uint16
 	Store        byte
@@ -61,6 +81,14 @@ type Request struct {
 	Chunk        uint16
 	Session      uint32
 	Rewind       bool
+	DirectoryID  [16]byte
+	NodeID       [16]byte
+	Cursor       uint32
+	NameOffset   uint16
+	NameTotal    uint16
+	Intent       byte
+	OldSize      uint64
+	OldHash      [32]byte
 }
 
 func ValidName(name string) bool {
@@ -81,16 +109,23 @@ func ValidName(name string) bool {
 
 func DecodeRequest(p []byte) (Request, error) {
 	var r Request
-	if len(p) < 8 || p[1] != Version {
+	if len(p) < 8 || (p[1] != Version && p[1] != Version2) {
 		return r, errMalformed
 	}
 	r.Op = p[0]
+	r.Version = p[1]
 	r.ID = binary.LittleEndian.Uint32(p[2:6])
 	r.Budget = binary.LittleEndian.Uint16(p[6:8])
 	if r.ID == 0 || r.Budget < 20 || r.Budget > MaxPayload {
 		return r, errMalformed
 	}
 	p = p[8:]
+	if r.Version == Version2 {
+		if err := decodeV2(&r, p); err != nil {
+			return Request{}, err
+		}
+		return r, nil
+	}
 	switch r.Op {
 	case OpList:
 		if len(p) != 5 {
@@ -151,7 +186,14 @@ func DecodeRequest(p []byte) (Request, error) {
 }
 
 func EncodeRequest(r Request) []byte {
-	p := []byte{r.Op, Version}
+	version := r.Version
+	if version == 0 {
+		version = Version
+	}
+	if version == Version2 {
+		return encodeV2(r)
+	}
+	p := []byte{r.Op, version}
 	p = binary.LittleEndian.AppendUint32(p, r.ID)
 	p = binary.LittleEndian.AppendUint16(p, r.Budget)
 	switch r.Op {
