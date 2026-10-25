@@ -25,7 +25,7 @@ func (s *Service) handleExtendedCommandMessage(msgType ble.MessageType, absSubTy
 		}
 	}
 
-	s.log.Infof("Received extended command: %s", cmdStr)
+	s.log.Infof("Received extended command category: %s", extendedMessageCategory(cmdStr))
 
 	if strings.HasPrefix(cmdStr, "nav:") {
 		s.handleNavCommand(strings.TrimPrefix(cmdStr, "nav:"))
@@ -60,8 +60,18 @@ func (s *Service) handleExtendedCommandMessage(msgType ble.MessageType, absSubTy
 	} else if strings.HasPrefix(cmdStr, "trip:") {
 		s.handleTripCommand(strings.TrimPrefix(cmdStr, "trip:"))
 	} else {
-		s.log.Warnf("Unknown extended command prefix: %s", cmdStr)
+		s.log.Warnf("Unknown extended command category: %s", extendedMessageCategory(cmdStr))
 		s.sendExtendedResponse("error:unknown command")
+	}
+}
+
+func extendedMessageCategory(message string) string {
+	category, _, _ := strings.Cut(message, ":")
+	switch category {
+	case "alarm", "ble", "cap", "cloud-pairing", "config", "dbc", "get", "keycard", "ltc", "nav", "pm", "service-mode", "set", "status", "time", "trip", "usb":
+		return category
+	default:
+		return "other"
 	}
 }
 
@@ -88,17 +98,7 @@ func (s *Service) sendExtendedResponse(response string) {
 	if err := writeUARTMessageString(s.usock, ble.TypeExtended, ble.TypeExtendedResponse, response); err != nil {
 		s.log.Errorf("Failed to send extended response: %v", err)
 	} else {
-		// Log the reply, not just the request. Without this a command that
-		// was answered and a command whose answer never reached the phone
-		// look identical in the journal, which is the shape of every
-		// extended-command problem worth debugging. The nRF drops a
-		// notification it cannot queue and reports nothing back, so this is
-		// the last point where the reply is known to exist.
-		if strings.HasPrefix(response, "keycard:alias:") {
-			s.log.Infof("Sent extended response: keycard:alias:<redacted>")
-		} else {
-			s.log.Infof("Sent extended response: %s", response)
-		}
+		s.log.Infof("Sent extended response category: %s", extendedMessageCategory(response))
 	}
 	s.lastExtRespTime = time.Now()
 }

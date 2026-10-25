@@ -1,15 +1,46 @@
 package service
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"log"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/fxamacker/cbor/v2"
 	"github.com/librescoot/bluetooth-service/pkg/ble"
 	"github.com/librescoot/bluetooth-service/pkg/logger"
+	"github.com/librescoot/bluetooth-service/pkg/usock"
 )
+
+func TestExtendedPayloadsAreRedactedFromLogs(t *testing.T) {
+	var output bytes.Buffer
+	service := &Service{
+		usock: &mockUSOCK{},
+		log:   logger.NewLogger(log.New(&output, "", 0), logger.LogLevelDebug),
+	}
+	const secret = "PAIRING-CAPABILITY-SECRET"
+	payload, err := cbor.Marshal(map[uint16]map[uint16]string{
+		uint16(ble.TypeExtended): {
+			uint16(ble.TypeExtendedCommand): "cloud-pairing:show:" + secret,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.HandleUSockMessage(byte(uint16(ble.TypeExtended)&0xff), &usock.Payload{Data: payload})
+	service.sendExtendedResponse("cloud-pairing:code:" + secret)
+
+	logs := output.String()
+	if strings.Contains(logs, secret) {
+		t.Fatalf("extended payload leaked into logs: %s", logs)
+	}
+	if !strings.Contains(logs, "Received extended command category: cloud-pairing") || !strings.Contains(logs, "Sent extended response category: cloud-pairing") {
+		t.Fatalf("logs do not retain safe command categories: %s", logs)
+	}
+}
 
 // timedatectl set-time interprets its argument in the system-local timezone.
 // systemTimeArg must therefore format in local time so the arg round-trips

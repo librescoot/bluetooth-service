@@ -56,11 +56,11 @@ func (s *Service) HandleUSockMessage(frameID byte, payload *usock.Payload) {
 	var msgData map[uint16]interface{}
 	err := cbor.Unmarshal(payload.Data, &msgData)
 	if err != nil {
-		s.log.Errorf("Failed to decode CBOR message: %v (raw: %x)", err, payload.Data)
+		s.log.Errorf("Failed to decode CBOR message")
 		return
 	}
 
-	s.log.Debugf("Received message: Frame ID=0x%02x, Data=%x", frameID, payload.Data)
+	s.log.Debugf("Received message: Frame ID=0x%02x, payload length=%d", frameID, len(payload.Data))
 
 	var absoluteMsgType uint16
 	var params interface{}
@@ -124,7 +124,9 @@ func (s *Service) HandleUSockMessage(frameID byte, payload *usock.Payload) {
 	}
 
 	// Log decoded CBOR structure with MessageType and SubTypes
-	if len(paramMap) > 0 {
+	if len(paramMap) > 0 && msgType == ble.TypeExtended {
+		s.log.Debugf("Received extended message with %d parameter(s)", len(paramMap))
+	} else if len(paramMap) > 0 {
 		subtypeStr := ""
 		for absSubType, value := range paramMap {
 			if subtypeStr != "" {
