@@ -277,7 +277,7 @@ func TestTripCapabilityPromotesCurrentSchemaForGenericSettings(t *testing.T) {
 		t.Fatal("current schema did not enable the trip capability")
 	}
 	s.promoteSettingsSchema(currentSchema)
-	if registry := capabilityRegistryFor(false, tripSupported); !strings.HasSuffix(registry, ":trip") {
+	if registry := capabilityRegistryFor(false, tripSupported); !strings.Contains(registry+":", ":trip:") {
 		t.Fatalf("cap:ext registry = %q, want trip capability", registry)
 	}
 

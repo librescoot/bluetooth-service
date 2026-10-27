@@ -33,6 +33,15 @@ legacy `cap:list` retains the unversioned `keycard` category. Clients must
 keep an alias set command within the 100-byte extended-command limit: names
 are capped at 32 UTF-8 bytes and base64url-encoded without padding.
 
+`cap:ext` reports `battery=1` for read-only pack identity queries.
+`battery:snapshot:0` and `battery:snapshot:1` return
+`battery:snapshot:<slot>:{"present":true,"serial_number":"..."}` from a single
+`battery:<slot>` hash read. Absent packs return `{"present":false}` without a
+retained serial. Missing presence or an invalid serial produces
+`battery:error:unavailable` or `battery:error:invalid-identity`. These are
+scooter-reported identities, potentially cached, not fresh pack measurements or
+ownership proof. The commands issue no battery or vehicle-state writes.
+
 `cap:ext` reports `alarm=2` for the bundled alarm-service semantics: `alarm:stop`
 ends the episode with a five-minute cooldown; `alarm:disarm` holds disarmed until
 the next park cycle, hibernation starts, or eight hours pass. Neither changes
