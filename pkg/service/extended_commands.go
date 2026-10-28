@@ -57,6 +57,8 @@ func (s *Service) handleExtendedCommandMessage(msgType ble.MessageType, absSubTy
 		s.handlePMCommand(strings.TrimPrefix(cmdStr, "pm:"))
 	} else if strings.HasPrefix(cmdStr, "dbc:") {
 		s.handleDBCCommand(strings.TrimPrefix(cmdStr, "dbc:"))
+	} else if strings.HasPrefix(cmdStr, "sms:") {
+		s.handleSMSCommand(strings.TrimPrefix(cmdStr, "sms:"))
 	} else if strings.HasPrefix(cmdStr, "trip:") {
 		s.handleTripCommand(strings.TrimPrefix(cmdStr, "trip:"))
 	} else {
@@ -68,7 +70,7 @@ func (s *Service) handleExtendedCommandMessage(msgType ble.MessageType, absSubTy
 func extendedMessageCategory(message string) string {
 	category, _, _ := strings.Cut(message, ":")
 	switch category {
-	case "alarm", "ble", "cap", "cloud-pairing", "config", "dbc", "get", "keycard", "ltc", "nav", "pm", "service-mode", "set", "status", "time", "trip", "usb":
+	case "alarm", "ble", "cap", "cloud-pairing", "config", "dbc", "get", "keycard", "ltc", "nav", "pm", "service-mode", "set", "sms", "status", "time", "trip", "usb":
 		return category
 	default:
 		return "other"
@@ -1198,6 +1200,10 @@ func (s *Service) handleSettingsSet(cmd string) {
 		// settings-service replay. Not fatal.
 		s.log.Warnf("Failed to PUBLISH settings %s: %v", key, err)
 	}
-	s.log.Infof("Set %s=%s via BLE", key, value)
+	if key == "sms.forward-to" {
+		s.log.Infof("Set %s via BLE", key)
+	} else {
+		s.log.Infof("Set %s=%s via BLE", key, value)
+	}
 	s.sendExtendedResponse(fmt.Sprintf("set:ok:%s", key))
 }

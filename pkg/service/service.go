@@ -87,6 +87,10 @@ type Service struct {
 	extRespMu       sync.Mutex
 	lastExtRespTime time.Time
 
+	smsMu         sync.Mutex
+	smsSnapshot   *smsSnapshot
+	smsGeneration uint64
+
 	dbcWaitMu     sync.Mutex
 	dbcWaitCancel chan struct{}
 

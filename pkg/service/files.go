@@ -23,6 +23,9 @@ func fileTransferCapabilities(tunnel, dataEnabled bool) string {
 
 func (s *Service) capabilityRegistry() string {
 	registry := capabilityRegistryFor(s.nrfSupportsBondDelete(), s.tripCounterSupported())
+	if s.smsInboxAvailable() {
+		registry += ":sms=1"
+	}
 	if s.files != nil && s.link != nil {
 		registry += fileTransferCapabilities(s.link.Caps()&fileTunnelCapability != 0, s.dataBrowserEnabled.Load())
 	}
