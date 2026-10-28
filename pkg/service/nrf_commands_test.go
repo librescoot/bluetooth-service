@@ -4,6 +4,7 @@ import (
 	"net"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	ipc "github.com/librescoot/redis-ipc"
@@ -35,6 +36,34 @@ func newVersionPushService(t *testing.T) (*Service, *miniredis.Miniredis) {
 		usock: &mockUSOCK{},
 		log:   logger.NewLogger(nil, logger.LogLevelNone),
 	}, mr
+}
+
+func TestInitializeNRF52VersionHandshake(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		reply, stop bool
+		wantErr     bool
+	}{
+		{"reply", true, false, false},
+		{"timeout", false, false, true},
+		{"stopped", false, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := newVersionPushService(t)
+			s.versionRxCh = make(chan struct{}, 1)
+			s.stopCh = make(chan struct{})
+			if tc.reply {
+				go func() { time.Sleep(100 * time.Millisecond); s.versionRxCh <- struct{}{} }()
+			}
+			if tc.stop {
+				close(s.stopCh)
+			}
+			err := s.InitializeNRF52()
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("InitializeNRF52 error = %v, want error %v", err, tc.wantErr)
+			}
+		})
+	}
 }
 
 func versionPushFrames(t *testing.T, s *Service) []string {
