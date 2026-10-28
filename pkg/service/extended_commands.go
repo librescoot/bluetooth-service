@@ -25,7 +25,7 @@ func (s *Service) handleExtendedCommandMessage(msgType ble.MessageType, absSubTy
 		}
 	}
 
-	s.log.Infof("Received extended command: %s", cmdStr)
+	s.log.Infof("Received extended command category: %s", extendedMessageCategory(cmdStr))
 
 	if strings.HasPrefix(cmdStr, "nav:") {
 		s.handleNavCommand(strings.TrimPrefix(cmdStr, "nav:"))
@@ -33,32 +33,56 @@ func (s *Service) handleExtendedCommandMessage(msgType ble.MessageType, absSubTy
 		s.handleKeycardCommand(strings.TrimPrefix(cmdStr, "keycard:"))
 	} else if strings.HasPrefix(cmdStr, "usb:") {
 		s.handleUSBCommand(strings.TrimPrefix(cmdStr, "usb:"))
+	} else if strings.HasPrefix(cmdStr, "service-mode:") {
+		s.handleServiceModeCommand(strings.TrimPrefix(cmdStr, "service-mode:"))
 	} else if strings.HasPrefix(cmdStr, "time:") {
 		s.handleTimeCommand(strings.TrimPrefix(cmdStr, "time:"))
 	} else if strings.HasPrefix(cmdStr, "config:") {
 		s.handleConfigCommand(strings.TrimPrefix(cmdStr, "config:"))
+	} else if strings.HasPrefix(cmdStr, "battery:") {
+		s.handleBatteryCommand(strings.TrimPrefix(cmdStr, "battery:"))
 	} else if strings.HasPrefix(cmdStr, "status:") {
 		s.handleStatusQuery(strings.TrimPrefix(cmdStr, "status:"))
 	} else if strings.HasPrefix(cmdStr, "alarm:") {
 		s.handleAlarmCommand(strings.TrimPrefix(cmdStr, "alarm:"))
 	} else if strings.HasPrefix(cmdStr, "ltc:") {
 		s.handleLTCCommand(strings.TrimPrefix(cmdStr, "ltc:"))
+	} else if strings.HasPrefix(cmdStr, "ble:") {
+		s.handleBLECommand(strings.TrimPrefix(cmdStr, "ble:"))
 	} else if strings.HasPrefix(cmdStr, "cap:") {
 		s.handleCapabilityQuery(strings.TrimPrefix(cmdStr, "cap:"))
 	} else if strings.HasPrefix(cmdStr, "get:") {
 		s.handleSettingsGet(strings.TrimPrefix(cmdStr, "get:"))
 	} else if strings.HasPrefix(cmdStr, "set:") {
 		s.handleSettingsSet(strings.TrimPrefix(cmdStr, "set:"))
+	} else if strings.HasPrefix(cmdStr, "pm:") {
+		s.handlePMCommand(strings.TrimPrefix(cmdStr, "pm:"))
+	} else if strings.HasPrefix(cmdStr, "dbc:") {
+		s.handleDBCCommand(strings.TrimPrefix(cmdStr, "dbc:"))
+	} else if strings.HasPrefix(cmdStr, "sms:") {
+		s.handleSMSCommand(strings.TrimPrefix(cmdStr, "sms:"))
+	} else if strings.HasPrefix(cmdStr, "trip:") {
+		s.handleTripCommand(strings.TrimPrefix(cmdStr, "trip:"))
 	} else {
-		s.log.Warnf("Unknown extended command prefix: %s", cmdStr)
+		s.log.Warnf("Unknown extended command category: %s", extendedMessageCategory(cmdStr))
 		s.sendExtendedResponse("error:unknown command")
+	}
+}
+
+func extendedMessageCategory(message string) string {
+	category, _, _ := strings.Cut(message, ":")
+	switch category {
+	case "alarm", "battery", "ble", "cap", "cloud-pairing", "config", "dbc", "get", "keycard", "ltc", "nav", "pm", "service-mode", "set", "sms", "status", "time", "trip", "usb":
+		return category
+	default:
+		return "other"
 	}
 }
 
 // extRespMinInterval is the minimum spacing between consecutive extended
 // responses. The nRF SoftDevice's BLE_GATTS_HVN_TX_QUEUE_SIZE_DEFAULT is 1,
 // so back-to-back notifications get silently dropped (NRF_ERROR_RESOURCES,
-// return value ignored in ble_scooter_param_write). 100 ms exceeds the
+// which the nRF does not report back). 100 ms exceeds the
 // configured MAX_CONN_INTERVAL of 75 ms, ensuring the previous notification
 // has been transmitted before we queue the next one. This matters for
 // multi-response commands like nav:fav:list, keycard:list, and cap:list.
@@ -77,65 +101,148 @@ func (s *Service) sendExtendedResponse(response string) {
 
 	if err := writeUARTMessageString(s.usock, ble.TypeExtended, ble.TypeExtendedResponse, response); err != nil {
 		s.log.Errorf("Failed to send extended response: %v", err)
+	} else {
+		s.log.Infof("Sent extended response category: %s", extendedMessageCategory(response))
 	}
 	s.lastExtRespTime = time.Now()
+}
+
+// navStop is the BLE coordinate input; plan IDs and progress are assigned by settings-service.
+type navStop struct {
+	Lat   float64 `json:"lat"`
+	Lon   float64 `json:"lon"`
+	Label string  `json:"label"`
+}
+
+func (s *Service) handleNavRouteCommand(cmd string) {
+	switch {
+	case strings.HasPrefix(cmd, "add "):
+		stop, err := parseNavStop(strings.TrimSpace(strings.TrimPrefix(cmd, "add ")))
+		if err != nil {
+			s.sendExtendedResponse("nav:error:" + err.Error())
+			return
+		}
+		var plan routePlan
+		if err := routeCall(s.destIPC, "plan.append", routeAppendRequest{Stop: stop}, &plan); err != nil {
+			s.navRPCError(err)
+			return
+		}
+		s.sendRouteCount(plan)
+	case strings.HasPrefix(cmd, "remove "):
+		index, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(cmd, "remove ")))
+		if err != nil {
+			s.sendExtendedResponse("nav:error:invalid index")
+			return
+		}
+		plan, err := s.getRoutePlan()
+		if err != nil {
+			s.navRPCError(err)
+			return
+		}
+		if index < 1 || index > len(plan.Stops) {
+			s.sendExtendedResponse("nav:error:index out of range")
+			return
+		}
+		var updated routePlan
+		if err := routeCall(s.destIPC, "plan.remove", routeRemoveRequest{Index: index - 1, ExpectedRevision: plan.Revision}, &updated); err != nil {
+			s.navRPCError(err)
+			return
+		}
+		s.sendRouteCount(updated)
+	case cmd == "skip":
+		plan, err := s.getRoutePlan()
+		if err != nil {
+			s.navRPCError(err)
+			return
+		}
+		if len(plan.Stops) == 0 {
+			s.sendExtendedResponse("nav:error:no route plan")
+			return
+		}
+		if plan.CurrentStep+1 >= len(plan.Stops) {
+			s.sendExtendedResponse("nav:error:already at the last stop")
+			return
+		}
+		progress := routeProgressRequest{ExpectedPlanID: plan.ID, ExpectedStopID: plan.Stops[plan.CurrentStep].ID}
+		var updated routePlan
+		if err := routeCall(s.destIPC, "plan.advance", progress, &updated); err != nil {
+			s.navRPCError(err)
+			return
+		}
+		s.sendRouteCount(updated)
+	case cmd == "list":
+		plan, err := s.getRoutePlan()
+		if err != nil {
+			s.navRPCError(err)
+			return
+		}
+		s.sendRouteCount(plan)
+		for i, stop := range plan.Stops {
+			s.sendExtendedResponse(fmt.Sprintf("nav:route:%d:%s,%s,%s", i,
+				strconv.FormatFloat(stop.Lat, 'f', 6, 64), strconv.FormatFloat(stop.Lon, 'f', 6, 64), stop.Label))
+		}
+	case cmd == "clear":
+		if err := s.clearRoutePlan(); err != nil {
+			s.navRPCError(err)
+			return
+		}
+		s.sendExtendedResponse("nav:ok")
+	default:
+		s.sendExtendedResponse("nav:error:unknown route command")
+	}
+}
+
+func (s *Service) sendRouteCount(plan routePlan) {
+	s.sendExtendedResponse(fmt.Sprintf("nav:route:count:%d:%d", len(plan.Stops), plan.CurrentStep))
+}
+
+func (s *Service) navRPCError(err error) {
+	s.log.Errorf("Route plan RPC failed: %v", err)
+	s.sendExtendedResponse("nav:error:service unavailable or plan conflict")
+}
+
+// parseNavStop parses "lat,lon[,name]". The name may contain commas.
+func parseNavStop(entry string) (navStop, error) {
+	parts := strings.SplitN(entry, ",", 3)
+	if len(parts) < 2 {
+		return navStop{}, fmt.Errorf("invalid stop")
+	}
+	lat, errLat := strconv.ParseFloat(strings.TrimSpace(parts[0]), 64)
+	lon, errLon := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
+	if errLat != nil || errLon != nil {
+		return navStop{}, fmt.Errorf("invalid coordinates")
+	}
+	if lat < -90 || lat > 90 || lon < -180 || lon > 180 || (lat == 0 && lon == 0) {
+		return navStop{}, fmt.Errorf("coordinates out of range")
+	}
+	label := ""
+	if len(parts) == 3 {
+		label = strings.TrimSpace(parts[2])
+	}
+	return navStop{Lat: lat, Lon: lon, Label: label}, nil
 }
 
 // handleNavCommand processes navigation commands.
 func (s *Service) handleNavCommand(cmd string) {
 	if strings.HasPrefix(cmd, "dest ") {
-		// "dest lat,lon" or "dest lat,lon,name"
-		payload := strings.TrimPrefix(cmd, "dest ")
-		parts := strings.SplitN(payload, ",", 3)
-		if len(parts) < 2 {
-			s.sendExtendedResponse("nav:error:invalid destination format")
+		stop, err := parseNavStop(strings.TrimSpace(strings.TrimPrefix(cmd, "dest ")))
+		if err != nil {
+			s.sendExtendedResponse("nav:error:" + err.Error())
 			return
 		}
-
-		lat := strings.TrimSpace(parts[0])
-		lon := strings.TrimSpace(parts[1])
-
-		hash := s.ipc.Hash(KeyNavigation)
-		if err := hash.Set("latitude", lat); err != nil {
-			s.log.Errorf("Failed to set navigation latitude: %v", err)
-			s.sendExtendedResponse("nav:error:redis")
+		if err := s.replaceRoutePlan(stop); err != nil {
+			s.navRPCError(err)
 			return
 		}
-		if err := hash.Set("longitude", lon); err != nil {
-			s.log.Errorf("Failed to set navigation longitude: %v", err)
-			s.sendExtendedResponse("nav:error:redis")
-			return
-		}
-		// Legacy format
-		coords := lat + "," + lon
-		if err := hash.Set("destination", coords); err != nil {
-			s.log.Errorf("Failed to set navigation destination: %v", err)
-		}
-
-		if len(parts) == 3 {
-			name := strings.TrimSpace(parts[2])
-			if err := hash.Set("address", name); err != nil {
-				s.log.Errorf("Failed to set navigation address: %v", err)
-			}
-		}
-
-		s.log.Infof("Set navigation destination: %s", payload)
 		s.sendExtendedResponse("nav:ok")
-
 	} else if cmd == "clear" {
-		hash := s.ipc.Hash(KeyNavigation)
-		// Set fields to empty strings instead of deleting them. scootui-qt's
-		// HiredisWorker::doHdel issues HDEL without a follow-up PUBLISH, so
-		// subscribers (this service's HashWatcher, scootui-qt's own SyncableStore)
-		// never wake up. Setting "" goes through HSET+PUBLISH and reaches both.
-		for _, field := range []string{"latitude", "longitude", "destination", "address", "timestamp"} {
-			if err := hash.Set(field, ""); err != nil {
-				s.log.Errorf("Failed to clear navigation field %s: %v", field, err)
-			}
+		if err := s.clearRoutePlan(); err != nil {
+			s.navRPCError(err)
+			return
 		}
-		s.log.Infof("Cleared navigation destination")
 		s.sendExtendedResponse("nav:ok")
-
+	} else if strings.HasPrefix(cmd, "route:") {
+		s.handleNavRouteCommand(strings.TrimPrefix(cmd, "route:"))
 	} else if strings.HasPrefix(cmd, "fav:") {
 		s.handleNavFavouriteCommand(strings.TrimPrefix(cmd, "fav:"))
 	} else {
@@ -189,44 +296,39 @@ func (s *Service) handleNavFavouriteCommand(cmd string) {
 	}
 }
 
-// addSavedLocation adds a new saved location to Redis settings.
-// Returns the assigned ID.
+// addSavedLocation saves a new record through the destination service, which
+// owns slot allocation and UUID assignment. Returns the assigned ID.
 func (s *Service) addSavedLocation(lat, lon, name string) (int, error) {
-	// Find next available ID by scanning existing entries
-	settings := s.ipc.Hash("settings")
-	id := 0
-	for {
-		existing, err := s.ipc.HGet("settings", fmt.Sprintf("dashboard.saved-locations.%d.latitude", id))
-		if err != nil || existing == "" {
-			break
-		}
-		id++
+	latitude, err := strconv.ParseFloat(strings.TrimSpace(lat), 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid latitude %q", lat)
 	}
-
-	prefix := fmt.Sprintf("dashboard.saved-locations.%d", id)
-	if err := settings.Set(prefix+".latitude", lat); err != nil {
-		return 0, fmt.Errorf("failed to set latitude: %w", err)
+	longitude, err := strconv.ParseFloat(strings.TrimSpace(lon), 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid longitude %q", lon)
 	}
-	if err := settings.Set(prefix+".longitude", lon); err != nil {
-		return 0, fmt.Errorf("failed to set longitude: %w", err)
+	var saved destinationSaveResponse
+	if err := destinationCall(s.destIPC, "destination.save",
+		destinationSaveRequest{Latitude: latitude, Longitude: longitude, Label: name},
+		&saved); err != nil {
+		return 0, err
 	}
-	if err := settings.Set(prefix+".label", name); err != nil {
-		return 0, fmt.Errorf("failed to set label: %w", err)
-	}
-
-	return id, nil
+	return saved.ID, nil
 }
 
-// deleteSavedLocation removes a saved location by ID.
+// deleteSavedLocation removes the whole record through the destination
+// service, which also prunes the record's shortcut-menu item.
 func (s *Service) deleteSavedLocation(id string) error {
-	settings := s.ipc.Hash("settings")
-	prefix := fmt.Sprintf("dashboard.saved-locations.%s", id)
-	for _, field := range []string{".latitude", ".longitude", ".label", ".created-at", ".last-used-at"} {
-		if err := settings.Delete(prefix + field); err != nil {
-			s.log.Warnf("Failed to delete %s%s: %v", prefix, field, err)
-		}
+	slot, err := strconv.Atoi(strings.TrimSpace(id))
+	if err != nil {
+		return fmt.Errorf("invalid location id %q", id)
 	}
-	s.log.Infof("Deleted saved location %s", id)
+	var deleted destinationEmptyResponse
+	if err := destinationCall(s.destIPC, "destination.delete", destinationIDRequest{ID: slot},
+		&deleted); err != nil {
+		return err
+	}
+	s.log.Infof("Deleted saved location %d", slot)
 	return nil
 }
 
@@ -242,15 +344,12 @@ func (s *Service) navigateToSavedLocation(id string) error {
 		return fmt.Errorf("saved location %s missing longitude", id)
 	}
 
-	hash := s.ipc.Hash(KeyNavigation)
-	if err := hash.Set("latitude", lat); err != nil {
-		return fmt.Errorf("failed to set latitude: %w", err)
+	stop, err := parseNavStop(lat + "," + lon)
+	if err != nil {
+		return err
 	}
-	if err := hash.Set("longitude", lon); err != nil {
-		return fmt.Errorf("failed to set longitude: %w", err)
-	}
-	if err := hash.Set("destination", lat+","+lon); err != nil {
-		return fmt.Errorf("failed to set destination: %w", err)
+	if err := s.replaceRoutePlan(stop); err != nil {
+		return fmt.Errorf("route plan: %w", err)
 	}
 
 	s.log.Infof("Navigating to saved location %s: %s,%s", id, lat, lon)
@@ -307,24 +406,239 @@ func (s *Service) handleUSBCommand(cmd string) {
 	}
 }
 
-// handleKeycardCommand processes keycard management commands.
-// Commands are forwarded to the scooter:keycard Redis list for
-// processing by keycard-service.
+// handleKeycardCommand forwards supported credential commands to keycard-service.
 func (s *Service) handleKeycardCommand(cmd string) {
-	s.log.Infof("Received keycard command: %s", cmd)
+	if strings.HasPrefix(cmd, "alias:set:") {
+		s.log.Infof("Received keycard command: alias:set:<redacted>")
+	} else {
+		s.log.Infof("Received keycard command: %s", cmd)
+	}
 
-	switch {
-	case cmd == "list", cmd == "count",
-		strings.HasPrefix(cmd, "add:"),
-		strings.HasPrefix(cmd, "remove:"):
-		if err := ipc.SendRequest(s.ipc, "scooter:keycard", cmd); err != nil {
-			s.log.Errorf("Failed to forward keycard command: %v", err)
-			s.sendExtendedResponse("keycard:error:redis")
+	if !forwardedKeycardCommand(cmd) {
+		s.sendExtendedResponse("keycard:error:unknown command")
+		return
+	}
+	if err := ipc.SendRequest(s.ipc, "scooter:keycard", cmd); err != nil {
+		s.log.Errorf("Failed to forward keycard command: %v", err)
+		s.sendExtendedResponse("keycard:error:redis")
+	}
+	// Response comes asynchronously via keycard hash subscription.
+}
+
+func forwardedKeycardCommand(cmd string) bool {
+	return cmd == "list" || cmd == "count" || cmd == "phone:list" || cmd == "master:list" || cmd == "alias:list" ||
+		strings.HasPrefix(cmd, "add:") || strings.HasPrefix(cmd, "remove:") ||
+		strings.HasPrefix(cmd, "phone:remove:") || strings.HasPrefix(cmd, "alias:set:") ||
+		strings.HasPrefix(cmd, "alias:clear:")
+}
+
+// handlePMCommand processes power-management commands from the mobile app.
+//
+//	pm:hibernate-for <duration>  → arm a one-shot hibernation that wakes after the duration
+//	pm:hibernate-cancel          → cancel a pending wake timer and return the system to run
+//
+// Duration accepts Go time.ParseDuration syntax (e.g. "8h", "30m", "120s").
+func (s *Service) handlePMCommand(cmd string) {
+	s.log.Infof("Received pm command: %s", cmd)
+
+	if cmd == "hibernate-cancel" {
+		if err := ipc.SendRequest(s.ipc, "scooter:power", "hibernate-cancel"); err != nil {
+			s.log.Errorf("Failed to forward hibernate-cancel: %v", err)
+			s.sendExtendedResponse("pm:error:redis")
 			return
 		}
-		// Response comes asynchronously via keycard hash subscription
+		s.sendExtendedResponse("pm:ok")
+		return
+	}
+
+	if strings.HasPrefix(cmd, "hibernate-for ") {
+		arg := strings.TrimSpace(strings.TrimPrefix(cmd, "hibernate-for "))
+		dur, err := time.ParseDuration(arg)
+		if err != nil {
+			s.sendExtendedResponse("pm:error:invalid duration")
+			return
+		}
+		seconds := int64(dur.Seconds())
+		if seconds <= 0 {
+			s.sendExtendedResponse("pm:error:duration must be positive")
+			return
+		}
+		payload := fmt.Sprintf("hibernate-for:%d", seconds)
+		if err := ipc.SendRequest(s.ipc, "scooter:power", payload); err != nil {
+			s.log.Errorf("Failed to forward %s: %v", payload, err)
+			s.sendExtendedResponse("pm:error:redis")
+			return
+		}
+		s.sendExtendedResponse("pm:ok")
+		return
+	}
+
+	s.sendExtendedResponse("pm:error:unknown command")
+}
+
+const (
+	dbcWaitTimeout      = 60 * time.Second
+	dbcWaitPollInterval = 250 * time.Millisecond
+)
+
+// handleDBCCommand controls dashboard power without changing the vehicle state.
+func (s *Service) handleDBCCommand(cmd string) {
+	cmd = strings.TrimSpace(cmd)
+
+	switch cmd {
+	case "status":
+		power, ready, err := s.dbcPowerState()
+		if err != nil {
+			s.log.Errorf("Failed to read DBC power state: %v", err)
+			s.sendExtendedResponse("dbc:status:error:redis")
+			return
+		}
+		s.sendExtendedResponse(fmt.Sprintf("dbc:status:power:%s:ready:%s", power, ready))
+		return
+	case "on", "on-wait", "off", "off-wait":
 	default:
-		s.sendExtendedResponse("keycard:error:unknown command")
+		s.sendExtendedResponse("dbc:error:unknown command")
+		return
+	}
+
+	action := strings.TrimSuffix(cmd, "-wait")
+	if action == "off" {
+		vehicle, err := s.ipc.HGetAll(KeyVehicle)
+		if err != nil {
+			s.log.Errorf("Failed to read DBC update state: %v", err)
+			s.sendExtendedResponse(fmt.Sprintf("dbc:%s:error:redis", cmd))
+			return
+		}
+		if vehicle["dbc-updating"] == "true" {
+			s.sendExtendedResponse(fmt.Sprintf("dbc:%s:error:update-in-progress", cmd))
+			return
+		}
+	}
+
+	if err := ipc.SendRequest(s.ipc, "scooter:hardware", "dashboard:"+action); err != nil {
+		s.log.Errorf("Failed to forward DBC %s command: %v", cmd, err)
+		s.sendExtendedResponse(fmt.Sprintf("dbc:%s:error:redis", cmd))
+		return
+	}
+
+	if !strings.HasSuffix(cmd, "-wait") {
+		s.sendExtendedResponse(fmt.Sprintf("dbc:%s:ok", cmd))
+		return
+	}
+
+	s.startDBCWait(cmd)
+}
+
+func (s *Service) dbcPowerState() (power, ready string, err error) {
+	vehicle, err := s.ipc.HGetAll(KeyVehicle)
+	if err != nil {
+		return "", "", err
+	}
+	power = vehicle["dashboard:power"]
+	switch power {
+	case "on", "off":
+	default:
+		power = "unknown"
+	}
+
+	dashboard, err := s.ipc.HGetAll("dashboard")
+	if err != nil {
+		return "", "", err
+	}
+	ready = dashboard["ready"]
+	switch ready {
+	case "true", "false":
+	default:
+		ready = "unknown"
+	}
+	return power, ready, nil
+}
+
+func dbcWaitReached(cmd, power, ready string) bool {
+	switch cmd {
+	case "on-wait":
+		return power == "on" && ready == "true"
+	case "off-wait":
+		return power == "off"
+	default:
+		return false
+	}
+}
+
+func (s *Service) startDBCWait(cmd string) {
+	s.dbcWaitMu.Lock()
+	if s.dbcWaitCancel != nil {
+		close(s.dbcWaitCancel)
+	}
+	cancel := make(chan struct{})
+	s.dbcWaitCancel = cancel
+	s.dbcWaitMu.Unlock()
+
+	go func() {
+		defer func() {
+			s.dbcWaitMu.Lock()
+			if s.dbcWaitCancel == cancel {
+				s.dbcWaitCancel = nil
+			}
+			s.dbcWaitMu.Unlock()
+		}()
+
+		ticker := time.NewTicker(dbcWaitPollInterval)
+		defer ticker.Stop()
+		timer := time.NewTimer(dbcWaitTimeout)
+		defer timer.Stop()
+
+		for {
+			power, ready, err := s.dbcPowerState()
+			if !s.dbcWaitActive(cancel) {
+				return
+			}
+			if err != nil {
+				s.log.Errorf("Failed while waiting for DBC %s: %v", cmd, err)
+				s.sendDBCWaitResponse(cancel, fmt.Sprintf("dbc:%s:error:redis", cmd))
+				return
+			}
+			if dbcWaitReached(cmd, power, ready) {
+				s.sendDBCWaitResponse(cancel, fmt.Sprintf("dbc:%s:ok", cmd))
+				return
+			}
+
+			select {
+			case <-ticker.C:
+			case <-timer.C:
+				s.sendDBCWaitResponse(cancel, fmt.Sprintf("dbc:%s:error:timeout", cmd))
+				return
+			case <-cancel:
+				return
+			case <-s.stopCh:
+				return
+			}
+		}
+	}()
+}
+
+func (s *Service) dbcWaitActive(cancel chan struct{}) bool {
+	s.dbcWaitMu.Lock()
+	defer s.dbcWaitMu.Unlock()
+	return s.dbcWaitCancel == cancel
+}
+
+func (s *Service) sendDBCWaitResponse(cancel chan struct{}, response string) bool {
+	s.dbcWaitMu.Lock()
+	defer s.dbcWaitMu.Unlock()
+	if s.dbcWaitCancel != cancel {
+		return false
+	}
+	s.sendExtendedResponse(response)
+	return true
+}
+
+func (s *Service) cancelDBCWait() {
+	s.dbcWaitMu.Lock()
+	defer s.dbcWaitMu.Unlock()
+	if s.dbcWaitCancel != nil {
+		close(s.dbcWaitCancel)
+		s.dbcWaitCancel = nil
 	}
 }
 
@@ -363,16 +677,17 @@ func (s *Service) handleTimeCommand(cmd string) {
 	}
 }
 
-// setSystemTime parses a Unix timestamp string and sets the system clock
-// via timedatectl.
-func (s *Service) setSystemTime(timestampStr string) error {
-	timestamp, err := strconv.ParseInt(strings.TrimSpace(timestampStr), 10, 64)
-	if err != nil {
-		return fmt.Errorf("invalid timestamp: %w", err)
-	}
-	t := time.Unix(timestamp, 0).UTC()
-	timeStr := t.Format("2006-01-02 15:04:05")
-	cmd := exec.Command("timedatectl", "set-time", timeStr)
+// systemTimeArg formats a Unix timestamp for `timedatectl set-time`, which
+// interprets its argument in the system-local timezone. Formatting in local
+// time keeps the wall clock correct; formatting in UTC (as this used to) set
+// the clock off by the local offset, e.g. 2h behind in CEST.
+func systemTimeArg(timestamp int64) string {
+	return time.Unix(timestamp, 0).Format("2006-01-02 15:04:05")
+}
+
+func (s *Service) setSystemTimeDirect(timestamp int64) error {
+	t := time.Unix(timestamp, 0)
+	cmd := exec.Command("timedatectl", "set-time", systemTimeArg(timestamp))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to set time: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
@@ -479,6 +794,17 @@ func (s *Service) handleStatusQuery(key string) {
 		}
 		s.sendExtendedResponse(fmt.Sprintf("status:navigation-available:%s", val))
 
+	case "version:mdb", "version:dbc":
+		// Installed firmware (OS image) version, published to the
+		// version:<component> hash by version-service on boot. DBC may be
+		// absent if it has never booted with this MDB.
+		component := strings.TrimPrefix(key, "version:")
+		version, err := s.ipc.HGet("version:"+component, "version_id")
+		if err != nil || version == "" {
+			version = "unknown"
+		}
+		s.sendExtendedResponse(fmt.Sprintf("status:version:%s:%s", component, version))
+
 	default:
 		s.sendExtendedResponse("status:error:unknown key")
 	}
@@ -522,19 +848,217 @@ func (s *Service) handleLTCCommand(cmd string) {
 	}
 }
 
+// minNrfBondDeleteVersion is the first nRF firmware whose delete-bond does
+// anything. Older builds accept the command and drop it, so a phone would be
+// told the scooter had forgotten it while the scooter kept the bond.
+var minNrfBondDeleteVersion = &FirmwareVersion{Major: 2, Minor: 8, Patch: 0}
+
+// bleForgetAckGrace is how long the reply to ble:forget gets before the
+// delete-bond that takes the link down with it. MAX_CONN_INTERVAL is 75 ms and
+// the nRF's HVN TX queue is one deep, so without this the notification is still
+// queued when the peer is disconnected and the phone never learns whether the
+// scooter agreed.
+const bleForgetAckGrace = 300 * time.Millisecond
+
+// nrfBondDeleteSupported reports whether an nRF running versionStr acts on
+// delete-bond. An unreadable or unparseable version answers no: claiming the
+// bond was cleared when it was not is the one outcome worth avoiding here.
+func nrfBondDeleteSupported(versionStr string) bool {
+	if versionStr == "" {
+		return false
+	}
+	fw, err := ParseFirmwareVersion(versionStr)
+	if err != nil {
+		return false
+	}
+	return fw.Compare(minNrfBondDeleteVersion) >= 0
+}
+
+// nrfSupportsBondDelete reports whether the attached nRF acts on delete-bond.
+// The version is read from Redis rather than cached: this service is what
+// writes it, and it is rewritten every time the nRF (re)starts, a firmware
+// update included.
+func (s *Service) nrfSupportsBondDelete() bool {
+	versionStr, err := s.ipc.HGet(KeyFirmwareVersion, "nrf-fw-version")
+	if err != nil {
+		s.log.Warnf("nRF firmware version unavailable, treating delete-bond as unsupported: %v", err)
+		return false
+	}
+	if !nrfBondDeleteSupported(versionStr) {
+		s.log.Warnf("nRF firmware %q does not act on delete-bond", versionStr)
+		return false
+	}
+	return true
+}
+
+// handleBLECommand processes BLE link and bond commands from the phone.
+//
+// Only the caller's own bond is reachable here. delete-all-bonds stays with lsc
+// and the dashboard: over BLE it would let one phone unpair every other phone
+// on the scooter, and the phone asking has no way to know who else it is
+// throwing off.
+func (s *Service) handleBLECommand(cmd string) {
+	cmd = strings.TrimSpace(cmd)
+
+	switch cmd {
+	case "forget":
+		s.handleBLEForget()
+	default:
+		s.sendExtendedResponse("ble:error:unknown command")
+	}
+}
+
+// handleBLEForget asks the nRF to delete the bond of the peer that sent the
+// command. The firmware resolves the peer from the live connection, so there is
+// no identity to pass and no way to name anyone else's bond.
+//
+// The delete runs from the nRF's disconnect handler, which means this command
+// ends the connection it arrived on. That is the point when a user is
+// deliberately forgetting the scooter, and the firmware rebuilds the whitelist
+// and re-arms advertising afterwards.
+func (s *Service) handleBLEForget() {
+	if !s.nrfSupportsBondDelete() {
+		s.sendExtendedResponse("ble:error:unsupported")
+		return
+	}
+
+	// Answer first: the command below takes the link down, and a reply queued
+	// after it would never be transmitted.
+	s.sendExtendedResponse("ble:forget:ok")
+
+	go func() {
+		time.Sleep(bleForgetAckGrace)
+		if err := writeUARTMessage(s.usock, ble.TypeBLECommand, ble.SubType(ble.BLECommandDeleteBond), 0); err != nil {
+			s.log.Errorf("Failed to send delete-bond to nRF: %v", err)
+			return
+		}
+		s.log.Infof("Asked the nRF to delete the connected peer's bond")
+	}()
+}
+
+func serviceModeOverlayCommand(cmd string) (string, bool) {
+	switch strings.TrimSpace(cmd) {
+	case "on":
+		return "apply:service", true
+	case "off":
+		return "clear:service", true
+	default:
+		return "", false
+	}
+}
+
+func (s *Service) handleServiceModeCommand(cmd string) {
+	value, ok := serviceModeOverlayCommand(cmd)
+	if !ok {
+		s.sendExtendedResponse("service-mode:error:invalid command")
+		return
+	}
+	if err := ipc.SendRequest(s.ipc, "settings:overlay", value); err != nil {
+		s.log.Errorf("Failed to set service mode: %v", err)
+		s.sendExtendedResponse("service-mode:error:redis")
+		return
+	}
+	s.sendExtendedResponse("service-mode:ok")
+}
+
 // capabilityMap maps each command category to its supported commands.
 var capabilityMap = map[string][]string{
-	"nav":     {"dest", "clear", "fav:add", "fav:delete", "fav:navigate", "fav:list"},
-	"keycard": {"list", "count", "add:<uid>", "remove:<uid>"},
-	"usb":     {"ums", "normal"},
-	"time":    {"set"},
-	"config":  {"apn", "hibernate-timer", "update-channel", "auto-standby-seconds"},
-	"status":  {"maps-available", "navigation-available"},
-	"alarm":   {"enable", "disable", "arm", "disarm", "start", "start:<seconds>", "stop"},
-	"ltc":     {"enable", "disable", "force-enable", "force-disable", "status"},
-	"cap":     {"list", "<category>"},
-	"get":     {"<key>", "list", "list:<prefix>"},
-	"set":     {"<key>:<value>"},
+	"battery":      {"snapshot:0", "snapshot:1"},
+	"nav":          {"dest", "clear", "route:add", "route:remove", "route:skip", "route:list", "route:clear", "fav:add", "fav:delete", "fav:navigate", "fav:list"},
+	"keycard":      {"list", "count", "add:<uid>", "remove:<uid>"},
+	"usb":          {"ums", "normal"},
+	"service-mode": {"on", "off"},
+	"time":         {"set"},
+	"config":       {"apn", "hibernate-timer", "update-channel", "auto-standby-seconds"},
+	"status":       {"maps-available", "navigation-available", "version:mdb", "version:dbc"},
+	"alarm":        {"enable", "disable", "arm", "disarm", "start", "start:<seconds>", "stop"},
+	"ltc":          {"enable", "disable", "force-enable", "force-disable", "status"},
+	"ble":          {"forget"},
+	"pm":           {"hibernate-for <duration>", "hibernate-cancel"},
+	"dbc":          {"status", "on", "off", "on-wait", "off-wait"},
+	"ota":          {"transfer"}, // BLE OTA bundle transfer via the 0x0500 GATT service
+	"cap":          {"list", "<category>"},
+	"get":          {"<key>", "list", "list:<prefix>"},
+	"set":          {"<key>:<value>"},
+}
+
+func (s *Service) capabilityCommands(category string) []string {
+	commands := capabilityCommandsFor(category, s.nrfSupportsBondDelete)
+	if category != "keycard" {
+		return commands
+	}
+	return append(append([]string(nil), commands...),
+		"phone:list", "phone:remove:<fingerprint>", "master:list",
+		"alias:list", "alias:set:<kind>:<id>:<name>", "alias:clear:<kind>:<id>")
+}
+
+// capabilityCommandsFor is the version-dependent filtering, split out so it can
+// be tested without a Redis client. bondDelete is only consulted for the one
+// category that needs it.
+func capabilityCommandsFor(category string, bondDelete func() bool) []string {
+	commands := capabilityMap[category]
+	if category != "ble" || bondDelete() {
+		return commands
+	}
+	available := make([]string, 0, len(commands))
+	for _, c := range commands {
+		if c != "forget" {
+			available = append(available, c)
+		}
+	}
+	return available
+}
+
+// capabilityRegistryFor returns the complete high-level registry for cap:ext.
+// Its fixed order is part of the response contract.
+func capabilityRegistryFor(bondDelete, tripCounter bool) string {
+	categories := []string{"nav=2", "keycard=2", "usb", "service-mode", "time", "config", "status", "alarm=2", "ltc"}
+	if bondDelete {
+		categories = append(categories, "ble")
+	}
+	categories = append(categories, "pm", "dbc", "ota", "settings")
+	if tripCounter {
+		categories = append(categories, "trip")
+	}
+	categories = append(categories, "battery=1")
+	return "cap:ext:" + strings.Join(categories, ":")
+}
+
+func tripCounterCapabilitySupported(apiVersion, ready string, schema map[string]settingSchema) bool {
+	if apiVersion != "1" || ready != "1" {
+		return false
+	}
+	spec, ok := schema["trip.counter-reset"]
+	if !ok || spec.ReadOnly || spec.Type != "enum" || len(spec.Values) != 4 {
+		return false
+	}
+	values := make(map[string]bool, len(spec.Values))
+	for _, value := range spec.Values {
+		values[value.Value] = true
+	}
+	return values["ride"] && values["day"] && values["battery"] && values["manual"]
+}
+
+func (s *Service) tripCounterSupported() bool {
+	version, err := s.ipc.HGet(tripCounterKey, "api-version")
+	if err != nil {
+		s.log.Debugf("trip counter capability unavailable: %v", err)
+		return false
+	}
+	ready, err := s.ipc.Get("trip:ready")
+	if err != nil {
+		s.log.Debugf("trip readiness unavailable: %v", err)
+		return false
+	}
+	// Capability discovery must use current settings-service state rather than
+	// the get:/set: cache, which can outlive a settings-service restart.
+	schema, err := s.loadSettingsSchema()
+	if err != nil {
+		s.log.Debugf("trip settings schema unavailable: %v", err)
+		return false
+	}
+	s.promoteSettingsSchema(schema)
+	return tripCounterCapabilitySupported(version, ready, schema)
 }
 
 // handleCapabilityQuery responds with the list of supported extended command features.
@@ -542,6 +1066,20 @@ var capabilityMap = map[string][]string{
 // "cap:<category>" returns the commands supported by that category.
 func (s *Service) handleCapabilityQuery(cmd string) {
 	cmd = strings.TrimSpace(cmd)
+
+	if cmd == "ext" {
+		response := s.capabilityRegistry()
+		if len(response) > tripResponseMaxBytes {
+			s.log.Errorf("cap:ext response exceeds limit: %d bytes", len(response))
+			s.sendExtendedResponse("cap:error:internal")
+			return
+		}
+		if err := s.ipc.Hash("system").Set("capabilities", response, ipc.Sync()); err != nil {
+			s.log.Errorf("Failed to refresh local BLE capabilities: %v", err)
+		}
+		s.sendExtendedResponse(response)
+		return
+	}
 
 	if cmd == "list" {
 		categories := make([]string, 0, len(capabilityMap))
@@ -555,7 +1093,8 @@ func (s *Service) handleCapabilityQuery(cmd string) {
 		return
 	}
 
-	if commands, ok := capabilityMap[cmd]; ok {
+	if _, ok := capabilityMap[cmd]; ok {
+		commands := s.capabilityCommands(cmd)
 		s.sendExtendedResponse(fmt.Sprintf("cap:%s:count:%d", cmd, len(commands)))
 		for _, c := range commands {
 			s.sendExtendedResponse(fmt.Sprintf("cap:%s:%s", cmd, c))
@@ -665,6 +1204,10 @@ func (s *Service) handleSettingsSet(cmd string) {
 		// settings-service replay. Not fatal.
 		s.log.Warnf("Failed to PUBLISH settings %s: %v", key, err)
 	}
-	s.log.Infof("Set %s=%s via BLE", key, value)
+	if key == "sms.forward-to" {
+		s.log.Infof("Set %s via BLE", key)
+	} else {
+		s.log.Infof("Set %s=%s via BLE", key, value)
+	}
 	s.sendExtendedResponse(fmt.Sprintf("set:ok:%s", key))
 }

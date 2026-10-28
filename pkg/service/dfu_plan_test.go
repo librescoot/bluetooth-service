@@ -8,12 +8,7 @@ import (
 
 func TestFindLatestZipPair(t *testing.T) {
 	dir := t.TempDir()
-	touch := func(name string) {
-		t.Helper()
-		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0644); err != nil {
-			t.Fatal(err)
-		}
-	}
+	touch := func(name string) { writeTestFile(t, dir, name) }
 	touch("nrf-fw-bl-v2.0.0-ls.zip")
 	touch("nrf-fw-app-v2.0.0-ls.zip")
 	touch("nrf-fw-bl-v2.1.0-ls.zip")
@@ -43,9 +38,9 @@ func TestFindLatestZipPair_SkipsIncompletePairs(t *testing.T) {
 	dir := t.TempDir()
 	// Only an app zip for the newer version — should fall back to the older
 	// version that has both pieces.
-	os.WriteFile(filepath.Join(dir, "nrf-fw-bl-v2.0.0-ls.zip"), nil, 0644)
-	os.WriteFile(filepath.Join(dir, "nrf-fw-app-v2.0.0-ls.zip"), nil, 0644)
-	os.WriteFile(filepath.Join(dir, "nrf-fw-app-v2.1.0-ls.zip"), nil, 0644)
+	writeTestFile(t, dir, "nrf-fw-bl-v2.0.0-ls.zip")
+	writeTestFile(t, dir, "nrf-fw-app-v2.0.0-ls.zip")
+	writeTestFile(t, dir, "nrf-fw-app-v2.1.0-ls.zip")
 
 	pair, err := FindLatestZipPair(dir)
 	if err != nil {
@@ -76,6 +71,15 @@ func TestFindLatestZipPair_MissingDir(t *testing.T) {
 	}
 	if pair != nil {
 		t.Errorf("expected nil pair, got %+v", pair)
+	}
+}
+
+// writeTestFile creates a fixture file for zip-pair discovery tests; its
+// content is irrelevant, only the name and presence matter.
+func writeTestFile(t *testing.T, dir, name string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), nil, 0644); err != nil {
+		t.Fatal(err)
 	}
 }
 

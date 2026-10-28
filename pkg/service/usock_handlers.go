@@ -1,27 +1,66 @@
 package service
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	ipc "github.com/librescoot/redis-ipc"
 
 	"github.com/fxamacker/cbor/v2"
 	"github.com/librescoot/bluetooth-service/pkg/ble"
+	"github.com/librescoot/bluetooth-service/pkg/filetransfer"
+	"github.com/librescoot/bluetooth-service/pkg/ota"
 	"github.com/librescoot/bluetooth-service/pkg/usock"
 )
 
 // HandleUSockMessage handles incoming USOCK messages
 func (s *Service) HandleUSockMessage(frameID byte, payload *usock.Payload) {
-	var msgData map[uint16]interface{}
-	err := cbor.Unmarshal(payload.Data, &msgData)
-	if err != nil {
-		s.log.Errorf("Failed to decode CBOR message: %v (raw: %x)", err, payload.Data)
+	// OTA tunnel frames are raw binary (not CBOR); intercept before decode.
+	// Mirrors the nRF firmware's pre-decode hook for frame 0xB2.
+	switch frameID {
+	case filetransfer.FrameData:
+		if s.files != nil {
+			s.files.HandleData(payload.Data)
+		}
+		return
+	case filetransfer.FrameControl:
+		if s.files != nil {
+			s.files.HandleControl(payload.Data)
+		}
+		return
+	case ble.FrameOTAData:
+		if s.ota != nil {
+			s.ota.HandleData(payload.Data)
+		}
+		return
+	case ble.FrameOTACtrl:
+		if len(payload.Data) > 0 && payload.Data[0] == ota.OpStart {
+			s.transferMu.Lock()
+			defer s.transferMu.Unlock()
+		}
+		if len(payload.Data) > 0 && payload.Data[0] == ota.OpStart && s.files != nil && s.files.Busy() {
+			if writer := s.GetUSock(); writer != nil {
+				_ = writer.WriteWithFrameID(ble.FrameOTAStatus, ota.EncodeStartAck(ota.StartBusy, 0, 0, 0, ota.MaxChunkSize))
+			}
+			return
+		}
+		if s.ota != nil {
+			s.ota.HandleControl(payload.Data)
+		}
 		return
 	}
 
-	s.log.Debugf("Received message: Frame ID=0x%02x, Data=%x", frameID, payload.Data)
+	var msgData map[uint16]interface{}
+	err := cbor.Unmarshal(payload.Data, &msgData)
+	if err != nil {
+		s.log.Errorf("Failed to decode CBOR message")
+		return
+	}
+
+	s.log.Debugf("Received message: Frame ID=0x%02x, payload length=%d", frameID, len(payload.Data))
 
 	var absoluteMsgType uint16
 	var params interface{}
@@ -85,7 +124,9 @@ func (s *Service) HandleUSockMessage(frameID byte, payload *usock.Payload) {
 	}
 
 	// Log decoded CBOR structure with MessageType and SubTypes
-	if len(paramMap) > 0 {
+	if len(paramMap) > 0 && msgType == ble.TypeExtended {
+		s.log.Debugf("Received extended message with %d parameter(s)", len(paramMap))
+	} else if len(paramMap) > 0 {
 		subtypeStr := ""
 		for absSubType, value := range paramMap {
 			if subtypeStr != "" {
@@ -108,6 +149,11 @@ func (s *Service) HandleUSockMessage(frameID byte, payload *usock.Payload) {
 		s.log.Debugf("Received: Type=0x%04x %s", msgType, subtypeStr)
 	} else {
 		s.log.Debugf("Received: Type=0x%04x (empty params)", msgType)
+	}
+
+	if msgType == ble.TypeRTC {
+		s.handleNRFTimeReply(paramMap)
+		return
 	}
 
 	// Handle messages based on the ABSOLUTE subtype key found in the inner map
@@ -174,6 +220,8 @@ func (s *Service) HandleUSockMessage(frameID byte, payload *usock.Payload) {
 				s.handleAccelerometerMessage(relativeSubType, value)
 			case ble.TypeExtended:
 				s.handleExtendedCommandMessage(msgType, absSubTypeKey, value)
+			case ble.TypeLink:
+				s.link.HandleLinkMessage(absSubTypeKey, value)
 			case 0x0000: // Handle generic event messages
 				s.handleEventMessage(msgType, absSubTypeKey, value)
 			default:
@@ -361,6 +409,12 @@ func (s *Service) handleScooterInfoMessage(msgType ble.MessageType, absSubTypeKe
 func (s *Service) handleBLEVersionMessage(msgType ble.MessageType, absSubTypeKey uint16, value interface{}) {
 	s.log.Debugf("Handling BLE version message (Type 0x%04x). Absolute subtype key: 0x%04x", msgType, absSubTypeKey)
 
+	hostSessionAbsSubType := uint16(ble.TypeBLEVersion) + uint16(ble.TypeBLEVersionHostSession)
+	if absSubTypeKey == hostSessionAbsSubType {
+		s.handleHostSessionAck(value)
+		return
+	}
+
 	expectedAbsSubType := uint16(ble.TypeBLEVersion) + uint16(ble.TypeBLEVersionString) // 0xA001
 
 	// v1.8.x and earlier emit VERSION_STRING under absolute key 0x0000.
@@ -490,6 +544,9 @@ func (s *Service) handleBLEDebugMessage(msgType ble.MessageType, absSubTypeKey u
 				} else {
 					s.log.Debugf("Sent Reset ACK to nRF")
 				}
+				// The firmware rebooted and lost its cached iMX->nRF state;
+				// re-push everything so BLE consumers don't see stale values.
+				go s.resyncAfterNRFReset()
 			} else {
 				s.log.Warnf("Could not decode nRF Reset Info array values: %v", resetInfoArr)
 			}
@@ -579,6 +636,26 @@ func (s *Service) handlePowerManagementMessage(subType ble.SubType, value interf
 	case ble.TypePowerManagementState:
 		if stateAck, ok := convertToInt(value); ok {
 			s.log.Debugf("Received ACK for Power Management State update: %d", stateAck)
+			// The nRF acked the suspending state: it is silenced and its reply
+			// has fully drained onto our UART. Confirm to pm-service, which
+			// gates the actual suspend on this. Confirming at send time is not
+			// enough; the ACK itself would hit the armed ttymxc1 wakeup and
+			// pull the iMX6 straight back out of suspend-to-RAM.
+			if stateAck == 0 {
+				// The nRF retunes to 115200 right after this ACK drains; follow
+				// it down before confirming, so the port is settled before
+				// pm-service commits the suspend or aborts back to running.
+				if s.link != nil {
+					s.link.DownshiftForSuspend()
+				}
+				if s.ipc != nil {
+					if err := s.ipc.Hash(KeyPowerManager).Set("power-state-sent", "suspending"); err != nil {
+						s.log.Warnf("failed to confirm power-state-sent: %v", err)
+					} else {
+						s.log.Infof("nRF acked suspending state")
+					}
+				}
+			}
 		} else {
 			s.log.Warnf("Could not decode power management state ACK value: %v", value)
 		}
@@ -596,27 +673,10 @@ func (s *Service) handlePowerManagementMessage(subType ble.SubType, value interf
 			}
 			s.log.Debugf("Received hibernation request from nRF: type=%s (%d)", hibernationTypeStr, hibernationType)
 
-			// Forward hibernation request to power manager via Redis
-			var command string
-			var listKey string
-
+			listKey := "scooter:power"
+			command := "hibernate-auto"
 			if hibernationType == int(ble.HibernationRequestManual) {
-				// Check vehicle state for manual hibernation
-				vehicleState, err := s.ipc.HGet(KeyVehicle, "state")
-				if err == nil && vehicleState == "parked" {
-					// If parked, send lock-hibernate to vehicle state handler
-					listKey = "scooter:state"
-					command = "lock-hibernate"
-				} else {
-
-					// Otherwise send to power manager
-					listKey = "scooter:power"
-					command = "hibernate-manual"
-				}
-			} else {
-				// Automatic hibernation always goes to power manager
-				listKey = "scooter:power"
-				command = "hibernate"
+				command = "hibernate-manual"
 			}
 
 			if err := ipc.SendRequest(s.ipc, listKey, command); err != nil {
@@ -633,6 +693,26 @@ func (s *Service) handlePowerManagementMessage(subType ble.SubType, value interf
 			s.log.Errorf("Failed to forward reboot request: %v", err)
 		} else {
 			s.log.Debugf("Forwarded reboot request to scooter:power")
+		}
+	case ble.TypePowerManagementWakeTimerSet:
+		// ACK from nRF echoing the seconds value we just programmed. A non-zero
+		// echo means the timer is now armed; zero means it was disarmed.
+		ackVal, ok := convertToInt(value)
+		if !ok {
+			s.log.Warnf("Could not decode wake-timer-set ACK value: %v", value)
+			break
+		}
+		armed := "false"
+		if ackVal > 0 {
+			armed = "true"
+		}
+		if err := s.ipc.Hash(KeyPowerManager).SetMany(map[string]any{
+			"wake-timer-armed":       armed,
+			"wake-timer-ack-seconds": ackVal,
+		}, ipc.Sync()); err != nil {
+			s.log.Errorf("Failed to write wake-timer-armed to Redis: %v", err)
+		} else {
+			s.log.Debugf("Wake-timer ACK from nRF: %d seconds → wake-timer-armed=%s", ackVal, armed)
 		}
 	default:
 		s.log.Warnf("Unknown power management message relative subtype: %v", subType)
@@ -686,6 +766,13 @@ func (s *Service) handleBLEParamMessage(msgType ble.MessageType, absSubTypeKey u
 		if msgType == ble.TypeBLEParam {
 			if statusStr, ok := convertToString(value); ok {
 				s.log.Debugf("Received BLE Status update: %s", statusStr)
+				s.noteTripResetBLEStatus(statusStr)
+				if statusStr == "disconnected" {
+					s.clearSMSSnapshot()
+				}
+				if statusStr == "disconnected" && s.files != nil {
+					s.files.Disconnect()
+				}
 				if err := s.ipc.Hash(KeyBLEStatus).Set("status", statusStr); err != nil {
 					s.log.Errorf("Failed to write BLE status to Redis: %v", err)
 				}
@@ -829,6 +916,9 @@ func (s *Service) handleBatteryInfoMessage(subType ble.SubType, value interface{
 	case ble.TypeBatteryInfoCharge: // 1
 		redisField = "charge"
 		if isInt {
+			if valueInt > 100 {
+				valueInt = 100
+			}
 			s.log.Debugf("Received CB Battery Charge: %d %%", valueInt)
 			redisValue = valueInt
 		} else {
@@ -1043,12 +1133,12 @@ func (s *Service) handleEventMessage(msgType ble.MessageType, absSubTypeKey uint
 		// Check if it's a navigation start event
 		if strings.HasPrefix(eventStr, "navi:start ") {
 			coords := strings.TrimPrefix(eventStr, "navi:start ")
-			// Use WriteAndPublishString to atomically HSET and PUBLISH
-			err := s.ipc.Hash("navigation").Set("destination", coords)
+			stop, err := parseNavStop(coords)
+			if err == nil {
+				err = s.replaceRoutePlan(stop)
+			}
 			if err != nil {
 				s.log.Errorf("Failed to set navigation destination: %v", err)
-			} else {
-				s.log.Debugf("Set navigation destination: %s", coords)
 			}
 			return
 		}
@@ -1143,10 +1233,15 @@ func (s *Service) writeFaultToRedis(key, source string, code int, message, fault
 	}
 }
 
-// accelerometerWakePayload maps an incoming ACCELEROMETER message to the
-// `bmx:interrupt` payload alarm-service expects ("wake-suspend" /
-// "wake-hibernation"), or returns ok=false if the message is not a wake
-// notification.
+// motion-service's motion:interrupt payload, which alarm-service consumes.
+type motionEvent struct {
+	Type      string `json:"type"`
+	Timestamp int64  `json:"timestamp"`
+}
+
+// accelerometerWakePayload classifies an incoming ACCELEROMETER message as
+// "wake-suspend" or "wake-hibernation", or returns ok=false if the message is
+// not a wake notification.
 //
 // Two on-the-wire encodings are recognized:
 //
@@ -1200,7 +1295,19 @@ func (s *Service) handleAccelerometerMessage(subType ble.SubType, value interfac
 		s.log.Debugf("Received accelerometer wake-up: %s", payload)
 	}
 
-	if _, err := s.ipc.Publish("bmx:interrupt", payload); err != nil {
+	// alarm-service's vocabulary is "edge" or "wake-hibernation"; a suspend wake
+	// is just another edge.
+	evt := motionEvent{Timestamp: time.Now().UnixMilli(), Type: "edge"}
+	if payload == "wake-hibernation" {
+		evt.Type = "wake-hibernation"
+	}
+	encoded, err := json.Marshal(evt)
+	if err != nil {
+		s.log.Errorf("Failed to encode accelerometer wake motion event: %v", err)
+		return
+	}
+
+	if _, err := s.ipc.Publish("motion:interrupt", string(encoded)); err != nil {
 		s.log.Errorf("Failed to publish accelerometer wake interrupt: %v", err)
 	}
 }

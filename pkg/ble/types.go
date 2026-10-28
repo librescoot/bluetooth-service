@@ -24,7 +24,25 @@ const (
 	TypePowerMux                      MessageType = 0x0100     // BLE_SCOOTER_SERVICE_POWER_MUX_STATE
 	TypeLTCControl                    MessageType = 0x0120     // BLE_SCOOTER_SERVICE_LTC_CONTROL
 	TypeAccelerometer                 MessageType = 0x0200     // BLE_SCOOTER_SERVICE_ACCELEROMETER
+	TypeAlarm                         MessageType = 0x0220     // BLE_SCOOTER_SERVICE_ALARM
 	TypeExtended                      MessageType = 0x0400     // BLE_SCOOTER_SERVICE_EXTENDED
+	TypeOTA                           MessageType = 0x0500     // BLE_SCOOTER_SERVICE_OTA (GATT service block; USOCK side uses raw frames)
+	TypeLink                          MessageType = 0xA0A0     // BLE_SCOOTER_SERVICE_LINK (UART link management, USOCK only)
+	TypeRTC                           MessageType = 0xA0C0     // BLE_SCOOTER_SERVICE_RTC (USOCK only)
+)
+
+// Raw (non-CBOR) USOCK frame IDs used by the OTA transfer tunnel. Payloads are
+// byte-identical copies of the OTA GATT characteristic values; see pkg/ota.
+const (
+	FrameOTAData   byte = 0xB0 // nRF -> iMX: [u32 LE offset][chunk]
+	FrameOTACtrl   byte = 0xB1 // nRF -> iMX: control message (opcode-prefixed)
+	FrameOTAStatus byte = 0xB2 // iMX -> nRF: status/ACK message, notified to the phone
+)
+
+// Link capability bits reported via TypeLinkCaps.
+const (
+	LinkCapBaud1M    = 0x01 // firmware supports 1 Mbaud operation
+	LinkCapOTATunnel = 0x02 // firmware forwards the OTA tunnel frames
 )
 
 // SubType represents the sub-type of a message
@@ -89,13 +107,15 @@ const (
 	TypePowerManagementPowerRequest       SubType = 2 // BLE_SCOOTER_SERVICE_POWER_MANAGEMENT_POWER_REQUEST
 	TypePowerManagementHibernationRequest SubType = 3 // BLE_SCOOTER_SERVICE_POWER_MANAGEMENT_HIBERNATION_REQUEST
 	TypePowerManagementRebootRequest      SubType = 4 // BLE_SCOOTER_SERVICE_POWER_MANAGEMENT_REBOOT_REQUEST
+	TypePowerManagementWakeTimerSet       SubType = 5 // BLE_SCOOTER_SERVICE_POWER_MANAGEMENT_WAKE_TIMER_SET (uint32 seconds; 0 disarms)
 
 	// BLE debug sub-types
 	TypeBLEDebugResetAck SubType = 3 // BLE_SCOOTER_SERVICE_DEBUG_RESET_ACK
 
 	// BLE version sub-types
-	TypeBLEVersionString  SubType = 1 // BLE_SCOOTER_SERVICE_VERSION_STRING
-	TypeBLEVersionRequest SubType = 2 // BLE_SCOOTER_SERVICE_VERSION_REQUEST
+	TypeBLEVersionString      SubType = 1 // BLE_SCOOTER_SERVICE_VERSION_STRING
+	TypeBLEVersionRequest     SubType = 2 // BLE_SCOOTER_SERVICE_VERSION_REQUEST
+	TypeBLEVersionHostSession SubType = 3 // BLE_SCOOTER_SERVICE_VERSION_HOST_SESSION
 
 	// Aux battery sub-types
 	TypeAuxBatteryVoltage       SubType = 1 // BLE_SCOOTER_SERVICE_AUX_BATTERY_VOLTAGE
@@ -132,6 +152,11 @@ const (
 	TypeAccelerometerWakeUpSuspend     SubType = 1 // BLE_SCOOTER_SERVICE_ACCELEROMETER_WAKE_UP_SUSPEND
 	TypeAccelerometerWakeUpHibernation SubType = 2 // BLE_SCOOTER_SERVICE_ACCELEROMETER_WAKE_UP_HIBERNATION
 
+	// Sub-type 3 (wake sources) is composed by the nRF and never written from here.
+	TypeAlarmStatus      SubType = 1 // BLE_SCOOTER_SERVICE_ALARM_STATUS
+	TypeAlarmLastTrigger SubType = 2 // BLE_SCOOTER_SERVICE_ALARM_LAST_TRIGGER
+	TypeAlarmMotionArmed SubType = 4 // BLE_SCOOTER_SERVICE_ALARM_MOTION_ARMED
+
 	// Extended service sub-types
 	TypeExtendedCommand  SubType = 1 // BLE_SCOOTER_SERVICE_EXTENDED_COMMAND
 	TypeExtendedResponse SubType = 2 // BLE_SCOOTER_SERVICE_EXTENDED_RESPONSE
@@ -139,6 +164,17 @@ const (
 	// Scooter info sub-types (additional)
 	TypeNavigationActive SubType = 4 // BLE_SCOOTER_SERVICE_NAVIGATION_ACTIVE
 	TypeUMSStatus        SubType = 5 // BLE_SCOOTER_SERVICE_UMS_STATUS
+
+	// UART link management sub-types (relative to TypeLink 0xA0A0)
+	TypeLinkCaps    SubType = 1 // BLE_SCOOTER_SERVICE_LINK_CAPS: uint32 capability bitmask
+	TypeLinkBaudSet SubType = 2 // BLE_SCOOTER_SERVICE_LINK_BAUD_SET: uint32 literal baud rate
+	TypeLinkPing    SubType = 3 // BLE_SCOOTER_SERVICE_LINK_PING: uint32 nonce, echoed
+	TypeLinkStats   SubType = 4 // BLE_SCOOTER_SERVICE_LINK_STATS: int array [crc, uart, overrun, txdrop]
+
+	// Retained UTC clock sub-types (relative to TypeRTC 0xA0C0).
+	TypeRTCGet   SubType = 1
+	TypeRTCSet   SubType = 2
+	TypeRTCToken SubType = 3
 )
 
 // BLECommand represents BLE control commands

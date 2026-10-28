@@ -3,10 +3,13 @@ package service
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	ipc "github.com/librescoot/redis-ipc"
 
+	"github.com/librescoot/bluetooth-service/pkg/ble"
+	"github.com/librescoot/bluetooth-service/pkg/filetransfer"
 	"github.com/librescoot/bluetooth-service/pkg/logger"
 	"github.com/librescoot/bluetooth-service/pkg/usock"
 )
@@ -32,10 +35,12 @@ type firmwareUpdaterInterface interface {
 type Service struct {
 	usock           usockCloser
 	ipc             *ipc.Client // Redis IPC client
+	destIPC         *ipc.Client // JSON-codec IPC client for destination RPC
 	log             *logger.Logger
 	stopCh          chan struct{}
+	stopped         bool
 	wg              sync.WaitGroup
-	faults          *ipc.FaultSet // Fault tracking
+	faults          *ipc.FaultReporter // Fault tracking
 	serialDevice    string
 	baudRate        int
 	usockHandler    func(*usock.Payload)
@@ -44,6 +49,19 @@ type Service struct {
 	autoUpdate      bool
 	lastMileage     string // last mileage value sent to nRF (for dedup)
 	mu              sync.RWMutex
+	reconnectMu     sync.Mutex
+
+	clockSetter  func(int64) error
+	clockMu      sync.Mutex
+	nrfTimeNow   func() time.Time
+	nrfTimeMu    sync.Mutex
+	nrfTimeState nrfTimeState
+
+	trustedTimeMu  sync.Mutex
+	trustedTimeNTP func() bool
+	trustedTimeGPS func() string
+	lastNTPTrusted bool
+	lastGPSSync    string
 
 	// Track the most recent vehicle state string for diagnostic/log paths.
 	lastVehicleState string
@@ -53,11 +71,35 @@ type Service struct {
 	subWg     sync.WaitGroup
 	subMu     sync.Mutex
 
+	// Serializes RestartSubscriptions: concurrent restarts (nRF reset resync
+	// vs post-negotiation resync) would leak the first caller's watcher set,
+	// leaving two subscriptions forwarding every event.
+	restartMu sync.Mutex
+
+	// nRF reset resync debounce: the firmware re-sends RESET_INFO until it is
+	// ACKed, so several can arrive before our ACK lands; resync only once.
+	resyncMu        sync.Mutex
+	lastResetResync time.Time
+
 	// Extended response rate limiting: the nRF SoftDevice's HVN TX queue
 	// is 1 deep, so back-to-back notifications get dropped. Pace consecutive
 	// extended responses to give the BLE link time to drain.
 	extRespMu       sync.Mutex
 	lastExtRespTime time.Time
+
+	smsMu         sync.Mutex
+	smsSnapshot   *smsSnapshot
+	smsGeneration uint64
+
+	dbcWaitMu     sync.Mutex
+	dbcWaitCancel chan struct{}
+
+	tripResetMu                   sync.Mutex
+	tripResetPending              map[string]chan tripCommandResult
+	tripResetRetryID              string
+	tripResetRetryUntil           time.Time
+	tripResetConnectionGeneration uint64
+	tripResultSubscription        interface{ Unsubscribe() error }
 
 	// Set when an LTC control command originated from a BLE extended
 	// command, so the USOCK response handler knows to relay the result
@@ -71,12 +113,30 @@ type Service struct {
 	schemaMu    sync.RWMutex
 	schemaCache map[string]settingSchema
 
-	// Signaled by handleBLEVersionMessage whenever a BLE version frame
-	// arrives from the nRF. InitializeNRF52 drains this channel before
-	// sending the version request, then waits on it to confirm the
-	// handshake completed before returning. Buffered (size 1) so the
-	// version handler's send is non-blocking.
+	// Serialize init attempts so version replies cannot satisfy another attempt.
+	nrfInitMu   sync.Mutex
 	versionRxCh chan struct{}
+
+	// UART link manager: baud negotiation with the nRF and automatic fallback
+	link *LinkManager
+
+	hostSessionInitMu sync.Mutex
+	hostSessionMu     sync.Mutex
+	hostSessionAckCh  chan hostSessionAck
+	hostCapabilities  int32
+
+	// OTA receiver: phone -> scooter firmware transfer over the OTA tunnel
+	ota                otaReceiver
+	files              *filetransfer.Server
+	dataBrowserEnabled atomic.Bool
+	transferMu         sync.Mutex
+}
+
+// otaReceiver is the subset of *ota.Receiver used by the USOCK dispatch
+// (interface so the service compiles without a receiver wired, e.g. in tests)
+type otaReceiver interface {
+	HandleData(payload []byte)
+	HandleControl(payload []byte)
 }
 
 // Fault codes for bluetooth service
@@ -86,15 +146,91 @@ const (
 	FaultFirmwareUpdate = 3 // Firmware update error
 )
 
-// New creates a new Service instance
-func New(ipcClient *ipc.Client, log *logger.Logger) *Service {
-	return &Service{
-		ipc:         ipcClient,
-		log:         log,
-		stopCh:      make(chan struct{}),
-		faults:      ipcClient.NewFaultSet("ble:fault", "ble", "fault"),
-		versionRxCh: make(chan struct{}, 1),
+// New creates a new Service instance. destinationClient is the JSON-codec
+// IPC client used for destination RPC.
+func New(ipcClient *ipc.Client, destinationClient *ipc.Client, log *logger.Logger) *Service {
+	s := &Service{
+		ipc:              ipcClient,
+		destIPC:          destinationClient,
+		log:              log,
+		stopCh:           make(chan struct{}),
+		faults:           ipcClient.NewFaultReporter("ble"),
+		hostSessionAckCh: make(chan hostSessionAck, 4),
+		versionRxCh:      make(chan struct{}, 1),
 	}
+	s.link = newLinkManager(s)
+	return s
+}
+
+// PublishCapabilities exposes the BLE navigation protocol version to local
+// services without requiring an nRF round trip.
+func (s *Service) PublishCapabilities() error {
+	return s.ipc.Hash("system").Set("capabilities", s.capabilityRegistry(), ipc.Sync())
+}
+
+// SetOTAReceiver wires the OTA transfer receiver into the USOCK dispatch.
+func (s *Service) SetOTAReceiver(r otaReceiver) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ota = r
+}
+
+// Link returns the UART link manager.
+func (s *Service) Link() *LinkManager {
+	return s.link
+}
+
+// EnsureLinkBaud brings the UART link to the requested baud rate (used before
+// nRF DFU, which only talks 115200).
+func (s *Service) EnsureLinkBaud(baud int) error {
+	return s.link.EnsureLinkBaud(baud)
+}
+
+// getUSockConcrete returns the underlying *usock.USOCK, or nil when the
+// connection is absent or replaced by a test double.
+func (s *Service) getUSockConcrete() *usock.USOCK {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if sock, ok := s.usock.(*usock.USOCK); ok {
+		return sock
+	}
+	return nil
+}
+
+// reopenUSockAtBaud closes the current serial connection and reopens it at the
+// given baud rate, re-applying handlers. Unlike ReconnectUSock this does NOT
+// run the nRF init sequence — it is the link manager's low-level primitive.
+func (s *Service) reopenUSockAtBaud(baud int) error {
+	s.mu.Lock()
+	if s.serialDevice == "" || s.usockHandler == nil {
+		s.mu.Unlock()
+		return fmt.Errorf("serial config not set")
+	}
+	device := s.serialDevice
+	handler := s.usockHandler
+	errHandler := s.usockErrHandler
+	old := s.usock
+	s.mu.Unlock()
+
+	if old != nil {
+		if err := old.Close(); err != nil {
+			s.log.Warnf("reopenUSockAtBaud: close failed: %v", err)
+		}
+	}
+
+	sock, err := usock.New(device, baud, handler, s.log)
+	if err != nil {
+		return fmt.Errorf("failed to reopen serial port at %d baud: %w", baud, err)
+	}
+	if errHandler != nil {
+		sock.SetErrorHandler(errHandler)
+	}
+	sock.SetSyncFrameIDs(ble.FrameOTAData, ble.FrameOTACtrl, filetransfer.FrameData, filetransfer.FrameControl)
+
+	s.mu.Lock()
+	s.usock = sock
+	s.mu.Unlock()
+	return nil
 }
 
 // SetUSock sets the USOCK connection for the service
@@ -153,6 +289,7 @@ func (s *Service) GetFirmwareUpdater() firmwareUpdaterInterface {
 
 // CloseUSock closes the serial connection
 func (s *Service) CloseUSock() error {
+	s.invalidateNRFTimeRequest()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.usock != nil {
@@ -166,7 +303,15 @@ func (s *Service) CloseUSock() error {
 // SubscribeToRedisChannels' StartWithSync are not suppressed against values
 // that were sent to the previous (now replaced) firmware image.
 func (s *Service) ReconnectUSock() error {
+	s.reconnectMu.Lock()
+	defer s.reconnectMu.Unlock()
+
+	s.invalidateNRFTimeRequest()
 	s.mu.Lock()
+	if s.stopped {
+		s.mu.Unlock()
+		return fmt.Errorf("service stopped")
+	}
 	if s.serialDevice == "" || s.usockHandler == nil {
 		s.mu.Unlock()
 		return fmt.Errorf("serial config not set")
@@ -179,6 +324,13 @@ func (s *Service) ReconnectUSock() error {
 	s.lastVehicleState = ""
 	s.mu.Unlock()
 
+	// Return temporary DFU ownership before reopening. A terminal Stop cannot
+	// be resumed by a late firmware-update completion.
+	if !s.link.Resume() {
+		return fmt.Errorf("service stopped")
+	}
+	s.link.resetToDefault()
+
 	sock, err := usock.New(device, baud, handler, s.log)
 	if err != nil {
 		return fmt.Errorf("failed to reconnect to nRF52: %w", err)
@@ -186,8 +338,14 @@ func (s *Service) ReconnectUSock() error {
 	if errHandler != nil {
 		sock.SetErrorHandler(errHandler)
 	}
+	sock.SetSyncFrameIDs(ble.FrameOTAData, ble.FrameOTACtrl, filetransfer.FrameData, filetransfer.FrameControl)
 
 	s.mu.Lock()
+	if s.stopped {
+		s.mu.Unlock()
+		_ = sock.Close()
+		return fmt.Errorf("service stopped")
+	}
 	s.usock = sock
 	s.mu.Unlock()
 
@@ -195,27 +353,25 @@ func (s *Service) ReconnectUSock() error {
 		return fmt.Errorf("failed to re-initialize nRF52: %w", err)
 	}
 
+	s.link.StartNegotiation()
+
 	return nil
 }
 
-// SetFault adds a fault code to the fault set
-func (s *Service) SetFault(code int) {
-	if err := s.faults.Add(code); err != nil {
-		s.log.Errorf("Failed to add fault %d: %v", code, err)
+// SetFault marks a fault code active. The description reaches the
+// events:faults stream, so it should name the specific failure rather than
+// restate the code's category. Repeating a fault that is already active is a
+// no-op and emits no stream entry.
+func (s *Service) SetFault(code int, description string) {
+	if err := s.faults.Raise(code, description); err != nil {
+		s.log.Errorf("Failed to raise fault %d: %v", code, err)
 	}
 }
 
-// ClearFault removes a fault code from the fault set
+// ClearFault marks a fault code inactive.
 func (s *Service) ClearFault(code int) {
-	if err := s.faults.Remove(code); err != nil {
-		s.log.Errorf("Failed to remove fault %d: %v", code, err)
-	}
-}
-
-// ClearAllFaults removes all fault codes
-func (s *Service) ClearAllFaults() {
-	if err := s.faults.Clear(); err != nil {
-		s.log.Errorf("Failed to clear faults: %v", err)
+	if err := s.faults.Clear(code); err != nil {
+		s.log.Errorf("Failed to clear fault %d: %v", code, err)
 	}
 }
 
@@ -223,9 +379,26 @@ func (s *Service) ClearAllFaults() {
 // other goroutines to exit. Safe to call when subscriptions or USOCK were
 // never started.
 func (s *Service) Stop() {
+	s.mu.Lock()
+	s.stopped = true
+	s.mu.Unlock()
+	if s.link != nil {
+		s.link.Stop()
+	}
+
+	// A reconnect that passed its initial stopped check owns this mutex until
+	// its socket publication and initialization are complete.
+	s.reconnectMu.Lock()
+	defer s.reconnectMu.Unlock()
+
 	s.StopSubscriptions()
+	s.cancelDBCWait()
+	s.stopTripResetBridge()
 	if err := s.CloseUSock(); err != nil {
 		s.log.Errorf("Failed to close USOCK during shutdown: %v", err)
+	}
+	if s.files != nil {
+		s.files.Close()
 	}
 	close(s.stopCh)
 }
@@ -295,20 +468,25 @@ func (s *Service) startNormally() error {
 	if errHandler != nil {
 		sock.SetErrorHandler(errHandler)
 	}
+	sock.SetSyncFrameIDs(ble.FrameOTAData, ble.FrameOTACtrl, filetransfer.FrameData, filetransfer.FrameControl)
 	s.SetUSock(sock)
 	s.ClearFault(FaultSerialPort)
 	s.log.Infof("Connected to nRF52 via USOCK")
+
+	s.link.resetToDefault()
 
 	s.SubscribeToRedisChannels()
 
 	s.log.Infof("Initializing communication with nRF52...")
 	if err := s.InitializeNRF52(); err != nil {
-		s.SetFault(FaultNRFInit)
+		s.SetFault(FaultNRFInit, fmt.Sprintf("nRF52 initialization sequence failed: %v", err))
 		s.log.Errorf("Error during nRF52 initialization sequence: %v", err)
 	} else {
 		s.ClearFault(FaultNRFInit)
 		s.log.Infof("nRF52 initialization sequence sent successfully.")
 	}
+
+	s.link.StartNegotiation()
 
 	return nil
 }
@@ -332,8 +510,64 @@ func (s *Service) StopSubscriptions() {
 
 // RestartSubscriptions stops existing subscriptions and starts new ones
 func (s *Service) RestartSubscriptions() {
+	s.restartMu.Lock()
+	defer s.restartMu.Unlock()
 	s.StopSubscriptions()
 	s.SubscribeToRedisChannels()
+}
+
+// resyncStateToNRF re-pushes all iMX->nRF state after a baud negotiation.
+// The Redis subscriptions run concurrently with the link negotiation, and a
+// frame written while the port is being reopened for a baud change is
+// silently lost — either written at the old rate to an nRF that has already
+// switched, or into the closing fd. A state field that never changes again
+// (vehicle "stand-by" after the post-hibernation boot) then stays stale on
+// the BLE side indefinitely, so every negotiation that reopened the port is
+// followed by a full re-push: clear the dedup caches and restart the
+// subscriptions — StartWithSync re-emits every field.
+func (s *Service) resyncStateToNRF(reason string) {
+	s.log.Infof("Re-pushing state to nRF after %s", reason)
+
+	s.mu.Lock()
+	s.lastMileage = ""
+	s.lastVehicleState = ""
+	s.mu.Unlock()
+
+	s.RestartSubscriptions()
+}
+
+// resyncAfterNRFReset re-pushes all iMX->nRF state after the firmware rebooted
+// and lost its cache. The serial link is still up (only the nRF reset), so it
+// restarts the Redis subscriptions — StartWithSync re-emits every field — and
+// re-initializes streaming, rather than reopening USOCK. The dedup caches are
+// cleared first so the re-pushes aren't suppressed against values that were
+// sent to the pre-reset firmware. Debounced because the nRF re-sends
+// RESET_INFO until ACKed.
+func (s *Service) resyncAfterNRFReset() {
+	s.resyncMu.Lock()
+	if time.Since(s.lastResetResync) < 5*time.Second {
+		s.resyncMu.Unlock()
+		return
+	}
+	s.lastResetResync = time.Now()
+	s.resyncMu.Unlock()
+
+	s.log.Infof("nRF reset: resyncing state to firmware")
+
+	s.mu.Lock()
+	s.lastMileage = ""
+	s.lastVehicleState = ""
+	s.mu.Unlock()
+
+	s.RestartSubscriptions()
+
+	if err := s.InitializeNRF52(); err != nil {
+		s.log.Errorf("nRF reset resync: re-initialization failed: %v", err)
+	}
+
+	// a reset nRF is back at the boot baud rate with fresh capabilities;
+	// renegotiate (no-op for legacy firmware)
+	s.link.StartNegotiation()
 }
 
 // setErrorAndSleep sets an error state in Redis and blocks forever to prevent restart loops

@@ -11,26 +11,25 @@ import (
 	ipc "github.com/librescoot/redis-ipc"
 
 	"github.com/librescoot/bluetooth-service/pkg/logger"
+	"github.com/librescoot/bluetooth-service/pkg/ota"
 	"github.com/librescoot/bluetooth-service/pkg/service"
 	"github.com/librescoot/bluetooth-service/pkg/usock"
 )
 
 var version = "dev"
 
-// Configuration flags
 var (
-	serialDevice = flag.String("serial", "/dev/ttymxc1", "Serial device path")
-	baudRate     = flag.Int("baud", 115200, "Serial baud rate")
-	redisAddr    = flag.String("redis-addr", "localhost:6379", "Redis server address")
-	redisPass    = flag.String("redis-pass", "", "Redis password")
-	redisDB      = flag.Int("redis-db", 0, "Redis database number")
-	logLevel     = flag.Int("log-level", int(logger.LogLevelInfo), "Log level (0=none, 1=error, 2=warning, 3=info, 4=debug)")
-	showVersion  = flag.Bool("version", false, "Print version and exit")
-	firmwareDir  = flag.String("firmware-dir", service.DefaultFirmwareDir, "Directory containing firmware files")
-	autoUpdate   = flag.Bool("auto-update", true, "Automatically update firmware on startup if newer version available")
+	serialDevice      = flag.String("serial", "/dev/ttymxc1", "Serial device path")
+	baudRate          = flag.Int("baud", 115200, "Serial baud rate")
+	redisAddr         = flag.String("redis-addr", "localhost:6379", "Redis server address")
+	logLevel          = flag.Int("log-level", int(logger.LogLevelInfo), "Log level (0=none, 1=error, 2=warning, 3=info, 4=debug)")
+	showVersion       = flag.Bool("version", false, "Print version and exit")
+	firmwareDir       = flag.String("firmware-dir", service.DefaultFirmwareDir, "Directory containing firmware files")
+	autoUpdate        = flag.Bool("auto-update", true, "Automatically update firmware on startup if newer version available")
+	otaStaging        = flag.String("ota-staging-dir", ota.DefaultStagingDir, "Staging directory for BLE OTA bundle transfers")
+	enableDataBrowser = flag.Bool("enable-data-browser", false, "Enable administrative BLE browsing and file writes rooted at /data")
 )
 
-// Redis keys
 const (
 	KeyBatterySlot1    = "battery:0"
 	KeyBatterySlot2    = "battery:1"
@@ -43,7 +42,6 @@ const (
 	KeyBLECommand      = "ble"
 )
 
-// Battery state constants
 const (
 	BatteryStateUnknown = 0
 	BatteryStateAsleep  = 1
@@ -83,14 +81,22 @@ func main() {
 	defer ipcClient.Close()
 	log.Infof("Connected to Redis")
 
-	svc := service.New(ipcClient, log)
+	destinationClient, err := ipc.New(
+		ipc.WithURL(*redisAddr),
+	)
+	if err != nil {
+		log.Fatalf("Failed to connect destination client: %v", err)
+	}
+	defer destinationClient.Close()
+
+	svc := service.New(ipcClient, destinationClient, log)
 
 	usockHandler := func(payload *usock.Payload) {
 		svc.HandleUSockMessage(payload.ID, payload)
 	}
 	usockErrHandler := func(err error) {
 		log.Errorf("Serial communication error: %v", err)
-		svc.SetFault(service.FaultSerialPort)
+		svc.SetFault(service.FaultSerialPort, fmt.Sprintf("serial communication error: %v", err))
 	}
 
 	svc.SetSerialConfig(*serialDevice, *baudRate, usockHandler, usockErrHandler)
@@ -108,14 +114,38 @@ func main() {
 
 	log.Infof("Firmware update: auto-update=%v, firmware-dir=%s", *autoUpdate, *firmwareDir)
 
+	// BLE OTA receiver: accepts update bundles pushed by the phone through the
+	// nRF's OTA tunnel, stages them and hands them to update-service.
+	otaReceiver := ota.New(log, ipcClient, func() ota.FrameWriter {
+		if w := svc.GetUSock(); w != nil {
+			return w
+		}
+		return nil
+	}, *otaStaging, map[byte]ota.Installer{
+		ota.ComponentMDB: &ota.MenderInstaller{IPC: ipcClient},
+		ota.ComponentDBC: &ota.DBCInstaller{IPC: ipcClient, Log: log},
+	})
+	svc.SetOTAReceiver(otaReceiver)
+	if err := svc.EnableFileTransfer("/data/log-bundles", "/data/ble-files/inbox"); err != nil {
+		log.Fatalf("Failed to initialize file transfer: %v", err)
+	}
+	if *enableDataBrowser {
+		if err := svc.EnableDataBrowser(); err != nil {
+			log.Fatalf("Failed to enable administrative data browser: %v", err)
+		}
+	}
+
 	// Probe for DFU mode -> either recover (if nRF is stuck in DFU with no
 	// working app) or open USOCK and run the normal init sequence. Bootstrap
 	// closes the USOCK on shutdown via Stop().
 	if err := svc.Bootstrap(); err != nil {
 		log.Fatalf("Failed to bootstrap service: %v", err)
 	}
+	if err := svc.PublishCapabilities(); err != nil {
+		log.Errorf("Failed to publish local BLE capabilities: %v", err)
+	}
 
-	// Start the command watcher goroutine
+	svc.StartTrustedTimeMonitor()
 	go svc.WatchRedisCommands()
 
 	log.Infof("Initial state loaded via StartWithSync callbacks")

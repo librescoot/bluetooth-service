@@ -8,6 +8,7 @@ const (
 	KeyPowerManager    = "power-manager"
 	KeyMileage         = "engine-ecu"
 	KeyFirmwareVersion = "system"
+	KeyMDBVersion      = "version:mdb"
 	KeyBLEPairingPin   = "ble"
 	KeyBLEStatus       = "ble"
 	KeyBLECommand      = "ble"
@@ -19,6 +20,7 @@ const (
 	KeyNavigation     = "navigation"
 	KeyUSB            = "usb"
 	KeyKeycard        = "keycard"
+	KeyAlarm          = "alarm"
 )
 
 // Firmware update paths

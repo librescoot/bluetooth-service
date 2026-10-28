@@ -25,10 +25,12 @@ func (s *Service) SubscribeToRedisChannels() {
 		KeyPowerManager,    // "power-manager"
 		KeyMileage,         // "engine-ecu"
 		KeyFirmwareVersion, // "system"
+		KeyMDBVersion,      // "version:mdb"
 		KeyBLEPairingPin,   // "ble" - Keep for pin removal notification
 		KeyNavigation,      // "navigation"
 		KeyUSB,             // "usb"
 		KeyKeycard,         // "keycard"
+		KeyAlarm,           // "alarm"
 	}
 
 	// Ensure only unique keys are subscribed
@@ -107,9 +109,19 @@ func (s *Service) SubscribeToRedisChannels() {
 					}
 
 				case KeyPowerManager:
-					if field == "state" {
+					switch field {
+					case "state":
 						if err := s.UpdatePowerManagementState(value); err != nil {
 							s.log.Errorf("Error sending power management state update triggered by Redis: %v", err)
+						}
+					case "wake-timer-seconds":
+						seconds, parseErr := strconv.ParseUint(value, 10, 32)
+						if parseErr != nil {
+							s.log.Warnf("Invalid wake-timer-seconds value %q: %v", value, parseErr)
+							break
+						}
+						if err := s.SetWakeTimer(uint32(seconds)); err != nil {
+							s.log.Errorf("Error programming nRF wake timer: %v", err)
 						}
 					}
 
@@ -124,6 +136,13 @@ func (s *Service) SubscribeToRedisChannels() {
 					if field == "mdb-version" {
 						if err := s.UpdateFirmwareVersion(value); err != nil {
 							s.log.Errorf("Error sending firmware version update triggered by Redis: %v", err)
+						}
+					}
+
+				case KeyMDBVersion:
+					if field == "version" || field == "version_id" {
+						if err := s.pushMDBVersion(); err != nil {
+							s.log.Errorf("Error sending MDB version update triggered by Redis: %v", err)
 						}
 					}
 
@@ -156,6 +175,33 @@ func (s *Service) SubscribeToRedisChannels() {
 						}
 					}
 
+				case KeyAlarm:
+					switch field {
+					case "status":
+						if err := writeUARTMessageString(s.usock, ble.TypeAlarm, ble.TypeAlarmStatus, value); err != nil {
+							s.log.Errorf("Error sending alarm status update: %v", err)
+						}
+						// motion-service arms the accelerometer for these states and no
+						// others, so they are when movement can wake a hibernating board.
+						armed := uint16(0)
+						switch value {
+						case "armed", "level-1-triggered", "level-2-triggered":
+							armed = 1
+						}
+						if err := writeUARTMessage(s.usock, ble.TypeAlarm, ble.TypeAlarmMotionArmed, armed); err != nil {
+							s.log.Errorf("Error sending alarm motion-armed update: %v", err)
+						}
+					case "trigger:source":
+						// alarm-service publishes only the source, so the timestamp is read back.
+						timestamp, err := s.ipc.HGet(KeyAlarm, "trigger:timestamp")
+						if err != nil {
+							s.log.Errorf("Error reading alarm trigger timestamp: %v", err)
+						}
+						if err := writeUARTMessageString(s.usock, ble.TypeAlarm, ble.TypeAlarmLastTrigger, value+","+timestamp); err != nil {
+							s.log.Errorf("Error sending alarm trigger update: %v", err)
+						}
+					}
+
 				case KeyKeycard:
 					if field == "command-result" && value != "" {
 						s.sendExtendedResponse("keycard:" + value)
@@ -168,7 +214,9 @@ func (s *Service) SubscribeToRedisChannels() {
 				return nil
 			})
 
-			watcher.StartWithSync() // Fetches initial state and calls handlers
+			if err := watcher.StartWithSync(); err != nil {
+				s.log.Errorf("Error starting Redis watcher for channel %s: %v", chName, err)
+			}
 			defer watcher.Stop()
 
 			<-stopCh
@@ -299,17 +347,27 @@ func (s *Service) WatchRedisCommands() {
 // value 6 (firmware uses POWER_MODE_ACTIVE but presents "stand-by" to BLE
 // clients) and "hop-on-learning" collapses to PARKED on the wire (the user
 // is interacting with the dashboard, externally parked-equivalent).
+//
+// Empty or unrecognized state strings are dropped rather than defaulted to
+// stand-by. Reporting a fake stand-by while vehicle-service is in some
+// transitional or unknown state lies to the mobile app — it would believe
+// the scooter is ready for an unlock and fire one into a closed window.
+// We'd rather hold the previous state on the BLE side until vehicle-service
+// publishes something we recognize.
 func (s *Service) UpdateVehicleState(stateStr string) error {
 	if stateStr == "" {
-		s.log.Warnf(" empty vehicle state value. Sending default (stand-by).")
-		stateStr = "stand-by" // Default if empty
+		s.log.Warnf("empty vehicle state value, not forwarding to nRF")
+		return nil
+	}
+	state, ok := vehicleStateToInt(stateStr)
+	if !ok {
+		s.log.Warnf("unrecognized vehicle state %q, not forwarding to nRF", stateStr)
+		return nil
 	}
 
 	s.mu.Lock()
 	s.lastVehicleState = stateStr
 	s.mu.Unlock()
-
-	state := vehicleStateToInt(stateStr)
 
 	if err := writeUARTMessage(s.usock, ble.TypeVehicleState, ble.TypeVehicleStateState, uint16(state)); err != nil {
 		return fmt.Errorf("failed to send vehicle state: %v", err)
@@ -349,7 +407,7 @@ func (s *Service) UpdateSeatboxLock(stateStr string) error {
 
 // UpdateHandlebarLock sends the current handlebar lock state to nRF52
 func (s *Service) UpdateHandlebarLock(stateStr string) error {
-	var stateInt uint16 = 0 // Default to 0 (locked)
+	var stateInt uint16 // 0 is locked
 
 	switch stateStr {
 	case "locked":
@@ -410,9 +468,27 @@ func (s *Service) UpdateFirmwareVersion(version string) error {
 	return nil
 }
 
+// pushMDBVersion publishes the MDB version to the nRF, which exposes it as
+// the iMX Software Version characteristic. version:mdb is version-service's
+// mirror of /etc/os-release.
+func (s *Service) pushMDBVersion() error {
+	fields, err := s.ipc.HGetAll(KeyMDBVersion)
+	if err != nil {
+		return fmt.Errorf("failed to read version:mdb: %v", err)
+	}
+	version := fields["version"]
+	if version == "" {
+		version = fields["version_id"]
+	}
+	if version == "" {
+		return fmt.Errorf("version:mdb carries no version")
+	}
+	return s.UpdateFirmwareVersion(version)
+}
+
 // UpdateBatteryActiveStatus sends the battery active status to nRF52
 func (s *Service) UpdateBatteryActiveStatus(slot int, stateStr string) error {
-	var baseSubType ble.SubType = ble.TypeBatterySlot0State
+	baseSubType := ble.TypeBatterySlot0State
 	if slot == 1 {
 		baseSubType = ble.TypeBatterySlot1State
 	}
@@ -433,7 +509,7 @@ func (s *Service) UpdateBatteryActiveStatus(slot int, stateStr string) error {
 
 // UpdateBatteryPresentStatus sends the battery presence status to nRF52
 func (s *Service) UpdateBatteryPresentStatus(slot int, presentStr string) error {
-	var baseSubType ble.SubType = ble.TypeBatterySlot0Presence
+	baseSubType := ble.TypeBatterySlot0Presence
 	if slot == 1 {
 		baseSubType = ble.TypeBatterySlot1Presence
 	}
@@ -466,7 +542,7 @@ func (s *Service) UpdateBatteryPresentStatus(slot int, presentStr string) error 
 
 // UpdateBatteryCycleCount sends the battery cycle count to nRF52
 func (s *Service) UpdateBatteryCycleCount(slot int, cyclesStr string) error {
-	var baseSubType ble.SubType = ble.TypeBatterySlot0CycleCount
+	baseSubType := ble.TypeBatterySlot0CycleCount
 	if slot == 1 {
 		baseSubType = ble.TypeBatterySlot1CycleCount
 	}
@@ -489,7 +565,7 @@ func (s *Service) UpdateBatteryCycleCount(slot int, cyclesStr string) error {
 
 // UpdateBatteryRemainingCharge sends the battery remaining charge to nRF52
 func (s *Service) UpdateBatteryRemainingCharge(slot int, chargeStr string) error {
-	var baseSubType ble.SubType = ble.TypeBatterySlot0Charge
+	baseSubType := ble.TypeBatterySlot0Charge
 	if slot == 1 {
 		baseSubType = ble.TypeBatterySlot1Charge
 	}
@@ -531,6 +607,9 @@ func (s *Service) UpdatePowerManagementState(stateStr string) error {
 	case "hibernating-timer":
 		stateInt = 2
 		s.log.Debugf(" hibernating-timer state detected, sending as hibernating (2) to nRF.")
+	case "hibernating-for":
+		stateInt = 2
+		s.log.Debugf(" hibernating-for state detected, sending as hibernating (2) to nRF.")
 	case "hibernating-l2":
 		stateInt = 2 // Send base state
 	case "suspending-imminent":
@@ -543,6 +622,9 @@ func (s *Service) UpdatePowerManagementState(stateStr string) error {
 	case "hibernating-timer-imminent":
 		stateInt = 4
 		s.log.Debugf(" hibernating-timer-imminent state detected, sending as hibernating-imminent (4) to nRF.")
+	case "hibernating-for-imminent":
+		stateInt = 4
+		s.log.Debugf(" hibernating-for-imminent state detected, sending as hibernating-imminent (4) to nRF.")
 	case "reboot":
 		stateInt = 5
 	case "reboot-imminent":
@@ -551,7 +633,7 @@ func (s *Service) UpdatePowerManagementState(stateStr string) error {
 	case "suspending-pending":
 		stateInt = 3
 		s.log.Debugf(" %s state detected, sending suspending-imminent to nRF for user feedback.", stateStr)
-	case "hibernating-pending", "hibernating-manual-pending", "hibernating-timer-pending":
+	case "hibernating-pending", "hibernating-manual-pending", "hibernating-timer-pending", "hibernating-for-pending":
 		stateInt = 4
 		s.log.Debugf(" %s state detected, sending hibernating-imminent to nRF for user feedback.", stateStr)
 	case "reboot-pending":
@@ -593,6 +675,14 @@ func (s *Service) UpdatePowerManagementState(stateStr string) error {
 		} else {
 			s.log.Infof("Synced data stream on running")
 		}
+		// After a resume — or a suspend aborted after the quiesce ACK — the
+		// link sits at the boot baud rate from the suspend downshift. Both
+		// sides are awake again (the running state above unsilences the nRF),
+		// so renegotiate the fast link. Collapses to a no-op when already
+		// fast, negotiating, or during DFU.
+		if s.link != nil && s.link.CurrentBaud() == linkBaudDefault {
+			s.link.StartNegotiation()
+		}
 	}
 
 	// Handle hibernation level separately if needed
@@ -607,7 +697,7 @@ func (s *Service) UpdatePowerManagementState(stateStr string) error {
 	}
 
 	// Handle hibernation commands to nRF chip
-	if stateStr == "hibernating" || stateStr == "hibernating-manual" || stateStr == "hibernating-timer" {
+	if stateStr == "hibernating" || stateStr == "hibernating-manual" || stateStr == "hibernating-timer" || stateStr == "hibernating-for" {
 		// Disable data streaming before hibernation to prevent automatic wake-up
 		if err := writeUARTMessage(s.usock, ble.TypeDataStream, ble.TypeDataStreamEnable, 0); err != nil {
 			s.log.Warnf(" failed to disable data stream before hibernation: %v", err)
@@ -624,5 +714,17 @@ func (s *Service) UpdatePowerManagementState(stateStr string) error {
 		}
 	}
 
+	return nil
+}
+
+// SetWakeTimer programs the nRF52 to wake the iMX6 after the given number of
+// seconds. Pass 0 to disarm any pending wake timer. The nRF52 will send back
+// an ACK over UART (handled in handlePowerManagementMessage), which flips the
+// power-manager:wake-timer-armed hash field that pm-service waits on.
+func (s *Service) SetWakeTimer(seconds uint32) error {
+	if err := writeUARTMessage32(s.usock, ble.TypePowerManagement, ble.TypePowerManagementWakeTimerSet, int32(seconds)); err != nil {
+		return fmt.Errorf("failed to send wake-timer-set: %w", err)
+	}
+	s.log.Infof("Sent wake-timer-set to nRF: %d seconds", seconds)
 	return nil
 }

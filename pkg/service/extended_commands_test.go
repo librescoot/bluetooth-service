@@ -1,0 +1,449 @@
+package service
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"log"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/fxamacker/cbor/v2"
+	"github.com/librescoot/bluetooth-service/pkg/ble"
+	"github.com/librescoot/bluetooth-service/pkg/logger"
+	"github.com/librescoot/bluetooth-service/pkg/usock"
+)
+
+func TestExtendedPayloadsAreRedactedFromLogs(t *testing.T) {
+	var output bytes.Buffer
+	service := &Service{
+		usock: &mockUSOCK{},
+		log:   logger.NewLogger(log.New(&output, "", 0), logger.LogLevelDebug),
+	}
+	const secret = "PAIRING-CAPABILITY-SECRET"
+	payload, err := cbor.Marshal(map[uint16]map[uint16]string{
+		uint16(ble.TypeExtended): {
+			uint16(ble.TypeExtendedCommand): "cloud-pairing:show:" + secret,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.HandleUSockMessage(byte(uint16(ble.TypeExtended)&0xff), &usock.Payload{Data: payload})
+	service.sendExtendedResponse("cloud-pairing:code:" + secret)
+
+	logs := output.String()
+	if strings.Contains(logs, secret) {
+		t.Fatalf("extended payload leaked into logs: %s", logs)
+	}
+	if !strings.Contains(logs, "Received extended command category: cloud-pairing") || !strings.Contains(logs, "Sent extended response category: cloud-pairing") {
+		t.Fatalf("logs do not retain safe command categories: %s", logs)
+	}
+}
+
+// timedatectl set-time interprets its argument in the system-local timezone.
+// systemTimeArg must therefore format in local time so the arg round-trips
+// back to the intended instant. The old UTC formatting set the clock off by
+// the local UTC offset whenever local != UTC.
+func TestSystemTimeArgUsesLocalZone(t *testing.T) {
+	berlin, err := time.LoadLocation("Europe/Berlin")
+	if err != nil {
+		t.Skipf("tzdata unavailable: %v", err)
+	}
+	orig := time.Local
+	time.Local = berlin
+	defer func() { time.Local = orig }()
+
+	// 2024-07-01 12:00:00 UTC == 14:00 CEST (+02:00).
+	const epoch int64 = 1719835200
+
+	arg := systemTimeArg(epoch)
+	if arg != "2024-07-01 14:00:00" {
+		t.Errorf("systemTimeArg = %q, want local-zone %q", arg, "2024-07-01 14:00:00")
+	}
+
+	// Mimic timedatectl: parse the arg back in the local zone; it must equal
+	// the original instant.
+	parsed, err := time.ParseInLocation("2006-01-02 15:04:05", arg, time.Local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !parsed.Equal(time.Unix(epoch, 0)) {
+		t.Errorf("round-trip = %v, want %v", parsed.UTC(), time.Unix(epoch, 0).UTC())
+	}
+}
+
+func TestTimeSetUsesInjectedClockAndSeedsNRF(t *testing.T) {
+	mock := &mockUSOCK{}
+	calls := 0
+	s := &Service{
+		usock:       mock,
+		log:         logger.NewLogger(nil, logger.LogLevelNone),
+		nrfTimeNow:  func() time.Time { return time.Unix(testNow, 0) },
+		clockSetter: func(epoch int64) error { calls++; return nil },
+	}
+	s.handleTimeCommand("set 1735689600")
+	if calls != 1 {
+		t.Fatalf("clock setter calls = %d, want 1", calls)
+	}
+	if mock.messageCount() < 1 || mock.messages[0].frameID != byte(uint16(ble.TypeRTC)&0xff) {
+		t.Fatalf("trusted time command did not seed nRF RTC: %#v", mock.messages)
+	}
+}
+
+func TestLegacyBLETimeSetsAndSeedsNRF(t *testing.T) {
+	mock := &mockUSOCK{}
+	calls := 0
+	s := &Service{
+		usock:       mock,
+		log:         logger.NewLogger(nil, logger.LogLevelNone),
+		nrfTimeNow:  func() time.Time { return time.Unix(testNow, 0) },
+		clockSetter: func(epoch int64) error { calls++; return nil },
+	}
+	s.handleScooterInfoMessage(
+		ble.TypeScooterInfo,
+		uint16(ble.TypeScooterInfo)+uint16(ble.TypeSystemTime),
+		"1735689600",
+	)
+	if calls != 1 {
+		t.Fatalf("clock setter calls = %d, want 1", calls)
+	}
+	if mock.messageCount() != 1 || mock.messages[0].frameID != byte(uint16(ble.TypeRTC)&0xff) {
+		t.Fatalf("BLE time did not seed nRF RTC: %#v", mock.messages)
+	}
+}
+
+func TestTimeSetFailureDoesNotSeedNRF(t *testing.T) {
+	mock := &mockUSOCK{}
+	s := &Service{
+		usock:       mock,
+		log:         logger.NewLogger(nil, logger.LogLevelNone),
+		nrfTimeNow:  func() time.Time { return time.Unix(testNow, 0) },
+		clockSetter: func(int64) error { return errors.New("denied") },
+	}
+	s.handleTimeCommand("set 1735689600")
+	for _, message := range mock.messages {
+		if message.frameID == byte(uint16(ble.TypeRTC)&0xff) {
+			t.Fatal("failed explicit time set seeded nRF RTC")
+		}
+	}
+}
+
+func TestNrfBondDeleteSupported(t *testing.T) {
+	tests := []struct {
+		version string
+		want    bool
+	}{
+		{"v2.8.0-ls", true},
+		{"2.8.0", true},
+		{"v2.8.1-ls", true},
+		{"v2.9.0-ls", true},
+		{"v3.0.0-ls", true},
+		{"v2.8.0-3-gabc123-ls", true},
+		{"v2.7.2-ls", false},
+		{"v2.7.2-5-gdeadbee-ls", false},
+		{"v1.12.0", false},
+		{"", false},
+		{"not-a-version", false},
+	}
+
+	for _, tt := range tests {
+		if got := nrfBondDeleteSupported(tt.version); got != tt.want {
+			t.Errorf("nrfBondDeleteSupported(%q) = %v, want %v", tt.version, got, tt.want)
+		}
+	}
+}
+
+func TestForwardedKeycardCommand(t *testing.T) {
+	for _, command := range []string{"list", "count", "add:CAFE", "remove:CAFE", "phone:list", "phone:remove:0123456789ABCDEF0123456789ABCDEF", "phone:remove:0123456789ABCDEF0123456789ABCDEF:force", "alias:list", "master:list", "alias:set:card:04010203:U3BhcmU", "alias:clear:phone:0123456789ABCDEF0123456789ABCDEF"} {
+		if !forwardedKeycardCommand(command) {
+			t.Errorf("supported command %q rejected", command)
+		}
+	}
+	for _, command := range []string{"phone:reset", "phone:add:AA", "master:remove:AA", "reset", "alias:reset"} {
+		if forwardedKeycardCommand(command) {
+			t.Errorf("unsupported command %q forwarded", command)
+		}
+	}
+}
+
+func TestKeycardV2Capabilities(t *testing.T) {
+	s, _ := newVersionPushService(t)
+	if got := s.capabilityCommands("keycard"); len(got) != 10 || got[4] != "phone:list" || got[7] != "alias:list" {
+		t.Fatalf("keycard commands = %v", got)
+	}
+	if got := capabilityRegistryFor(false, false); !strings.Contains(got, ":keycard=2:") {
+		t.Fatalf("keycard v2 missing from registry: %q", got)
+	}
+}
+
+func TestKeycardCommandsForward(t *testing.T) {
+	s, mr := newVersionPushService(t)
+	for _, cmd := range []string{"phone:list", "list", "alias:list"} {
+		s.handleKeycardCommand(cmd)
+	}
+	commands, err := mr.List("scooter:keycard")
+	if err != nil || len(commands) != 3 || commands[0] != `"alias:list"` || commands[1] != `"list"` || commands[2] != `"phone:list"` {
+		t.Fatalf("forwarded commands = %v, %v", commands, err)
+	}
+}
+
+func TestServiceModeOverlayCommand(t *testing.T) {
+	tests := []struct {
+		command string
+		value   string
+		ok      bool
+	}{
+		{"on", "apply:service", true},
+		{" off ", "clear:service", true},
+		{"status", "", false},
+		{"", "", false},
+	}
+	for _, tt := range tests {
+		value, ok := serviceModeOverlayCommand(tt.command)
+		if value != tt.value || ok != tt.ok {
+			t.Errorf("serviceModeOverlayCommand(%q) = (%q, %v), want (%q, %v)", tt.command, value, ok, tt.value, tt.ok)
+		}
+	}
+}
+
+func TestDBCWaitReached(t *testing.T) {
+	tests := []struct {
+		name        string
+		command     string
+		power       string
+		ready       string
+		wantReached bool
+	}{
+		{"on and ready", "on-wait", "on", "true", true},
+		{"on but not ready", "on-wait", "on", "false", false},
+		{"stale ready while off", "on-wait", "off", "true", false},
+		{"off", "off-wait", "off", "false", true},
+		{"off ignores stale ready", "off-wait", "off", "true", true},
+		{"still on", "off-wait", "on", "false", false},
+		{"unknown command", "wait", "on", "true", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := dbcWaitReached(tt.command, tt.power, tt.ready); got != tt.wantReached {
+				t.Errorf("dbcWaitReached(%q, %q, %q) = %v, want %v", tt.command, tt.power, tt.ready, got, tt.wantReached)
+			}
+		})
+	}
+}
+
+// cap:ble is what the app probes before offering to clear the scooter side of a
+// bond, so it has to track the nRF rather than what this binary was built with.
+func TestLegacyCapabilityMapRetainsKeycardCategory(t *testing.T) {
+	for _, category := range []string{"nav", "keycard", "usb", "service-mode", "time", "config", "status", "alarm", "ltc", "ble", "pm", "dbc", "ota", "cap", "get", "set"} {
+		if _, ok := capabilityMap[category]; !ok {
+			t.Errorf("legacy capability category %q disappeared", category)
+		}
+	}
+	for _, category := range []string{"settings", "trip", "phone-key", "key-alias"} {
+		if _, ok := capabilityMap[category]; ok {
+			t.Errorf("cap:%s unexpectedly changed the deployed cap:list contract", category)
+		}
+	}
+}
+
+func TestTripCapabilityPromotesCurrentSchemaForGenericSettings(t *testing.T) {
+	staleSchema := map[string]settingSchema{
+		"legacy.setting": {Type: "bool"},
+	}
+	currentSchema := map[string]settingSchema{
+		"trip.counter-reset": {
+			Type: "enum",
+			Values: []settingSchemaValue{
+				{Value: "ride"}, {Value: "day"}, {Value: "battery"}, {Value: "manual"},
+			},
+		},
+	}
+	s := &Service{schemaCache: staleSchema}
+	cached, err := s.getSettingsSchema()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cached["trip.counter-reset"]; ok {
+		t.Fatal("test setup unexpectedly includes trip.counter-reset in stale schema")
+	}
+
+	// Capability discovery fetches the current schema independently of the
+	// generic command cache after settings-service has restarted.
+	tripSupported := tripCounterCapabilitySupported("1", "1", currentSchema)
+	if !tripSupported {
+		t.Fatal("current schema did not enable the trip capability")
+	}
+	s.promoteSettingsSchema(currentSchema)
+	if registry := capabilityRegistryFor(false, tripSupported); !strings.Contains(registry+":", ":trip:") {
+		t.Fatalf("cap:ext registry = %q, want trip capability", registry)
+	}
+
+	// Generic get and set both source their key and validation data from this
+	// shared cache, so they must see the schema that capability discovery used.
+	schema, err := s.getSettingsSchema()
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, ok := schema["trip.counter-reset"]
+	if !ok {
+		t.Fatal("generic get would reject trip.counter-reset as an unknown key")
+	}
+	if got := validateSettingValue(spec, "manual"); got != "" {
+		t.Fatalf("generic set validation = %q, want valid", got)
+	}
+}
+
+func TestGenericSetValidationSupportsTripExpungeFormat(t *testing.T) {
+	key, value, ok := splitSetPayload("trip.expunge:age:365d")
+	if !ok || key != "trip.expunge" || value != "age:365d" {
+		t.Fatalf("split generic set = (%q, %q, %v)", key, value, ok)
+	}
+
+	var schema map[string]settingSchema
+	if err := json.Unmarshal([]byte(`{"trip.expunge":{"type":"string","format":"trip-expunge"}}`), &schema); err != nil {
+		t.Fatal(err)
+	}
+	spec := schema["trip.expunge"]
+	if spec.Format != "trip-expunge" {
+		t.Fatalf("format = %q, want trip-expunge", spec.Format)
+	}
+
+	for _, value := range []string{
+		"never",
+		"age:1ns",
+		"age:1us",
+		"age:1.5ms",
+		"age:1h30m",
+		"age:1d",
+		"age:106751d",
+		"count:0",
+		"count:9223372036854775807",
+		"size:0",
+		"size:9223372036854775807",
+	} {
+		if got := validateSettingValue(spec, value); got != "" {
+			t.Errorf("validateSettingValue(%q) = %q, want valid", value, got)
+		}
+	}
+
+	for _, value := range []string{
+		"age:0",
+		"age:0ns",
+		"age:0.5ns",
+		"age:.5us",
+		"age:1.s",
+		"age:1µs",
+		"age:1μs",
+		"age:106752d",
+		"age:2562047h47m16.854775808s",
+		"count:01",
+		"count:+1",
+		"count:9223372036854775808",
+		"size:-1",
+		"size:9223372036854775808",
+		"never ",
+		"age: 1h",
+		"age:1h ",
+		"age:1h\u00a0",
+		"count: 1",
+		"size:1 ",
+		"",
+		"age:0s",
+		"age:0d",
+		"age:+1h",
+		"age:-1h",
+		"age:01d",
+		"age:01ns",
+		"age:1d1h",
+		"age:18446744073709551616d",
+		"age:1D",
+		"age:1day",
+		"age:1htrailing",
+		"age:999999999999999999999h",
+		"count:-1",
+		"count:18446744073709551616",
+		"size:1.0",
+		"size:01",
+		"size:18446744073709551616",
+		"unknown:1",
+	} {
+		if got := validateSettingValue(spec, value); got != "invalid trip expunge" {
+			t.Errorf("validateSettingValue(%q) = %q, want invalid trip expunge", value, got)
+		}
+	}
+
+	if got := validateSettingValue(settingSchema{Type: "future-type"}, "future-value"); got != "" {
+		t.Fatalf("unknown type lost compatibility: %q", got)
+	}
+}
+
+func TestCapabilityCommandsForBLETracksFirmware(t *testing.T) {
+	supported := capabilityCommandsFor("ble", func() bool { return true })
+	if len(supported) != 1 || supported[0] != "forget" {
+		t.Errorf("ble capabilities on new firmware = %v, want [forget]", supported)
+	}
+
+	unsupported := capabilityCommandsFor("ble", func() bool { return false })
+	if len(unsupported) != 0 {
+		t.Errorf("ble capabilities on old firmware = %v, want none", unsupported)
+	}
+
+	// Other categories are fixed at build time and must not consult the nRF.
+	nav := capabilityCommandsFor("nav", func() bool {
+		t.Error("nav capabilities consulted the nRF firmware version")
+		return false
+	})
+	if len(nav) != len(capabilityMap["nav"]) {
+		t.Errorf("nav capabilities = %v, want %v", nav, capabilityMap["nav"])
+	}
+
+	dbc := capabilityCommandsFor("dbc", func() bool {
+		t.Error("dbc capabilities consulted the nRF firmware version")
+		return false
+	})
+	if len(dbc) != 5 {
+		t.Errorf("dbc capabilities = %v, want five commands", dbc)
+	}
+}
+
+// parseNavStop is the BLE side of a multi-stop plan. One stop per command,
+// because the extended command is capped at 100 bytes.
+func TestParseNavStop(t *testing.T) {
+	tests := []struct {
+		name    string
+		entry   string
+		wantErr bool
+		want    navStop
+	}{
+		{name: "coordinates and name", entry: "52.51,13.41,Home", want: navStop{52.51, 13.41, "Home"}},
+		{name: "coordinates only with whitespace", entry: " 52.51 , 13.41 ", want: navStop{52.51, 13.41, ""}},
+		{name: "name may contain a comma", entry: "52.51,13.41,Home, sweet home",
+			want: navStop{52.51, 13.41, "Home, sweet home"}},
+		{name: "missing longitude", entry: "52.51", wantErr: true},
+		{name: "non-numeric", entry: "north,13.41", wantErr: true},
+		{name: "out of range", entry: "91,13.41", wantErr: true},
+		{name: "origin reserved", entry: "0,0", wantErr: true},
+		{name: "empty", entry: "", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseNavStop(tt.entry)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected an error, got %+v", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("stop = %+v want %+v", got, tt.want)
+			}
+		})
+	}
+}

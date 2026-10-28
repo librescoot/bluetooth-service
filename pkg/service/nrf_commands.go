@@ -21,6 +21,9 @@ const nrfHandshakeTimeout = 2 * time.Second
 // failed:reconnect as appropriate. Late-arriving versions clear the fault
 // via handleBLEVersionMessage, so a slow handshake self-heals.
 func (s *Service) InitializeNRF52() error {
+	s.nrfInitMu.Lock()
+	defer s.nrfInitMu.Unlock()
+	s.invalidateNRFTimeRequest()
 	s.log.Infof("Starting nRF52 initialization...")
 
 	// Drain any stale version signal from a previous handshake. The buffered
@@ -39,15 +42,23 @@ func (s *Service) InitializeNRF52() error {
 	}
 	time.Sleep(50 * time.Millisecond)
 
-	// 2. Request BLE firmware version
-	if err := writeUARTMessage(s.usock, ble.TypeBLEVersion, ble.TypeBLEVersionString, 0); err != nil {
+	// 2. Request the firmware version and negotiate optional host capabilities.
+	// Firmware without HOST_SESSION support ignores the additional parameter and
+	// still returns its version string.
+	if err := s.negotiateHostSession(); err != nil {
 		s.log.Warnf(" failed to request BLE firmware version: %v", err)
 	} else {
 		s.log.Debugf("Sent Request BLE Firmware Version command")
 	}
 	time.Sleep(50 * time.Millisecond)
 
-	// 3. Request BLE MAC address
+	// 3. Publish the MDB version; the nRF does not re-request it after a restart.
+	if err := s.pushMDBVersion(); err != nil {
+		s.log.Warnf(" failed to send MDB firmware version: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	// 4. Request BLE MAC address
 	if err := writeUARTMessage(s.usock, ble.TypeBLEParam, ble.TypeBLEParamMACAddress, 0); err != nil {
 		s.log.Warnf(" failed to request BLE MAC address: %v", err)
 	} else {
@@ -55,7 +66,7 @@ func (s *Service) InitializeNRF52() error {
 	}
 	time.Sleep(50 * time.Millisecond)
 
-	// 4. Enable data streaming
+	// 5. Enable data streaming
 	if err := writeUARTMessage(s.usock, ble.TypeDataStream, ble.TypeDataStreamEnable, 1); err != nil {
 		s.log.Warnf(" failed to enable data streaming: %v", err)
 	} else {
@@ -63,7 +74,7 @@ func (s *Service) InitializeNRF52() error {
 	}
 	time.Sleep(50 * time.Millisecond)
 
-	// 5. Sync data stream
+	// 6. Sync data stream
 	if err := writeUARTMessage(s.usock, ble.TypeDataStream, ble.TypeDataStreamSync, 1); err != nil {
 		s.log.Warnf(" Failed to sync data stream: %v", err)
 	} else {
@@ -71,7 +82,7 @@ func (s *Service) InitializeNRF52() error {
 	}
 	time.Sleep(50 * time.Millisecond)
 
-	// 6. Start advertising (No Whitelist)
+	// 7. Start advertising (No Whitelist)
 	if err := writeUARTMessage(s.usock, ble.TypeBLECommand, ble.SubType(ble.BLECommandAdvRestartNoWhitelist), 0); err != nil {
 		s.log.Warnf(" failed to send command to restart advertising without whitelist: %v", err)
 	} else {
@@ -93,21 +104,41 @@ func (s *Service) InitializeNRF52() error {
 	}
 }
 
-// ShutdownNRF52 tells the nRF to stop its autonomous data stream before
-// bluetooth-service exits. Without this, a restart of bluetooth-service
-// leaves the stream running into nothing, and if the MDB suspends while
-// bluetooth-service is down the UART frames will abort suspend.
+// ShutdownNRF52 leaves the persistent nRF UART quiet at its 115200 boot baud
+// before bluetooth-service exits. This allows either service implementation to
+// initialize immediately after a process restart or MDB soft reboot.
 func (s *Service) ShutdownNRF52() {
+	// Block new reconnects before waiting for the current lifecycle owner.
+	s.mu.Lock()
+	s.stopped = true
+	s.mu.Unlock()
+
+	s.reconnectMu.Lock()
+	defer s.reconnectMu.Unlock()
+
+	if s.link != nil {
+		// Stop keepalives and wait for any negotiation or fallback to release the
+		// UART, but retain direct access for the shutdown commands below.
+		s.link.Suspend()
+		defer s.link.Stop()
+	}
+
 	if s.usock == nil {
 		return
 	}
 	if err := writeUARTMessage(s.usock, ble.TypeDataStream, ble.TypeDataStreamEnable, 0); err != nil {
 		s.log.Warnf("failed to disable data stream on shutdown: %v", err)
-		return
+	} else {
+		s.log.Infof("Disabled nRF data stream on shutdown")
+		// Keep BAUD_SET behind the stream-disable frame on the wire.
+		time.Sleep(50 * time.Millisecond)
 	}
-	s.log.Infof("Disabled nRF data stream on shutdown")
-	// Give the nRF a moment to process before we close the serial port.
-	time.Sleep(50 * time.Millisecond)
+
+	if s.link != nil {
+		if err := s.link.EnsureLinkBaud(linkBaudDefault); err != nil {
+			s.log.Warnf("failed to restore nRF boot baud on shutdown: %v", err)
+		}
+	}
 }
 
 // RestartAdvertisingWithoutWhitelist sends command to restart advertising without whitelist
