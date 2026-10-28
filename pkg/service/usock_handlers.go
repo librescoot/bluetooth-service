@@ -441,7 +441,10 @@ func (s *Service) handleBLEVersionMessage(msgType ble.MessageType, absSubTypeKey
 			case s.versionRxCh <- struct{}{}:
 			default:
 			}
+			s.nrfVersionMu.Lock()
+			s.nrfVersionSeen = true
 			s.ClearFault(FaultNRFInit)
+			s.nrfVersionMu.Unlock()
 
 			// Write version to Redis immediately (before compatibility check)
 			if err := s.ipc.Hash(KeyFirmwareVersion).Set("nrf-fw-version", versionStr); err != nil {

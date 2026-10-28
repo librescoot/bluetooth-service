@@ -114,8 +114,10 @@ type Service struct {
 	schemaCache map[string]settingSchema
 
 	// Serialize init attempts so version replies cannot satisfy another attempt.
-	nrfInitMu   sync.Mutex
-	versionRxCh chan struct{}
+	nrfInitMu      sync.Mutex
+	nrfVersionMu   sync.Mutex
+	nrfVersionSeen bool
+	versionRxCh    chan struct{}
 
 	// UART link manager: baud negotiation with the nRF and automatic fallback
 	link *LinkManager
@@ -479,7 +481,11 @@ func (s *Service) startNormally() error {
 
 	s.log.Infof("Initializing communication with nRF52...")
 	if err := s.InitializeNRF52(); err != nil {
-		s.SetFault(FaultNRFInit, fmt.Sprintf("nRF52 initialization sequence failed: %v", err))
+		s.nrfVersionMu.Lock()
+		if !s.nrfVersionSeen {
+			s.SetFault(FaultNRFInit, fmt.Sprintf("nRF52 initialization sequence failed: %v", err))
+		}
+		s.nrfVersionMu.Unlock()
 		s.log.Errorf("Error during nRF52 initialization sequence: %v", err)
 	} else {
 		s.ClearFault(FaultNRFInit)

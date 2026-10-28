@@ -24,6 +24,9 @@ func (s *Service) InitializeNRF52() error {
 	s.nrfInitMu.Lock()
 	defer s.nrfInitMu.Unlock()
 	s.invalidateNRFTimeRequest()
+	s.nrfVersionMu.Lock()
+	s.nrfVersionSeen = false
+	s.nrfVersionMu.Unlock()
 	s.log.Infof("Starting nRF52 initialization...")
 
 	// Drain any stale version signal from a previous handshake. The buffered
