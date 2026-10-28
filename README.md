@@ -33,6 +33,19 @@ legacy `cap:list` retains the unversioned `keycard` category. Clients must
 keep an alias set command within the 100-byte extended-command limit: names
 are capped at 32 UTF-8 bytes and base64url-encoded without padding.
 
+`cap:ext` reports `sms=1` when the modem-service inbox projection is available.
+`sms:start` freezes an inbox snapshot and replies `s:s:<token>:<count>:<unread>`.
+For each zero-based index, send `sms:get:<token>:<index>:<offset>:<budget>`;
+offset is a base-36 byte offset and budget is the notification payload limit,
+from 20 to 244 bytes and no greater than ATT MTU minus three. A response
+`s:p:<token>:<offset>:<base64url>` carries unpadded encoded bytes; append them
+until `s:e:<token>:<offset>`, then decode the complete UTF-8 JSON message.
+An invalid or expired request returns `s:x:<reason>`. Sessions expire after
+five minutes of inactivity and are cleared on Bluetooth disconnect.
+`sms:read:<id>` and `sms:delete:<id>` queue the corresponding inbox action and
+reply `s:queued`; clients should refresh the inbox to observe the result.
+All bonded phones with extended-command access can use this interface.
+
 `cap:ext` reports `battery=1` for read-only pack identity queries.
 `battery:snapshot:0` and `battery:snapshot:1` return
 `battery:snapshot:<slot>:{"present":true,"serial_number":"..."}` from a single
