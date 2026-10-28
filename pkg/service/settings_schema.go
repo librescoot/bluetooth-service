@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/nyaruka/phonenumbers"
 )
 
 // settingSchema mirrors the subset of settings-service's schema that we need
@@ -79,6 +81,9 @@ func validateSettingValue(spec settingSchema, value string) string {
 	if spec.Format == "trip-expunge" && !validTripExpunge(value) {
 		return "invalid trip expunge"
 	}
+	if spec.Format == "sms-forward-destination" && !validSMSForwardDestination(value) {
+		return "invalid SMS forwarding destination"
+	}
 
 	switch spec.Type {
 	case "bool":
@@ -130,6 +135,30 @@ func validateSettingValue(spec settingSchema, value string) string {
 		// avoid blocking rollout of new types before this service updates.
 	}
 	return ""
+}
+
+func validSMSForwardDestination(value string) bool {
+	if value == "off" {
+		return true
+	}
+	if len(value) < 9 || len(value) > 16 || value[0] != '+' || value[1] < '1' || value[1] > '9' {
+		return false
+	}
+	for _, c := range value[2:] {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	number, err := phonenumbers.Parse(value, "")
+	if err != nil || !phonenumbers.IsValidNumber(number) {
+		return false
+	}
+	switch phonenumbers.GetNumberType(number) {
+	case phonenumbers.MOBILE, phonenumbers.FIXED_LINE, phonenumbers.FIXED_LINE_OR_MOBILE:
+		return true
+	default:
+		return false
+	}
 }
 
 func validTripExpunge(value string) bool {

@@ -758,6 +758,9 @@ func (s *Service) handleBLEParamMessage(msgType ble.MessageType, absSubTypeKey u
 			if statusStr, ok := convertToString(value); ok {
 				s.log.Debugf("Received BLE Status update: %s", statusStr)
 				s.noteTripResetBLEStatus(statusStr)
+				if statusStr == "disconnected" {
+					s.clearSMSSnapshot()
+				}
 				if statusStr == "disconnected" && s.files != nil {
 					s.files.Disconnect()
 				}
