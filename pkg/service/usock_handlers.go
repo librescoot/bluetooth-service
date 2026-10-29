@@ -760,6 +760,7 @@ func (s *Service) handleBLEParamMessage(msgType ble.MessageType, absSubTypeKey u
 				s.noteTripResetBLEStatus(statusStr)
 				if statusStr == "disconnected" {
 					s.clearSMSSnapshot()
+					s.clearHashSnapshots()
 				}
 				if statusStr == "disconnected" && s.files != nil {
 					s.files.Disconnect()

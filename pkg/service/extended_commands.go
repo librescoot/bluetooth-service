@@ -39,8 +39,8 @@ func (s *Service) handleExtendedCommandMessage(msgType ble.MessageType, absSubTy
 		s.handleTimeCommand(strings.TrimPrefix(cmdStr, "time:"))
 	} else if strings.HasPrefix(cmdStr, "config:") {
 		s.handleConfigCommand(strings.TrimPrefix(cmdStr, "config:"))
-	} else if strings.HasPrefix(cmdStr, "battery:") {
-		s.handleBatteryCommand(strings.TrimPrefix(cmdStr, "battery:"))
+	} else if strings.HasPrefix(cmdStr, "hash:") {
+		s.handleHashCommand(strings.TrimPrefix(cmdStr, "hash:"))
 	} else if strings.HasPrefix(cmdStr, "status:") {
 		s.handleStatusQuery(strings.TrimPrefix(cmdStr, "status:"))
 	} else if strings.HasPrefix(cmdStr, "alarm:") {
@@ -72,7 +72,7 @@ func (s *Service) handleExtendedCommandMessage(msgType ble.MessageType, absSubTy
 func extendedMessageCategory(message string) string {
 	category, _, _ := strings.Cut(message, ":")
 	switch category {
-	case "alarm", "battery", "ble", "cap", "cloud-pairing", "config", "dbc", "get", "keycard", "ltc", "nav", "pm", "service-mode", "set", "sms", "status", "time", "trip", "usb":
+	case "alarm", "ble", "cap", "cloud-pairing", "config", "dbc", "get", "hash", "keycard", "ltc", "nav", "pm", "r", "service-mode", "set", "sms", "status", "time", "trip", "usb":
 		return category
 	default:
 		return "other"
@@ -963,7 +963,7 @@ func (s *Service) handleServiceModeCommand(cmd string) {
 
 // capabilityMap maps each command category to its supported commands.
 var capabilityMap = map[string][]string{
-	"battery":      {"snapshot:0", "snapshot:1"},
+	"hash":         {"read:<id>:<budget>:<hash>/<fields>", "get:<id>:<offset>:<budget>"},
 	"nav":          {"dest", "clear", "route:add", "route:remove", "route:skip", "route:list", "route:clear", "fav:add", "fav:delete", "fav:navigate", "fav:list"},
 	"keycard":      {"list", "count", "add:<uid>", "remove:<uid>"},
 	"usb":          {"ums", "normal"},
@@ -1020,7 +1020,7 @@ func capabilityRegistryFor(bondDelete, tripCounter bool) string {
 	if tripCounter {
 		categories = append(categories, "trip")
 	}
-	categories = append(categories, "battery=1")
+	categories = append(categories, "hash=1")
 	return "cap:ext:" + strings.Join(categories, ":")
 }
 

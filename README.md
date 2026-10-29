@@ -46,14 +46,108 @@ five minutes of inactivity and are cleared on Bluetooth disconnect.
 reply `s:queued`; clients should refresh the inbox to observe the result.
 All bonded phones with extended-command access can use this interface.
 
-`cap:ext` reports `battery=1` for read-only pack identity queries.
-`battery:snapshot:0` and `battery:snapshot:1` return
-`battery:snapshot:<slot>:{"present":true,"serial_number":"..."}` from a single
-`battery:<slot>` hash read. Absent packs return `{"present":false}` without a
-retained serial. Missing presence or an invalid serial produces
-`battery:error:unavailable` or `battery:error:invalid-identity`. These are
-scooter-reported identities, potentially cached, not fresh pack measurements or
-ownership proof. The commands issue no battery or vehicle-state writes.
+### Read-only hash queries
+
+`cap:ext` reports `hash=1` for generic, allowlisted multi-field hash reads.
+`cap:hash` lists the request forms. All bonded phones with extended-command
+access can use this interface. The exact allowlist is `battery:0` and `battery:1`,
+with fields `present` and `serial-number` on each. Every other hash or field is
+denied. There are no writes, hash-wide reads, key discovery, or client-supplied
+Redis commands. Values and request payloads are not logged.
+
+Requests are at most 100 UTF-8 bytes, including `hash:`:
+
+```text
+hash:read:<id>:<budget>:<hash>/<field>[,<field>]
+hash:get:<id>:<offset>:<budget>
+```
+
+- `id` is exactly eight lowercase hexadecimal digits, excluding `00000000`.
+  Allocate a fresh ID for every logical read; never reuse an ID within a
+  connection, including after errors, completion, or expiry. On reconnect,
+  discard pending requests and queued notifications before starting new reads.
+- `budget` is a canonical decimal notification payload limit, 20..244 bytes,
+  no greater than negotiated ATT MTU minus three. The host has no MTU signal,
+  so the client supplies this limit on every request. All hash responses fit
+  it, including at ATT MTU 23. Malformed requests receive errors of at most
+  20 bytes, even when their budget is invalid.
+- Request one or two distinct fields, in the desired result order. Hashes and
+  fields are exact, case-sensitive names, without escaping or normalization.
+- `offset` and response lengths are canonical lowercase base-36 byte counts
+  (no sign or leading zeros except `0`). Offsets are limited to 4096.
+
+`read` freezes the selected fields atomically in one bounded, read-only Redis
+script: length checks followed by `HMGET`. It returns `r:s:<id>:<length>`.
+The frozen payload is a UTF-8 JSON array in requested-field order. Each element
+is the unchanged Redis string, or `null` for a missing field. An absent hash
+returns nulls; an empty string remains `""`. Values are limited to 256 UTF-8 bytes
+per field and encoded JSON to 4096 bytes. Invalid UTF-8 and oversized values
+fail the whole read. Presence, serial normalization, and handling cached values
+are client concerns; the service does not interpret them.
+
+`get` pulls bytes from that snapshot, using the same pull/base64url convention
+as SMS:
+
+```text
+r:p:<id>:<offset>:<base64url-without-padding>
+r:e:<id>:<offset>
+r:x:<id>:<code>
+```
+
+A data packet contains as many bytes as fit the budget. Base64 represents bytes,
+so UTF-8 characters may span packets. Match the active connection, ID, and
+requested offset before accepting a packet. Append decoded bytes, enforce the
+advertised length, and decode UTF-8/JSON only after the complete payload.
+Allow only one outstanding operation per ID. A repeated `get` before completion
+returns the same bytes for the same budget. To complete, request the exact
+advertised length; the service releases the snapshot when producing `r:e`.
+Further requests for a completed or expired ID return `session`, including an
+EOF retry after a lost notification. Start a fresh read with a new ID to recover.
+
+At most four snapshots, including pending reads, exist globally. A fifth read
+returns `busy`; active snapshots are never evicted. Each expires five minutes
+after creation, with no refresh on reads. Disconnect clears all snapshots and
+invalidates pending Redis reads. An active duplicate ID returns `id` without
+changing the snapshot. Clients must respect ID uniqueness; the service retains
+no unbounded history of completed IDs.
+
+At most four hash handlers may execute concurrently, including Redis reads and
+waiting for the shared paced notification sender. Excess requests are silently
+dropped, rather than queued for a `busy` response. Clients need a response timeout
+and a manual retry path. Retry an entire read with a fresh ID; a timed-out `get`
+may be retried at the same offset while its snapshot remains active. Disconnect
+does not reset handler admission while earlier handlers are still running.
+
+At MTU 23, two maximum-length control-character values encode to 3079 JSON bytes
+and require 1324 data packets. Including start and EOF, the 100 ms notification
+spacing alone takes 132.5 seconds. The five-minute snapshot lifetime accommodates
+this; a client with a shorter overall deadline may time out on such values.
+
+Error codes: `command` (malformed request), `denied` (hash or field not allowed),
+`redis` (backend unavailable or wrong hash type), `large` (size overflow),
+`utf8` (invalid value encoding), `busy` (snapshot limit), `session` (missing,
+pending, expired, or completed snapshot), `offset` (invalid/out-of-range byte
+offset), `budget` (invalid notification budget), and `id` (active duplicate).
+Errors echo a valid request ID; invalid/missing IDs use reserved `00000000`,
+which clients must never associate with an active request.
+
+Example with `battery:0[present] = "false"` and a missing `serial-number`, using
+MTU 247 (budget 244):
+
+```text
+hash:read:1234abcd:244:battery:0/present,serial-number
+r:s:1234abcd:e
+hash:get:1234abcd:0:244
+r:p:1234abcd:0:WyJmYWxzZSIsbnVsbF0
+hash:get:1234abcd:e:244
+r:e:1234abcd:e
+```
+
+The decoded payload is `["false",null]`. MTU-23, Unicode, escaped-value, and
+missing/empty golden exchanges are in
+`pkg/service/testdata/hash_contract_vectors.json`.
+
+### Alarm and power commands
 
 `cap:ext` reports `alarm=2` for the bundled alarm-service semantics: `alarm:stop`
 ends the episode with a five-minute cooldown; `alarm:disarm` holds disarmed until

@@ -91,6 +91,10 @@ type Service struct {
 	smsSnapshot   *smsSnapshot
 	smsGeneration uint64
 
+	hashMu        sync.Mutex
+	hashSnapshots map[string]*hashSnapshot
+	hashHandlers  atomic.Int32
+
 	dbcWaitMu     sync.Mutex
 	dbcWaitCancel chan struct{}
 
