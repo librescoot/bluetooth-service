@@ -579,3 +579,55 @@ func TestHashWorstCaseSmallMTUPacing(t *testing.T) {
 	}
 	t.Logf("MTU23 maximum escaped values: %d bytes, %d data packets, %v minimum pacing; TTL %v", len(assembled), packets, pacedDuration, hashSnapshotTTL)
 }
+
+func TestHashQueuedEOFDiscardedAfterReconnect(t *testing.T) {
+	s, _ := newVersionPushService(t)
+	if got := s.hashResponse("read:1234abcd:20:battery:0/present"); got != "r:s:1234abcd:6" {
+		t.Fatal(got)
+	}
+	s.extRespMu.Lock()
+	var unlock sync.Once
+	t.Cleanup(func() { unlock.Do(s.extRespMu.Unlock) })
+	done := make(chan struct{})
+	go func() {
+		s.handleHashCommand("get:1234abcd:6:20")
+		close(done)
+	}()
+	deadline := time.Now().Add(time.Second)
+	for {
+		s.hashMu.Lock()
+		removed := s.hashSnapshots["1234abcd"] == nil
+		s.hashMu.Unlock()
+		if removed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("EOF did not reach queued sender")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	s.handleBLEParamMessage(ble.TypeBLEParam, uint16(ble.TypeBLEStatus), "disconnected")
+	s.handleBLEParamMessage(ble.TypeBLEParam, uint16(ble.TypeBLEStatus), "connected")
+	unlock.Do(s.extRespMu.Unlock)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("queued EOF did not finish")
+	}
+	if s.usock.(*mockUSOCK).messageCount() != 0 || s.hashHandlers.Load() != 0 {
+		t.Fatal("stale EOF transmitted or handler admission leaked")
+	}
+	s.handleHashCommand("read:2345abcd:20:battery:0/present")
+	if got := routeResponse(t, s.usock.(*mockUSOCK)); got != "r:s:2345abcd:6" {
+		t.Fatal(got)
+	}
+}
+
+func TestHashStaleGenerationCannotAllocateSnapshot(t *testing.T) {
+	s, _ := newVersionPushService(t)
+	generation := s.hashConnectionGeneration()
+	s.clearHashSnapshots()
+	if got := s.hashResponseForGeneration("read:1234abcd:20:battery:0/present", generation); got != "" || len(s.hashSnapshots) != 0 {
+		t.Fatalf("stale read allocated snapshot or responded: %q", got)
+	}
+}

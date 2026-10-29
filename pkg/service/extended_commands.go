@@ -95,10 +95,18 @@ func (s *Service) sendExtendedResponse(response string) {
 	s.extRespMu.Lock()
 	defer s.extRespMu.Unlock()
 
+	s.waitExtendedResponseInterval()
+	s.writeExtendedResponse(response)
+}
+
+// The caller holds extRespMu across pacing and transmission.
+func (s *Service) waitExtendedResponseInterval() {
 	if elapsed := time.Since(s.lastExtRespTime); elapsed < extRespMinInterval {
 		time.Sleep(extRespMinInterval - elapsed)
 	}
+}
 
+func (s *Service) writeExtendedResponse(response string) {
 	if err := writeUARTMessageString(s.usock, ble.TypeExtended, ble.TypeExtendedResponse, response); err != nil {
 		s.log.Errorf("Failed to send extended response: %v", err)
 	} else {

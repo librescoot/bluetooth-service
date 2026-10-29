@@ -60,7 +60,7 @@ type Stats struct {
 }
 
 type USOCK struct {
-	port         *serial.Port
+	port         io.ReadWriteCloser
 	handler      func(*Payload)
 	errorHandler func(error)
 	log          *logger.Logger
@@ -195,7 +195,11 @@ func (u *USOCK) WriteWithFrameID(frameID byte, data []byte) error {
 	u.log.Debugf("TX Frame: ID=0x%02x, Len=%d, HeaderCRC=0x%04x, PayloadCRC=0x%04x",
 		frame.ID, frame.PayloadLen, frame.HeaderCRC, frame.PayloadCRC)
 
-	u.log.Debugf("TX Payload: %s", hex.EncodeToString(frame.Payload))
+	// Extended commands/responses share frame ID 0x00 with other services.
+	// Redact the whole shared ID so malformed CBOR cannot bypass redaction.
+	if frame.ID != 0x00 {
+		u.log.Debugf("TX Payload: %s", hex.EncodeToString(frame.Payload))
+	}
 
 	completeFrame := make([]byte, 0, 7+len(frame.Payload)+2)
 
@@ -207,7 +211,9 @@ func (u *USOCK) WriteWithFrameID(frameID byte, data []byte) error {
 
 	completeFrame = append(completeFrame, byte(frame.PayloadCRC&0xFF), byte((frame.PayloadCRC>>8)&0xFF))
 
-	u.log.Debugf("TX Complete Frame: %s", hex.EncodeToString(completeFrame))
+	if frame.ID != 0x00 {
+		u.log.Debugf("TX Complete Frame: %s", hex.EncodeToString(completeFrame))
+	}
 
 	if _, err := u.port.Write(completeFrame); err != nil {
 		return fmt.Errorf("failed to write frame: %v", err)
@@ -385,7 +391,9 @@ func (u *USOCK) processByte(b byte) {
 
 		u.log.Debugf("RX Frame: ID=0x%02x, Len=%d, HeaderCRC=0x%04x, PayloadCRC=0x%04x",
 			u.frame.ID, u.frame.PayloadLen, u.frame.HeaderCRC, u.frame.PayloadCRC)
-		u.log.Debugf("RX Payload: %s", hex.EncodeToString(u.frame.Payload))
+		if u.frame.ID != 0x00 {
+			u.log.Debugf("RX Payload: %s", hex.EncodeToString(u.frame.Payload))
+		}
 
 		// Create a copy of the payload to avoid data races
 		payload := make([]byte, len(u.frame.Payload))

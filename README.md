@@ -53,7 +53,9 @@ All bonded phones with extended-command access can use this interface.
 access can use this interface. The exact allowlist is `battery:0` and `battery:1`,
 with fields `present` and `serial-number` on each. Every other hash or field is
 denied. There are no writes, hash-wide reads, key discovery, or client-supplied
-Redis commands. Values and request payloads are not logged.
+Redis commands. Values and request payloads are not logged. Transport debug logs
+retain frame metadata but omit payload and full-frame dumps for the shared
+extended-command frame ID.
 
 Requests are at most 100 UTF-8 bytes, including `hash:`:
 
@@ -107,9 +109,9 @@ EOF retry after a lost notification. Start a fresh read with a new ID to recover
 At most four snapshots, including pending reads, exist globally. A fifth read
 returns `busy`; active snapshots are never evicted. Each expires five minutes
 after creation, with no refresh on reads. Disconnect clears all snapshots and
-invalidates pending Redis reads. An active duplicate ID returns `id` without
-changing the snapshot. Clients must respect ID uniqueness; the service retains
-no unbounded history of completed IDs.
+invalidates pending Redis reads and queued responses. An active duplicate ID
+returns `id` without changing the snapshot. Clients must respect ID uniqueness;
+the service retains no unbounded history of completed IDs.
 
 At most four hash handlers may execute concurrently, including Redis reads and
 waiting for the shared paced notification sender. Excess requests are silently

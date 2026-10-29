@@ -165,6 +165,7 @@ func (s *Service) readHashValues(req hashReadRequest) ([]byte, string) {
 func (s *Service) clearHashSnapshots() {
 	s.hashMu.Lock()
 	s.hashSnapshots = nil
+	s.hashGeneration++
 	s.hashMu.Unlock()
 }
 
@@ -176,18 +177,42 @@ func (s *Service) handleHashCommand(command string) {
 		return
 	}
 	defer s.hashHandlers.Add(-1)
-	if response := s.hashResponse(command); response != "" {
-		s.sendExtendedResponse(response)
+	generation := s.hashConnectionGeneration()
+	if response := s.hashResponseForGeneration(command, generation); response != "" {
+		s.extRespMu.Lock()
+		defer s.extRespMu.Unlock()
+		s.waitExtendedResponseInterval()
+		// Disconnect must invalidate queued responses, including EOF after its
+		// snapshot was removed. Keep the generation stable through transmission.
+		s.hashMu.Lock()
+		defer s.hashMu.Unlock()
+		if generation == s.hashGeneration {
+			s.writeExtendedResponse(response)
+		}
 	}
 }
 
+func (s *Service) hashConnectionGeneration() uint64 {
+	s.hashMu.Lock()
+	defer s.hashMu.Unlock()
+	return s.hashGeneration
+}
+
 func (s *Service) hashResponse(command string) string {
+	return s.hashResponseForGeneration(command, s.hashConnectionGeneration())
+}
+
+func (s *Service) hashResponseForGeneration(command string, generation uint64) string {
 	req, code := parseHashRequest(command)
 	failure := func(code string) string { return "r:x:" + req.id + ":" + code }
 	if code != "" {
 		return failure(code)
 	}
 	s.hashMu.Lock()
+	if generation != s.hashGeneration {
+		s.hashMu.Unlock()
+		return ""
+	}
 	now := time.Now()
 	for id, snapshot := range s.hashSnapshots {
 		if !now.Before(snapshot.until) {
