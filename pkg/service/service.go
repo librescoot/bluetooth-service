@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -98,6 +99,11 @@ type Service struct {
 
 	dbcWaitMu     sync.Mutex
 	dbcWaitCancel chan struct{}
+
+	pairingBusy   bool
+	pairingCancel context.CancelFunc
+	pairingWG     sync.WaitGroup
+	pairingRun    func(context.Context, string) ([]byte, error)
 
 	tripResetMu                   sync.Mutex
 	tripResetPending              map[string]chan tripCommandResult
@@ -382,6 +388,7 @@ func (s *Service) Stop() {
 	s.mu.Lock()
 	s.stopped = true
 	s.mu.Unlock()
+	s.stopPairingCommands()
 	if s.link != nil {
 		s.link.Stop()
 	}

@@ -33,6 +33,8 @@ legacy `cap:list` retains the unversioned `keycard` category. Clients must
 keep an alias set command within the 100-byte extended-command limit: names
 are capped at 32 UTF-8 bytes and base64url-encoded without padding.
 
+`cap:ext` reports `cloud-pairing=1` for explicit cloud account setup. Send `cloud-pairing:start`, `cloud-pairing:status` or `cloud-pairing:stop`; each replies asynchronously with `cloud-pairing:status:<JSON>` or `cloud-pairing:error:<reason>`. Poll `status` to obtain the short code, fixed Connect URL and expiry, and to observe completion. The `running` flag indicates whether the explicit worker is still active. `stop` requests a cooperative pause between steps; a configuration transaction already in progress finishes safely. All bonded phones with extended-command access can use this interface. The reply never includes the polling credential, QR capability or cloud credential; command and response payloads are not logged. The installed Connect CLI and systemd worker support are required.
+
 `cap:ext` reports `sms=1` when the modem-service inbox projection is available.
 `sms:start` freezes an inbox snapshot and replies `s:s:<token>:<count>:<unread>`.
 For each zero-based index, send `sms:get:<token>:<index>:<offset>:<budget>`;

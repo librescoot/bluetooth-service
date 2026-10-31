@@ -63,6 +63,8 @@ func (s *Service) handleExtendedCommandMessage(msgType ble.MessageType, absSubTy
 		s.handleSMSCommand(strings.TrimPrefix(cmdStr, "sms:"))
 	} else if strings.HasPrefix(cmdStr, "trip:") {
 		s.handleTripCommand(strings.TrimPrefix(cmdStr, "trip:"))
+	} else if strings.HasPrefix(cmdStr, "cloud-pairing:") {
+		s.handlePairingCommand(strings.TrimPrefix(cmdStr, "cloud-pairing:"))
 	} else {
 		s.log.Warnf("Unknown extended command category: %s", extendedMessageCategory(cmdStr))
 		s.sendExtendedResponse("error:unknown command")
@@ -971,23 +973,24 @@ func (s *Service) handleServiceModeCommand(cmd string) {
 
 // capabilityMap maps each command category to its supported commands.
 var capabilityMap = map[string][]string{
-	"hash":         {"read:<id>:<budget>:<hash>/<fields>", "get:<id>:<offset>:<budget>"},
-	"nav":          {"dest", "clear", "route:add", "route:remove", "route:skip", "route:list", "route:clear", "fav:add", "fav:delete", "fav:navigate", "fav:list"},
-	"keycard":      {"list", "count", "add:<uid>", "remove:<uid>"},
-	"usb":          {"ums", "normal"},
-	"service-mode": {"on", "off"},
-	"time":         {"set"},
-	"config":       {"apn", "hibernate-timer", "update-channel", "auto-standby-seconds"},
-	"status":       {"maps-available", "navigation-available", "version:mdb", "version:dbc"},
-	"alarm":        {"enable", "disable", "arm", "disarm", "start", "start:<seconds>", "stop"},
-	"ltc":          {"enable", "disable", "force-enable", "force-disable", "status"},
-	"ble":          {"forget"},
-	"pm":           {"hibernate-for <duration>", "hibernate-cancel"},
-	"dbc":          {"status", "on", "off", "on-wait", "off-wait"},
-	"ota":          {"transfer"}, // BLE OTA bundle transfer via the 0x0500 GATT service
-	"cap":          {"list", "<category>"},
-	"get":          {"<key>", "list", "list:<prefix>"},
-	"set":          {"<key>:<value>"},
+	"cloud-pairing": {"start", "status", "stop"},
+	"hash":          {"read:<id>:<budget>:<hash>/<fields>", "get:<id>:<offset>:<budget>"},
+	"nav":           {"dest", "clear", "route:add", "route:remove", "route:skip", "route:list", "route:clear", "fav:add", "fav:delete", "fav:navigate", "fav:list"},
+	"keycard":       {"list", "count", "add:<uid>", "remove:<uid>"},
+	"usb":           {"ums", "normal"},
+	"service-mode":  {"on", "off"},
+	"time":          {"set"},
+	"config":        {"apn", "hibernate-timer", "update-channel", "auto-standby-seconds"},
+	"status":        {"maps-available", "navigation-available", "version:mdb", "version:dbc"},
+	"alarm":         {"enable", "disable", "arm", "disarm", "start", "start:<seconds>", "stop"},
+	"ltc":           {"enable", "disable", "force-enable", "force-disable", "status"},
+	"ble":           {"forget"},
+	"pm":            {"hibernate-for <duration>", "hibernate-cancel"},
+	"dbc":           {"status", "on", "off", "on-wait", "off-wait"},
+	"ota":           {"transfer"}, // BLE OTA bundle transfer via the 0x0500 GATT service
+	"cap":           {"list", "<category>"},
+	"get":           {"<key>", "list", "list:<prefix>"},
+	"set":           {"<key>:<value>"},
 }
 
 func (s *Service) capabilityCommands(category string) []string {
@@ -1028,7 +1031,7 @@ func capabilityRegistryFor(bondDelete, tripCounter bool) string {
 	if tripCounter {
 		categories = append(categories, "trip")
 	}
-	categories = append(categories, "hash=1")
+	categories = append(categories, "hash=1", "cloud-pairing=1")
 	return "cap:ext:" + strings.Join(categories, ":")
 }
 
