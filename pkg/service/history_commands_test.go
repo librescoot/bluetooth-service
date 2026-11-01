@@ -36,6 +36,31 @@ func TestHistoryChunkAtSmallMTU(t *testing.T) {
 	}
 }
 
+func TestHistoryRPCDisconnectDropsLateResponse(t *testing.T) {
+	s, mr := newVersionPushService(t)
+	s.destIPC = s.ipc
+	mr.Set("trip:history:ready", "1")
+	release := make(chan struct{})
+	requests := startCallServer(t, mr, "trip:history:rpc", func(env destinationEnvelope) []byte {
+		<-release
+		return []byte(`{"ok":true,"payload":{"trips":[]}}`)
+	})
+	done := make(chan struct{})
+	request := base64.RawURLEncoding.EncodeToString([]byte(`{"limit":1}`))
+	go func() { s.handleHistoryCommand("start:l:" + request); close(done) }()
+	<-requests
+	s.clearHistorySnapshot()
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("request did not finish")
+	}
+	if s.historySnapshot != nil || len(s.usock.(*mockUSOCK).messages) != 0 {
+		t.Fatal("late response escaped disconnected session")
+	}
+}
+
 func TestHistoryRPCSnapshot(t *testing.T) {
 	s, mr := newVersionPushService(t)
 	s.destIPC = s.ipc

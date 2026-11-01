@@ -172,6 +172,21 @@ DBC power commands do not unlock the vehicle or change its state:
 
 Wait commands time out after 60 seconds. DBC power-off is rejected while a DBC update is active; no force-off command is exposed over BLE.
 
+## Trip history
+
+When `trip:history:ready` is present, `cap:ext` advertises `trip-history=1`.
+`trip:history:start:<kind>:<payload>` fetches one read-only page through the
+trip-service RPC, where `kind` is `l` (list), `d` (detail) or `p` (points),
+and `payload` is unpadded base64url-encoded JSON. The response
+`h:s:<token>:<length>` starts a bounded snapshot; length is base 36.
+
+Read the page with `trip:history:get:<token>:<offset>:<budget>`, using base-36
+byte offsets and an ATT response budget from 20 to 244. `h:p:<token>:<offset>:<data>`
+returns an unpadded base64url chunk. The snapshot expires after two idle minutes
+or a disconnect; a new request replaces it. `h:x:<reason>` reports errors.
+Clients must check the token and offset, bound the reconstructed page and retry
+from a new snapshot after reconnect. Trip counter commands are unchanged.
+
 ## File transfer
 
 `cap:ext` reports `files=1` when the connected controller supports the binary
