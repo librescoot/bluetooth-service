@@ -10,6 +10,7 @@ import (
 
 	"github.com/librescoot/bluetooth-service/pkg/logger"
 	"github.com/tarm/serial"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -45,9 +46,11 @@ type Frame struct {
 
 // Payload is the validated frame data delivered to the handler.
 type Payload struct {
-	ID   byte
-	Data []byte
-	Size int
+	ID            byte
+	Data          []byte
+	Size          int
+	ReceiptBootNS int64
+	ReceiptValid  bool
 }
 
 // Stats holds link-quality counters, cumulative since the port was opened.
@@ -60,17 +63,19 @@ type Stats struct {
 }
 
 type USOCK struct {
-	port         io.ReadWriteCloser
-	handler      func(*Payload)
-	errorHandler func(error)
-	log          *logger.Logger
-	stopChan     chan struct{}
-	stopOnce     sync.Once
-	wg           sync.WaitGroup
-	state        State
-	frame        Frame
-	buffer       []byte
-	mu           sync.Mutex
+	port          io.ReadWriteCloser
+	handler       func(*Payload)
+	errorHandler  func(error)
+	log           *logger.Logger
+	stopChan      chan struct{}
+	stopOnce      sync.Once
+	wg            sync.WaitGroup
+	state         State
+	frame         Frame
+	buffer        []byte
+	readBootNS    int64
+	readBootValid bool
+	mu            sync.Mutex
 
 	// frame IDs whose handler runs synchronously in the read loop instead of a
 	// fresh goroutine: per-frame goroutines do not preserve ordering, which the
@@ -299,6 +304,10 @@ func (u *USOCK) readLoop() {
 				continue
 			}
 
+			// Capture the read before frame parsing or asynchronous dispatch can delay it.
+			var ts unix.Timespec
+			u.readBootValid = unix.ClockGettime(unix.CLOCK_BOOTTIME, &ts) == nil
+			u.readBootNS = int64(ts.Sec)*int64(time.Second) + int64(ts.Nsec)
 			for i := 0; i < n; i++ {
 				u.processByte(buf[i])
 			}
@@ -404,9 +413,11 @@ func (u *USOCK) processByte(b byte) {
 		// keeps the historical one-goroutine-per-frame behavior.
 		if u.handler != nil {
 			p := &Payload{
-				ID:   u.frame.ID,
-				Data: payload,
-				Size: len(payload),
+				ReceiptBootNS: u.readBootNS,
+				ReceiptValid:  u.readBootValid,
+				ID:            u.frame.ID,
+				Data:          payload,
+				Size:          len(payload),
 			}
 			if u.syncFrameIDs[u.frame.ID] {
 				u.handler(p)

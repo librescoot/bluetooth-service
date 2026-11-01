@@ -1,36 +1,70 @@
 package service
 
 import (
-	"context"
+	"bufio"
 	"crypto/rand"
 	"encoding/binary"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/fxamacker/cbor/v2"
 	"github.com/librescoot/bluetooth-service/pkg/ble"
+	"golang.org/x/sys/unix"
 )
 
 const (
-	nrfTimeResponseWindow = 2 * time.Second
-	nrfTimePlausibility   = int64(1704067200) // 2024-01-01T00:00:00Z
+	nrfTimeResponseWindow       = 2 * time.Second
+	nrfTimePlausibility         = int64(1704067200)
+	nrfTimeMaximumHoldoverYears = 5
+	trustedTimePollInterval     = 5 * time.Minute
+	coordinatorTimeout          = time.Second
 )
 
-// nrfTimeMaximumHoldoverYears accommodates long parked intervals while
-// bounding corruption without deriving elapsed outage from oscillator drift.
-// AddDate preserves calendar boundaries.
-const nrfTimeMaximumHoldoverYears = 5
+type clockQuality struct {
+	BootID             string  `json:"boot_id"`
+	Generation         uint64  `json:"generation"`
+	NRFEligible        bool    `json:"nrf_eligible"`
+	NRFDeadlineBootNS  int64   `json:"nrf_deadline_boot_ns"`
+	External           bool    `json:"external"`
+	Source             string  `json:"source"`
+	AgeNS              int64   `json:"age_ns"`
+	ResidualSeconds    float64 `json:"residual_seconds"`
+	UncertaintySeconds float64 `json:"uncertainty_seconds"`
+}
+type clockRequest struct {
+	Op             string `json:"op"`
+	BootID         string `json:"boot_id,omitempty"`
+	Generation     uint64 `json:"generation,omitempty"`
+	Source         string `json:"source,omitempty"`
+	UTCUnixNS      int64  `json:"utc_unix_ns,omitempty"`
+	ReceiptBootNS  int64  `json:"receipt_boot_ns,omitempty"`
+	DeadlineBootNS int64  `json:"deadline_boot_ns,omitempty"`
+	SampleAgeNS    int64  `json:"sample_age_ns,omitempty"`
+	UncertaintyNS  int64  `json:"uncertainty_ns,omitempty"`
+}
+type clockRejection string
 
+func (e clockRejection) Error() string { return "coordinator rejected: " + string(e) }
+
+type clockResponse struct {
+	OK      bool         `json:"ok"`
+	Error   string       `json:"error"`
+	Quality clockQuality `json:"quality"`
+}
 type nrfTimeState struct {
-	pending    bool
-	generation uint64
-	token      uint64
-	deadline   time.Time
+	pending         bool
+	generation      uint64
+	token           uint64
+	start, deadline int64
+	bootID          string
+	clockGeneration uint64
 }
 
 func (s *Service) timeNow() time.Time {
@@ -39,14 +73,47 @@ func (s *Service) timeNow() time.Time {
 	}
 	return time.Now()
 }
-
-func (s *Service) nrfTimePlausible(epoch int64, now time.Time) bool {
-	if epoch < nrfTimePlausibility {
-		return false
+func (s *Service) boottime() (int64, error) {
+	if s.bootNow != nil {
+		return s.bootNow()
 	}
-	return !time.Unix(epoch, 0).After(now.AddDate(nrfTimeMaximumHoldoverYears, 0, 0))
+	var ts unix.Timespec
+	if err := unix.ClockGettime(unix.CLOCK_BOOTTIME, &ts); err != nil {
+		return 0, err
+	}
+	return int64(ts.Sec)*int64(time.Second) + int64(ts.Nsec), nil
 }
-
+func (s *Service) nrfTimePlausible(epoch int64, now time.Time) bool {
+	return epoch >= nrfTimePlausibility && epoch <= math.MaxInt64/int64(time.Second) && !time.Unix(epoch, 0).After(now.AddDate(nrfTimeMaximumHoldoverYears, 0, 0))
+}
+func (s *Service) clockCall(req clockRequest) (clockQuality, error) {
+	path := s.clockSocket
+	if path == "" {
+		path = "/run/clock-coordinator/control.sock"
+	}
+	c, err := net.DialTimeout("unix", path, coordinatorTimeout)
+	if err != nil {
+		return clockQuality{}, fmt.Errorf("coordinator unavailable: %w", err)
+	}
+	defer c.Close()
+	if err = c.SetDeadline(time.Now().Add(coordinatorTimeout)); err != nil {
+		return clockQuality{}, err
+	}
+	if err = json.NewEncoder(c).Encode(req); err != nil {
+		return clockQuality{}, err
+	}
+	var response clockResponse
+	if err = json.NewDecoder(bufio.NewReader(io.LimitReader(c, 4096))).Decode(&response); err != nil {
+		return clockQuality{}, fmt.Errorf("coordinator response: %w", err)
+	}
+	if !response.OK {
+		return response.Quality, clockRejection(response.Error)
+	}
+	if response.Quality.BootID == "" || response.Quality.Generation == 0 {
+		return clockQuality{}, fmt.Errorf("invalid coordinator identity")
+	}
+	return response.Quality, nil
+}
 func writeUARTMessageRTCGet(sock usockWriter, token uint64) error {
 	if sock == nil {
 		return fmt.Errorf("USOCK connection is not initialized")
@@ -91,113 +158,117 @@ func newNRFTimeToken() (uint64, error) {
 	return token, nil
 }
 
-// invalidateNRFTimeRequest prevents replies from a previous UART session from
-// being accepted while initialization is in progress.
 func (s *Service) invalidateNRFTimeRequest() {
 	s.nrfTimeMu.Lock()
+	defer s.nrfTimeMu.Unlock()
 	s.nrfTimeState.generation++
 	s.nrfTimeState.pending = false
 	s.nrfTimeState.token = 0
-	s.nrfTimeMu.Unlock()
 }
-
-// requestNRFTime probes the USOCK-only RTC without delaying initialization.
 func (s *Service) requestNRFTime() {
-	token, err := newNRFTimeToken()
-	if err != nil {
-		s.log.Warnf("nRF RTC unavailable: could not create request token: %v", err)
-		return
-	}
-
 	s.nrfTimeMu.Lock()
 	s.nrfTimeState.generation++
 	generation := s.nrfTimeState.generation
-	s.nrfTimeState.pending = true
-	s.nrfTimeState.token = token
-	s.nrfTimeState.deadline = s.timeNow().Add(nrfTimeResponseWindow)
+	s.nrfTimeState.pending = false
 	s.nrfTimeMu.Unlock()
-
-	if err := writeUARTMessageRTCGet(s.usock, token); err != nil {
-		s.nrfTimeMu.Lock()
-		if s.nrfTimeState.generation == generation {
-			s.nrfTimeState.pending = false
-			s.nrfTimeState.token = 0
-		}
-		s.nrfTimeMu.Unlock()
-		s.log.Warnf("nRF RTC unavailable: request failed: %v", err)
+	q, err := s.clockCall(clockRequest{Op: "status"})
+	if err != nil || !q.NRFEligible {
+		s.log.Infof("clock source=nrf decision=reject reason=unavailable_or_ineligible error=%v", err)
 		return
 	}
-	s.log.Infof("Requested nRF RTC restoration sample")
-	go func() {
-		time.Sleep(nrfTimeResponseWindow)
-		s.expireNRFTimeRequest(generation)
-	}()
+	token, err := newNRFTimeToken()
+	if err != nil {
+		s.log.Warnf("clock source=nrf decision=reject reason=token error=%v", err)
+		return
+	}
+	s.nrfTimeMu.Lock()
+	defer s.nrfTimeMu.Unlock()
+	if generation != s.nrfTimeState.generation {
+		return
+	}
+	start, err := s.boottime()
+	if err != nil || start >= q.NRFDeadlineBootNS {
+		s.log.Infof("clock source=nrf decision=reject reason=recovery_deadline")
+		return
+	}
+	deadline := start + int64(nrfTimeResponseWindow)
+	if q.NRFDeadlineBootNS < deadline {
+		deadline = q.NRFDeadlineBootNS
+	}
+	s.nrfTimeState = nrfTimeState{pending: true, generation: generation, token: token, start: start, deadline: deadline, bootID: q.BootID, clockGeneration: q.Generation}
+	if err = writeUARTMessageRTCGet(s.GetUSock(), token); err != nil {
+		s.nrfTimeState.pending = false
+		s.nrfTimeState.token = 0
+		s.log.Warnf("clock source=nrf decision=reject reason=uart error=%v", err)
+		return
+	}
+	go func() { time.Sleep(nrfTimeResponseWindow); s.expireNRFTimeRequest(generation) }()
 }
-
 func (s *Service) expireNRFTimeRequest(generation uint64) {
 	s.nrfTimeMu.Lock()
 	defer s.nrfTimeMu.Unlock()
-	if !s.nrfTimeState.pending || s.nrfTimeState.generation != generation {
-		return
+	if s.nrfTimeState.pending && s.nrfTimeState.generation == generation {
+		s.nrfTimeState.pending = false
+		s.nrfTimeState.token = 0
 	}
-	s.nrfTimeState.pending = false
-	s.nrfTimeState.token = 0
-	s.log.Infof("nRF RTC unavailable: no response (legacy firmware or invalid clock)")
 }
-
-func (s *Service) handleNRFTimeReply(params map[uint16]interface{}) {
-	receivedAt := s.timeNow()
+func (s *Service) handleNRFTimeReply(params map[uint16]interface{}, receipt int64, valid bool) {
 	getKey := uint16(ble.TypeRTC) + uint16(ble.TypeRTCGet)
 	tokenKey := uint16(ble.TypeRTC) + uint16(ble.TypeRTCToken)
 	value, hasValue := params[getKey]
 	token, hasToken := params[tokenKey].(uint64)
-	if len(params) != 2 || !hasValue || !hasToken {
-		s.log.Debugf("Ignored malformed nRF RTC reply")
+	if len(params) != 2 || !hasValue || !hasToken || !valid {
+		s.log.Infof("clock source=nrf decision=reject reason=malformed_or_no_receipt")
 		return
 	}
-
 	s.nrfTimeMu.Lock()
 	defer s.nrfTimeMu.Unlock()
-	if !s.nrfTimeState.pending || s.nrfTimeState.token != token {
-		s.log.Debugf("Ignored unsolicited, duplicate, or stale nRF RTC reply")
+	st := s.nrfTimeState
+	if !st.pending || st.token != token {
+		s.log.Infof("clock source=nrf decision=reject reason=stale_token")
 		return
 	}
-	deadline := s.nrfTimeState.deadline
 	s.nrfTimeState.pending = false
 	s.nrfTimeState.token = 0
-
-	if !s.timeNow().Before(deadline) {
-		s.log.Infof("nRF RTC sample rejected: response deadline expired")
+	nowBoot, err := s.boottime()
+	if err != nil || receipt < st.start || receipt >= st.deadline || nowBoot < receipt || nowBoot >= st.deadline {
+		s.log.Infof("clock source=nrf decision=reject reason=deadline")
 		return
 	}
-
 	epoch, ok := nrfTimeValue(value)
-	if !ok {
-		s.log.Warnf("nRF RTC sample rejected: invalid state")
+	if !ok || !s.nrfTimePlausible(epoch, s.timeNow()) {
+		s.log.Infof("clock source=nrf decision=reject reason=implausible")
 		return
 	}
-
-	now := s.timeNow()
-	if !s.nrfTimePlausible(epoch, now) {
-		s.log.Warnf("nRF RTC sample rejected: implausible epoch %d", epoch)
+	// The integer timestamp denotes a one-second interval, and sampling
+	// occurred during the UART round trip. Use both interval midpoints.
+	roundTrip := receipt - st.start
+	if roundTrip > int64(time.Second) {
+		s.log.Infof("clock source=nrf decision=reject reason=uart_uncertainty")
 		return
 	}
-	if epoch <= now.Unix() {
-		s.log.Infof("nRF RTC sample not applied: Linux clock is already current")
+	age := roundTrip / 2
+	offset := float64(epoch) + 0.5 + float64(age+nowBoot-receipt)/1e9 - float64(s.timeNow().UnixNano())/1e9
+	if offset <= 0 {
+		s.log.Infof("clock source=nrf decision=reject reason=not_newer age_ns=%d offset_s=%f", age+nowBoot-receipt, offset)
 		return
 	}
-	current, applied, err := s.setClockIfNewerBefore(epoch, receivedAt, deadline)
+	_, err = s.clockCall(clockRequest{Op: "submit", BootID: st.bootID, Generation: st.clockGeneration, Source: "nrf", UTCUnixNS: epoch*int64(time.Second) + int64(time.Second)/2, ReceiptBootNS: receipt, DeadlineBootNS: st.deadline, SampleAgeNS: age, UncertaintyNS: int64(time.Second)/2 + age})
+	if after, clockErr := s.boottime(); clockErr == nil && after >= nowBoot {
+		nowBoot = after
+		offset = float64(epoch) + 0.5 + float64(age+nowBoot-receipt)/1e9 - float64(s.timeNow().UnixNano())/1e9
+	}
 	if err != nil {
-		s.log.Errorf("nRF RTC restoration failed: %v", err)
+		decision := "unknown"
+		var rejection clockRejection
+		if errors.As(err, &rejection) {
+			decision = "reject"
+		}
+		s.log.Infof("clock source=nrf decision=%s reason=coordinator age_ns=%d offset_s=%f error=%v", decision, age+nowBoot-receipt, offset, err)
 		return
 	}
-	if !applied {
-		s.log.Infof("nRF RTC sample not applied: Linux clock is already current")
-		return
-	}
-	s.log.Infof("Restored Linux clock from nRF RTC: %d -> %d", current, epoch)
+	s.log.Infof("clock source=nrf decision=accepted age_ns=%d offset_s=%f", age+nowBoot-receipt, offset)
 }
-
 func nrfTimeValue(value interface{}) (int64, bool) {
 	switch v := value.(type) {
 	case uint64:
@@ -212,24 +283,17 @@ func nrfTimeValue(value interface{}) (int64, bool) {
 	return 0, false
 }
 
-// seedNRFTime copies a trusted Linux clock to the retained RTC.
 func (s *Service) seedNRFTime(epoch int64, source string) bool {
 	if !s.nrfTimePlausible(epoch, s.timeNow()) {
-		s.log.Warnf("nRF RTC seed rejected: Linux clock is implausible")
 		return false
 	}
-	if err := writeUARTMessage64(s.usock, ble.TypeRTC, ble.TypeRTCSet, uint64(epoch)); err != nil {
-		s.log.Warnf("nRF RTC seed failed: %v", err)
+	if err := writeUARTMessage64(s.GetUSock(), ble.TypeRTC, ble.TypeRTCSet, uint64(epoch)); err != nil {
+		s.log.Warnf("clock source=%s decision=seed_error error=%v", source, err)
 		return false
 	}
-	s.log.Infof("Seeded nRF RTC from %s: %d", source, epoch)
+	s.log.Infof("clock source=%s decision=seeded", source)
 	return true
 }
-
-const trustedTimePollInterval = 5 * time.Minute
-
-// StartTrustedTimeMonitor seeds the nRF only after a trusted source validates
-// the Linux clock. It is deliberately separate from startup restoration.
 func (s *Service) StartTrustedTimeMonitor() {
 	s.wg.Add(1)
 	go func() {
@@ -253,128 +317,68 @@ func (s *Service) StartTrustedTimeMonitor() {
 		}
 	}()
 }
-
 func (s *Service) syncTrustedTime() {
-	gpsSync := s.gpsClockSync()
-	ntpTrusted := s.ntpTrusted()
-
-	s.trustedTimeMu.Lock()
-	defer s.trustedTimeMu.Unlock()
-	if gpsSync != "" && gpsSync != s.lastGPSSync {
-		if s.seedNRFTime(s.timeNow().Unix(), "GPS-confirmed Linux clock") {
-			s.lastGPSSync = gpsSync
-		}
-		s.lastNTPTrusted = ntpTrusted
+	start, err := s.boottime()
+	if err != nil {
 		return
 	}
-	if ntpTrusted && !s.lastNTPTrusted {
-		s.lastNTPTrusted = s.seedNRFTime(s.timeNow().Unix(), "NTP-confirmed Linux clock")
+	q, err := s.clockCall(clockRequest{Op: "status"})
+	if err != nil {
+		s.log.Infof("clock source=unknown decision=seed_reject reason=coordinator error=%v", err)
 		return
 	}
-	s.lastNTPTrusted = ntpTrusted
+	now, err := s.boottime()
+	if err != nil || now < start {
+		return
+	}
+	elapsed := now - start
+	if q.AgeNS < 0 || q.AgeNS > int64(30*time.Second) || elapsed > int64(30*time.Second)-q.AgeNS {
+		s.log.Infof("clock source=%s decision=seed_reject reason=stale", q.Source)
+		return
+	}
+	age := q.AgeNS + elapsed
+	if !q.External || (q.Source != "ntp" && q.Source != "gps") || q.AgeNS < 0 || age > int64(30*time.Second) || math.IsNaN(q.ResidualSeconds) || math.IsNaN(q.UncertaintySeconds) || q.UncertaintySeconds < 0 || math.Abs(q.ResidualSeconds)+q.UncertaintySeconds > 1 {
+		s.log.Infof("clock source=%s decision=seed_reject reason=quality age_ns=%d offset_s=%f uncertainty_s=%f", q.Source, age, q.ResidualSeconds, q.UncertaintySeconds)
+		return
+	}
+	s.seedNRFTime(s.timeNow().Unix(), q.Source)
 }
-
-func (s *Service) gpsClockSync() string {
-	if s.trustedTimeGPS != nil {
-		return s.trustedTimeGPS()
-	}
-	if s.ipc == nil {
-		return ""
-	}
-	source, err := s.ipc.HGet("clock", "source")
-	if err != nil || source != "gps" {
-		return ""
-	}
-	syncedAt, err := s.ipc.HGet("clock", "synced-at")
-	if err != nil {
-		return ""
-	}
-	return syncedAt
-}
-
-func (s *Service) ntpTrusted() bool {
-	if s.trustedTimeNTP != nil {
-		return s.trustedTimeNTP()
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, "chronyc", "tracking").Output()
-	if err != nil {
-		return false
-	}
-	refID, leap := parseNTPTracking(string(out))
-	return leap == "Normal" && !pseudoNTPReference(refID)
-}
-
-func parseNTPTracking(out string) (refID, leap string) {
-	for _, line := range strings.Split(out, "\n") {
-		key, value, ok := strings.Cut(line, ":")
-		if !ok {
-			continue
-		}
-		switch strings.TrimSpace(key) {
-		case "Reference ID":
-			if fields := strings.Fields(strings.TrimSpace(value)); len(fields) > 0 {
-				refID = fields[0]
-			}
-		case "Leap status":
-			leap = strings.TrimSpace(value)
-		}
-	}
-	return refID, leap
-}
-
-func pseudoNTPReference(refID string) bool {
-	refID = strings.TrimSpace(refID)
-	if refID == "" {
-		return true
-	}
-	if strings.Contains(refID, ".") {
-		if ip := net.ParseIP(refID); ip != nil {
-			return ip.IsLoopback()
-		}
-	}
-	return strings.HasPrefix(refID, "7F")
-}
-
-func (s *Service) setClock(epoch int64) error {
-	s.clockMu.Lock()
-	defer s.clockMu.Unlock()
-	return s.setClockLocked(epoch)
-}
-
-func (s *Service) setClockIfNewerBefore(epoch int64, receivedAt, deadline time.Time) (current int64, applied bool, err error) {
-	s.clockMu.Lock()
-	defer s.clockMu.Unlock()
-	now := s.timeNow()
-	current = now.Unix()
-	if elapsed := now.Sub(receivedAt); elapsed > 0 {
-		epoch += int64(elapsed / time.Second)
-	}
-	if !now.Before(deadline) || epoch <= current {
-		return current, false, nil
-	}
-	if err := s.setClockLocked(epoch); err != nil {
-		return current, false, err
-	}
-	return current, true, nil
-}
-
-func (s *Service) setClockLocked(epoch int64) error {
-	if s.clockSetter != nil {
-		return s.clockSetter(epoch)
-	}
-	return s.setSystemTimeDirect(epoch)
-}
-
-func (s *Service) setSystemTime(timestampStr string) error {
+func (s *Service) setSystemTime(timestampStr string, receipt int64) error {
 	timestamp, err := strconv.ParseInt(strings.TrimSpace(timestampStr), 10, 64)
-	if err != nil {
-		return fmt.Errorf("invalid timestamp: %w", err)
+	if err != nil || timestamp <= 0 || timestamp > math.MaxInt64/int64(time.Second) {
+		return fmt.Errorf("invalid timestamp")
 	}
-	if err := s.setClock(timestamp); err != nil {
+	if receipt < 0 {
+		return fmt.Errorf("time receipt unavailable")
+	}
+	now, err := s.boottime()
+	if err != nil || now < receipt || now-receipt >= int64(30*time.Second) {
+		return fmt.Errorf("time sample expired")
+	}
+	q, err := s.clockCall(clockRequest{Op: "status"})
+	if err != nil {
 		return err
 	}
-	s.seedNRFTime(timestamp, "explicit Bluetooth time")
+	req := clockRequest{Op: "submit", BootID: q.BootID, Generation: q.Generation, Source: "user", UTCUnixNS: timestamp * int64(time.Second), ReceiptBootNS: receipt, DeadlineBootNS: receipt + int64(30*time.Second), UncertaintyNS: int64(time.Second)}
+	now, err = s.boottime()
+	if err != nil || now < receipt || now >= req.DeadlineBootNS {
+		return fmt.Errorf("time sample expired")
+	}
+	offset := float64(timestamp) + float64(now-receipt)/1e9 - float64(s.timeNow().UnixNano())/1e9
+	_, err = s.clockCall(req)
+	if after, clockErr := s.boottime(); clockErr == nil && after >= now {
+		now = after
+		offset = float64(timestamp) + float64(now-receipt)/1e9 - float64(s.timeNow().UnixNano())/1e9
+	}
+	if err != nil {
+		decision := "unknown"
+		var rejection clockRejection
+		if errors.As(err, &rejection) {
+			decision = "reject"
+		}
+		s.log.Infof("clock source=user decision=%s age_ns=%d offset_s=%f error=%v", decision, now-receipt, offset, err)
+		return err
+	}
+	s.log.Infof("clock source=user decision=accepted age_ns=%d offset_s=%f", now-receipt, offset)
 	return nil
 }

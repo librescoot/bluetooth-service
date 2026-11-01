@@ -52,17 +52,11 @@ type Service struct {
 	mu              sync.RWMutex
 	reconnectMu     sync.Mutex
 
-	clockSetter  func(int64) error
-	clockMu      sync.Mutex
 	nrfTimeNow   func() time.Time
+	bootNow      func() (int64, error)
+	clockSocket  string
 	nrfTimeMu    sync.Mutex
 	nrfTimeState nrfTimeState
-
-	trustedTimeMu  sync.Mutex
-	trustedTimeNTP func() bool
-	trustedTimeGPS func() string
-	lastNTPTrusted bool
-	lastGPSSync    string
 
 	// Track the most recent vehicle state string for diagnostic/log paths.
 	lastVehicleState string

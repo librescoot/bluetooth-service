@@ -2,7 +2,6 @@ package service
 
 import (
 	"fmt"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -14,7 +13,7 @@ import (
 
 // handleExtendedCommandMessage handles commands from the EXTENDED service (0x0400).
 // Commands arrive as strings from the phone app via nRF, prefixed by topic.
-func (s *Service) handleExtendedCommandMessage(msgType ble.MessageType, absSubTypeKey uint16, value interface{}) {
+func (s *Service) handleExtendedCommandMessage(msgType ble.MessageType, absSubTypeKey uint16, value interface{}, receipt int64) {
 	cmdStr, ok := value.(string)
 	if !ok {
 		if cmdBytes, ok := value.([]byte); ok {
@@ -36,7 +35,7 @@ func (s *Service) handleExtendedCommandMessage(msgType ble.MessageType, absSubTy
 	} else if strings.HasPrefix(cmdStr, "service-mode:") {
 		s.handleServiceModeCommand(strings.TrimPrefix(cmdStr, "service-mode:"))
 	} else if strings.HasPrefix(cmdStr, "time:") {
-		s.handleTimeCommand(strings.TrimPrefix(cmdStr, "time:"))
+		s.handleTimeCommand(strings.TrimPrefix(cmdStr, "time:"), receipt)
 	} else if strings.HasPrefix(cmdStr, "config:") {
 		s.handleConfigCommand(strings.TrimPrefix(cmdStr, "config:"))
 	} else if strings.HasPrefix(cmdStr, "hash:") {
@@ -674,10 +673,10 @@ func (s *Service) handleAlarmCommand(cmd string) {
 }
 
 // handleTimeCommand processes time-setting commands.
-func (s *Service) handleTimeCommand(cmd string) {
+func (s *Service) handleTimeCommand(cmd string, receipt int64) {
 	if strings.HasPrefix(cmd, "set ") {
 		timestamp := strings.TrimSpace(strings.TrimPrefix(cmd, "set "))
-		if err := s.setSystemTime(timestamp); err != nil {
+		if err := s.setSystemTime(timestamp, receipt); err != nil {
 			s.sendExtendedResponse(fmt.Sprintf("time:error:%v", err))
 			return
 		}
@@ -685,24 +684,6 @@ func (s *Service) handleTimeCommand(cmd string) {
 	} else {
 		s.sendExtendedResponse("time:error:unknown command")
 	}
-}
-
-// systemTimeArg formats a Unix timestamp for `timedatectl set-time`, which
-// interprets its argument in the system-local timezone. Formatting in local
-// time keeps the wall clock correct; formatting in UTC (as this used to) set
-// the clock off by the local offset, e.g. 2h behind in CEST.
-func systemTimeArg(timestamp int64) string {
-	return time.Unix(timestamp, 0).Format("2006-01-02 15:04:05")
-}
-
-func (s *Service) setSystemTimeDirect(timestamp int64) error {
-	t := time.Unix(timestamp, 0)
-	cmd := exec.Command("timedatectl", "set-time", systemTimeArg(timestamp))
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to set time: %w (%s)", err, strings.TrimSpace(string(out)))
-	}
-	s.log.Infof("System time set to %s", t.Format(time.RFC3339))
-	return nil
 }
 
 // handleConfigCommand processes configuration commands.

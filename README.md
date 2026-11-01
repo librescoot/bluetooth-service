@@ -274,7 +274,7 @@ journalctl -u librescoot-bluetooth.service
 ## Operational and security notes
 
 - The service is a privileged bridge between wireless commands and vehicle services. Restrict serial-device access and protect the Redis/Valkey IPC endpoint from untrusted clients.
-- A BLE time request invokes `timedatectl set-time`; only authorize BLE peers that may change the system clock. The nRF UTC holdover is seeded from accepted Bluetooth time, a GPS-confirmed clock update, or an external NTP reference; it never makes Linux time move backward.
+- BLE time requests are submitted as UTC user samples to the local clock coordinator. `time:ok` confirms sample delivery, not source selection or a clock change; errors include an unavailable coordinator or a rejected sample. Only authorize BLE peers that may influence the system clock. The nRF holdover is seeded periodically only from fresh, healthy external coordinator quality. nRF restoration is limited to an eligible recovery episode and never intentionally moves Linux time backward.
 - Firmware update and OTA staging paths contain executable update inputs. Keep them service-owned and monitor update failures in the journal and Redis/Valkey fault state.
 - Send `SIGTERM` or `SIGINT` for a coordinated shutdown; the service stops the controller link before exiting.
 

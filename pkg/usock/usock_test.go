@@ -43,11 +43,13 @@ func TestExtendedTransportRedactsPayloadAndFrameDumps(t *testing.T) {
 			wire := append([]byte(nil), port.Bytes()...)
 			var received *Payload
 			u.SetSyncFrameIDs(0x00)
+			u.readBootNS = 12345
+			u.readBootValid = true
 			u.handler = func(payload *Payload) { received = payload }
 			for _, b := range wire {
 				u.processByte(b)
 			}
-			if received == nil || !bytes.Equal(received.Data, data) {
+			if received == nil || !received.ReceiptValid || received.ReceiptBootNS != 12345 || !bytes.Equal(received.Data, data) {
 				t.Fatal("redaction changed transmitted/received payload")
 			}
 			logs := output.String()

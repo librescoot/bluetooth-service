@@ -3,11 +3,9 @@ package service
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"log"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/fxamacker/cbor/v2"
 	"github.com/librescoot/bluetooth-service/pkg/ble"
@@ -39,94 +37,6 @@ func TestExtendedPayloadsAreRedactedFromLogs(t *testing.T) {
 	}
 	if !strings.Contains(logs, "Received extended command category: cloud-pairing") || !strings.Contains(logs, "Sent extended response category: cloud-pairing") {
 		t.Fatalf("logs do not retain safe command categories: %s", logs)
-	}
-}
-
-// timedatectl set-time interprets its argument in the system-local timezone.
-// systemTimeArg must therefore format in local time so the arg round-trips
-// back to the intended instant. The old UTC formatting set the clock off by
-// the local UTC offset whenever local != UTC.
-func TestSystemTimeArgUsesLocalZone(t *testing.T) {
-	berlin, err := time.LoadLocation("Europe/Berlin")
-	if err != nil {
-		t.Skipf("tzdata unavailable: %v", err)
-	}
-	orig := time.Local
-	time.Local = berlin
-	defer func() { time.Local = orig }()
-
-	// 2024-07-01 12:00:00 UTC == 14:00 CEST (+02:00).
-	const epoch int64 = 1719835200
-
-	arg := systemTimeArg(epoch)
-	if arg != "2024-07-01 14:00:00" {
-		t.Errorf("systemTimeArg = %q, want local-zone %q", arg, "2024-07-01 14:00:00")
-	}
-
-	// Mimic timedatectl: parse the arg back in the local zone; it must equal
-	// the original instant.
-	parsed, err := time.ParseInLocation("2006-01-02 15:04:05", arg, time.Local)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !parsed.Equal(time.Unix(epoch, 0)) {
-		t.Errorf("round-trip = %v, want %v", parsed.UTC(), time.Unix(epoch, 0).UTC())
-	}
-}
-
-func TestTimeSetUsesInjectedClockAndSeedsNRF(t *testing.T) {
-	mock := &mockUSOCK{}
-	calls := 0
-	s := &Service{
-		usock:       mock,
-		log:         logger.NewLogger(nil, logger.LogLevelNone),
-		nrfTimeNow:  func() time.Time { return time.Unix(testNow, 0) },
-		clockSetter: func(epoch int64) error { calls++; return nil },
-	}
-	s.handleTimeCommand("set 1735689600")
-	if calls != 1 {
-		t.Fatalf("clock setter calls = %d, want 1", calls)
-	}
-	if mock.messageCount() < 1 || mock.messages[0].frameID != byte(uint16(ble.TypeRTC)&0xff) {
-		t.Fatalf("trusted time command did not seed nRF RTC: %#v", mock.messages)
-	}
-}
-
-func TestLegacyBLETimeSetsAndSeedsNRF(t *testing.T) {
-	mock := &mockUSOCK{}
-	calls := 0
-	s := &Service{
-		usock:       mock,
-		log:         logger.NewLogger(nil, logger.LogLevelNone),
-		nrfTimeNow:  func() time.Time { return time.Unix(testNow, 0) },
-		clockSetter: func(epoch int64) error { calls++; return nil },
-	}
-	s.handleScooterInfoMessage(
-		ble.TypeScooterInfo,
-		uint16(ble.TypeScooterInfo)+uint16(ble.TypeSystemTime),
-		"1735689600",
-	)
-	if calls != 1 {
-		t.Fatalf("clock setter calls = %d, want 1", calls)
-	}
-	if mock.messageCount() != 1 || mock.messages[0].frameID != byte(uint16(ble.TypeRTC)&0xff) {
-		t.Fatalf("BLE time did not seed nRF RTC: %#v", mock.messages)
-	}
-}
-
-func TestTimeSetFailureDoesNotSeedNRF(t *testing.T) {
-	mock := &mockUSOCK{}
-	s := &Service{
-		usock:       mock,
-		log:         logger.NewLogger(nil, logger.LogLevelNone),
-		nrfTimeNow:  func() time.Time { return time.Unix(testNow, 0) },
-		clockSetter: func(int64) error { return errors.New("denied") },
-	}
-	s.handleTimeCommand("set 1735689600")
-	for _, message := range mock.messages {
-		if message.frameID == byte(uint16(ble.TypeRTC)&0xff) {
-			t.Fatal("failed explicit time set seeded nRF RTC")
-		}
 	}
 }
 

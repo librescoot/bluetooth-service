@@ -387,7 +387,7 @@ func TestHashDispatchCapabilitiesAndRedaction(t *testing.T) {
 	if _, ok := capabilityMap["battery"]; ok || len(capabilityMap["hash"]) != 2 {
 		t.Fatal("unexpected capability map")
 	}
-	s.handleExtendedCommandMessage(ble.TypeExtended, uint16(ble.TypeExtendedCommand), "battery:snapshot:0")
+	s.handleExtendedCommandMessage(ble.TypeExtended, uint16(ble.TypeExtendedCommand), "battery:snapshot:0", -1)
 	if got := routeResponse(t, s.usock.(*mockUSOCK)); got != "error:unknown command" {
 		t.Fatal(got)
 	}

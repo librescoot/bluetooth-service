@@ -41,7 +41,7 @@ func TestPairingExtendedDispatcherIsAsyncAndSingleFlight(t *testing.T) {
 		}
 		return []byte(`{"state":"starting","running":true}`), nil
 	}}
-	s.handleExtendedCommandMessage(ble.TypeExtended, 0, "cloud-pairing:start")
+	s.handleExtendedCommandMessage(ble.TypeExtended, 0, "cloud-pairing:start", -1)
 	select {
 	case action := <-entered:
 		if action != "start" {

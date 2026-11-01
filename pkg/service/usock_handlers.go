@@ -152,7 +152,7 @@ func (s *Service) HandleUSockMessage(frameID byte, payload *usock.Payload) {
 	}
 
 	if msgType == ble.TypeRTC {
-		s.handleNRFTimeReply(paramMap)
+		s.handleNRFTimeReply(paramMap, payload.ReceiptBootNS, payload.ReceiptValid)
 		return
 	}
 
@@ -192,7 +192,7 @@ func (s *Service) HandleUSockMessage(frameID byte, payload *usock.Payload) {
 			case ble.TypeVehicleState:
 				s.handleVehicleStateMessage(relativeSubType, value)
 			case ble.TypeScooterInfo:
-				s.handleScooterInfoMessage(msgType, absSubTypeKey, value) // Pass absolute subtype key
+				s.handleScooterInfoMessage(msgType, absSubTypeKey, value, receiptValue(payload))
 			case ble.TypeBLEParam, ble.TypeBLEPairingPinDisplay, ble.TypeBLEPairingPinRemove, ble.TypeBLEStatus:
 				s.handleBLEParamMessage(msgType, absSubTypeKey, value) // Pass absolute subtype key
 			case ble.TypeBLEVersion:
@@ -219,7 +219,7 @@ func (s *Service) HandleUSockMessage(frameID byte, payload *usock.Payload) {
 			case ble.TypeAccelerometer:
 				s.handleAccelerometerMessage(relativeSubType, value)
 			case ble.TypeExtended:
-				s.handleExtendedCommandMessage(msgType, absSubTypeKey, value)
+				s.handleExtendedCommandMessage(msgType, absSubTypeKey, value, receiptValue(payload))
 			case ble.TypeLink:
 				s.link.HandleLinkMessage(absSubTypeKey, value)
 			case 0x0000: // Handle generic event messages
@@ -353,7 +353,7 @@ func (s *Service) handleVehicleStateMessage(subType ble.SubType, value interface
 }
 
 // handleScooterInfoMessage handles scooter information messages (Mileage, SW Version)
-func (s *Service) handleScooterInfoMessage(msgType ble.MessageType, absSubTypeKey uint16, value interface{}) {
+func (s *Service) handleScooterInfoMessage(msgType ble.MessageType, absSubTypeKey uint16, value interface{}, receipt int64) {
 	s.log.Debugf("Handling Scooter Info message (Type 0x%04x). Absolute subtype key: 0x%04x", msgType, absSubTypeKey)
 
 	expectedMileageSubType := uint16(ble.TypeScooterInfo) + uint16(ble.TypeMileage)
@@ -364,7 +364,7 @@ func (s *Service) handleScooterInfoMessage(msgType ble.MessageType, absSubTypeKe
 	case expectedSystemTimeSubType:
 		if timeStr, ok := convertToString(value); ok {
 			s.log.Infof("Received system time from BLE: %s", timeStr)
-			if err := s.setSystemTime(timeStr); err != nil {
+			if err := s.setSystemTime(timeStr, receipt); err != nil {
 				s.log.Errorf("Failed to set system time: %v", err)
 			}
 		} else {
@@ -1357,4 +1357,11 @@ func (s *Service) sendLTCExtendedResponse(result int) {
 	default:
 		s.sendExtendedResponse(fmt.Sprintf("ltc:error:%d", result))
 	}
+}
+
+func receiptValue(p *usock.Payload) int64 {
+	if !p.ReceiptValid {
+		return -1
+	}
+	return p.ReceiptBootNS
 }
