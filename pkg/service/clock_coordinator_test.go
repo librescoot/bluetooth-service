@@ -227,7 +227,7 @@ func TestCoordinatorUserTimeUTCAndDelay(t *testing.T) {
 }
 func TestCoordinatorPeriodicExternalSeeding(t *testing.T) {
 	s, m, f, _ := setupClockTest(t)
-	for _, q := range []clockQuality{{BootID: "boot", Generation: 1, Source: "local"}, {BootID: "boot", Generation: 1, Source: "nrf", External: true}, {BootID: "boot", Generation: 1, Source: "gps", External: true, AgeNS: int64(31 * time.Second)}, {BootID: "boot", Generation: 1, Source: "ntp", External: true, ResidualSeconds: 1.1}} {
+	for _, q := range []clockQuality{{BootID: "boot", Generation: 1, Source: "ntp", External: true, Preparing: true, AgeNS: int64(time.Second), UncertaintySeconds: .1}, {BootID: "boot", Generation: 1, Source: "local"}, {BootID: "boot", Generation: 1, Source: "nrf", External: true}, {BootID: "boot", Generation: 1, Source: "gps", External: true, AgeNS: int64(31 * time.Second)}, {BootID: "boot", Generation: 1, Source: "ntp", External: true, ResidualSeconds: 1.1}} {
 		f.mu.Lock()
 		f.q = q
 		f.mu.Unlock()
@@ -367,5 +367,25 @@ func TestNRFRecoveryDeadlineExpiresDuringStatus(t *testing.T) {
 	s.requestNRFTime()
 	if m.messageCount() != 0 {
 		t.Fatal("requested RTC after recovery deadline")
+	}
+}
+
+func TestNRFSeedingWaitsForPostWakeResume(t *testing.T) {
+	s, m, f, n := setupClockTest(t)
+	f.mu.Lock()
+	f.q = clockQuality{BootID: "boot", Generation: 1, Source: "ntp", External: true, Preparing: true, AgeNS: int64(time.Second), ResidualSeconds: .05, UncertaintySeconds: .1}
+	f.mu.Unlock()
+	n.Add(5 * int64(time.Second))
+	s.syncTrustedTime()
+	if m.messageCount() != 0 {
+		t.Fatal("pre-resume quality seeded nRF")
+	}
+	f.mu.Lock()
+	f.q.Preparing = false
+	f.q.Generation = 2
+	f.mu.Unlock()
+	s.syncTrustedTime()
+	if m.messageCount() != 1 {
+		t.Fatal("fresh post-resume quality did not seed nRF")
 	}
 }
