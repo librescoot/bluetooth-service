@@ -61,6 +61,39 @@ func TestHistoryRPCDisconnectDropsLateResponse(t *testing.T) {
 	}
 }
 
+func TestHistoryDisconnectDropsQueuedChunk(t *testing.T) {
+	s, _ := newVersionPushService(t)
+	oldExpiry := time.Now().Add(time.Minute)
+	s.historySnapshot = &historySnapshot{token: "12345678", data: []byte(`{"trips":[]}`), until: oldExpiry}
+	s.extRespMu.Lock()
+	done := make(chan struct{})
+	go func() { s.handleHistoryCommand("get:12345678:0:20"); close(done) }()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		s.historyMu.Lock()
+		queued := s.historySnapshot.until.After(oldExpiry)
+		s.historyMu.Unlock()
+		if queued {
+			break
+		}
+		if time.Now().After(deadline) {
+			s.extRespMu.Unlock()
+			t.Fatal("chunk not queued")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	s.clearHistorySnapshot()
+	s.extRespMu.Unlock()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("queued chunk did not finish")
+	}
+	if len(s.usock.(*mockUSOCK).messages) != 0 {
+		t.Fatal("stale chunk was sent")
+	}
+}
+
 func TestHistoryRPCSnapshot(t *testing.T) {
 	s, mr := newVersionPushService(t)
 	s.destIPC = s.ipc

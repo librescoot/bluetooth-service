@@ -38,53 +38,62 @@ func (s *Service) clearHistorySnapshot() {
 }
 
 func (s *Service) handleHistoryCommand(cmd string) {
+	if s.historyHandlers.Add(1) > 4 {
+		s.historyHandlers.Add(-1)
+		return
+	}
+	defer s.historyHandlers.Add(-1)
 	parts := strings.Split(cmd, ":")
+	s.historyMu.Lock()
 	if len(parts) == 3 && parts[0] == "start" {
-		s.startHistorySnapshot(parts[1], parts[2])
-		return
+		s.historyGeneration++
+		s.historySnapshot = nil
 	}
+	generation := s.historyGeneration
+	response := "h:x:command"
 	if len(parts) == 4 && parts[0] == "get" {
-		s.historyMu.Lock()
-		response := historyChunk(s.historySnapshot, parts[1], parts[2], parts[3], time.Now())
-		s.historyMu.Unlock()
-		s.sendExtendedResponse(response)
+		response = historyChunk(s.historySnapshot, parts[1], parts[2], parts[3], time.Now())
+	}
+	s.historyMu.Unlock()
+	if len(parts) == 3 && parts[0] == "start" {
+		response = s.startHistorySnapshot(parts[1], parts[2], generation)
+	}
+	if response == "" {
 		return
 	}
-	s.sendExtendedResponse("h:x:command")
+	s.extRespMu.Lock()
+	defer s.extRespMu.Unlock()
+	s.waitExtendedResponseInterval()
+	s.historyMu.Lock()
+	defer s.historyMu.Unlock()
+	if generation == s.historyGeneration {
+		s.writeExtendedResponse(response)
+	}
 }
 
-func (s *Service) startHistorySnapshot(kind, encoded string) {
+func (s *Service) startHistorySnapshot(kind, encoded string, generation uint64) string {
 	methods := map[string]string{"l": "history.list", "d": "history.get", "p": "history.points"}
 	method, ok := methods[kind]
 	if !ok || len(encoded) > 1368 {
-		s.sendExtendedResponse("h:x:invalid")
-		return
+		return "h:x:invalid"
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(encoded)
 	if err != nil || len(payload) > 1024 {
-		s.sendExtendedResponse("h:x:invalid")
-		return
+		return "h:x:invalid"
 	}
 	var object map[string]json.RawMessage
 	if json.Unmarshal(payload, &object) != nil || object == nil {
-		s.sendExtendedResponse("h:x:invalid")
-		return
+		return "h:x:invalid"
 	}
 	if !s.tripHistoryReady() || s.destIPC == nil {
-		s.sendExtendedResponse("h:x:unavailable")
-		return
+		return "h:x:unavailable"
 	}
-	s.historyMu.Lock()
-	s.historyGeneration++
-	generation := s.historyGeneration
-	s.historySnapshot = nil
-	s.historyMu.Unlock()
 	result, err := ipc.CallMethod[json.RawMessage, json.RawMessage](s.destIPC, "trip:history:rpc", method, json.RawMessage(payload), 3*time.Second)
 	s.historyMu.Lock()
 	current := generation == s.historyGeneration
 	s.historyMu.Unlock()
 	if !current {
-		return
+		return ""
 	}
 	if err != nil {
 		var callError *ipc.CallError
@@ -99,27 +108,24 @@ func (s *Service) startHistorySnapshot(kind, encoded string) {
 				code = "invalid"
 			}
 		}
-		s.sendExtendedResponse("h:x:" + code)
-		return
+		return "h:x:" + code
 	}
 	if len(result) > historyResponseLimit || !json.Valid(result) {
-		s.sendExtendedResponse("h:x:internal")
-		return
+		return "h:x:internal"
 	}
 	var random [4]byte
 	if _, err := rand.Read(random[:]); err != nil {
-		s.sendExtendedResponse("h:x:internal")
-		return
+		return "h:x:internal"
 	}
 	token := hex.EncodeToString(random[:])
 	s.historyMu.Lock()
 	if generation != s.historyGeneration {
 		s.historyMu.Unlock()
-		return
+		return ""
 	}
 	s.historySnapshot = &historySnapshot{token: token, data: append([]byte(nil), result...), until: time.Now().Add(2 * time.Minute)}
 	s.historyMu.Unlock()
-	s.sendExtendedResponse(fmt.Sprintf("h:s:%s:%s", token, strconv.FormatInt(int64(len(result)), 36)))
+	return fmt.Sprintf("h:s:%s:%s", token, strconv.FormatInt(int64(len(result)), 36))
 }
 
 func historyChunk(snapshot *historySnapshot, token, offsetText, budgetText string, now time.Time) string {

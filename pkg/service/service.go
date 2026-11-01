@@ -88,6 +88,7 @@ type Service struct {
 
 	historyMu         sync.Mutex
 	historySnapshot   *historySnapshot
+	historyHandlers   atomic.Int32
 	historyGeneration uint64
 
 	hashMu         sync.Mutex
