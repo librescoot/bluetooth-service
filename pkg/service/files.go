@@ -26,6 +26,9 @@ func (s *Service) capabilityRegistry() string {
 	if s.smsInboxAvailable() {
 		registry += ":sms=1"
 	}
+	if s.tripHistoryReady() {
+		registry += ":trip-history=1"
+	}
 	if s.files != nil && s.link != nil {
 		registry += fileTransferCapabilities(s.link.Caps()&fileTunnelCapability != 0, s.dataBrowserEnabled.Load())
 	}

@@ -86,6 +86,10 @@ type Service struct {
 	smsSnapshot   *smsSnapshot
 	smsGeneration uint64
 
+	historyMu         sync.Mutex
+	historySnapshot   *historySnapshot
+	historyGeneration uint64
+
 	hashMu         sync.Mutex
 	hashSnapshots  map[string]*hashSnapshot
 	hashHandlers   atomic.Int32

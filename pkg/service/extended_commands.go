@@ -60,6 +60,8 @@ func (s *Service) handleExtendedCommandMessage(msgType ble.MessageType, absSubTy
 		s.handleDBCCommand(strings.TrimPrefix(cmdStr, "dbc:"))
 	} else if strings.HasPrefix(cmdStr, "sms:") {
 		s.handleSMSCommand(strings.TrimPrefix(cmdStr, "sms:"))
+	} else if strings.HasPrefix(cmdStr, "trip:history:") {
+		s.handleHistoryCommand(strings.TrimPrefix(cmdStr, "trip:history:"))
 	} else if strings.HasPrefix(cmdStr, "trip:") {
 		s.handleTripCommand(strings.TrimPrefix(cmdStr, "trip:"))
 	} else if strings.HasPrefix(cmdStr, "cloud-pairing:") {
