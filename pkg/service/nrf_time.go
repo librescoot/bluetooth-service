@@ -33,6 +33,7 @@ type clockQuality struct {
 	NRFEligible        bool    `json:"nrf_eligible"`
 	NRFDeadlineBootNS  int64   `json:"nrf_deadline_boot_ns"`
 	External           bool    `json:"external"`
+	Preparing          bool    `json:"preparing"`
 	Source             string  `json:"source"`
 	AgeNS              int64   `json:"age_ns"`
 	ResidualSeconds    float64 `json:"residual_seconds"`
@@ -337,7 +338,7 @@ func (s *Service) syncTrustedTime() {
 		return
 	}
 	age := q.AgeNS + elapsed
-	if !q.External || (q.Source != "ntp" && q.Source != "gps") || q.AgeNS < 0 || age > int64(30*time.Second) || math.IsNaN(q.ResidualSeconds) || math.IsNaN(q.UncertaintySeconds) || q.UncertaintySeconds < 0 || math.Abs(q.ResidualSeconds)+q.UncertaintySeconds > 1 {
+	if q.Preparing || !q.External || (q.Source != "ntp" && q.Source != "gps") || q.AgeNS < 0 || age > int64(30*time.Second) || math.IsNaN(q.ResidualSeconds) || math.IsNaN(q.UncertaintySeconds) || q.UncertaintySeconds < 0 || math.Abs(q.ResidualSeconds)+q.UncertaintySeconds > 1 {
 		s.log.Infof("clock source=%s decision=seed_reject reason=quality age_ns=%d offset_s=%f uncertainty_s=%f", q.Source, age, q.ResidualSeconds, q.UncertaintySeconds)
 		return
 	}

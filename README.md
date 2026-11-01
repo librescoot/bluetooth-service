@@ -276,8 +276,7 @@ Runtime operation requires:
 - a reachable Redis or Valkey instance;
 - the configured serial device and an nRF52 running the matching USOCK/BLE firmware;
 - write access to the firmware and OTA staging locations when updates are enabled; and
-- `timedatectl` when BLE time-setting requests are used; and
-- `chronyc` for NTP trust detection used by nRF UTC holdover seeding.
+- access to the root-only local clock coordinator socket for BLE time samples and nRF UTC holdover seeding.
 
 For a packaged target, use the installed unit rather than a hand-written unit:
 
