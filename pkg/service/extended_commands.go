@@ -2,9 +2,9 @@ package service
 
 import (
 	"fmt"
-	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	ipc "github.com/librescoot/redis-ipc"
@@ -687,21 +687,15 @@ func (s *Service) handleTimeCommand(cmd string) {
 	}
 }
 
-// systemTimeArg formats a Unix timestamp for `timedatectl set-time`, which
-// interprets its argument in the system-local timezone. Formatting in local
-// time keeps the wall clock correct; formatting in UTC (as this used to) set
-// the clock off by the local offset, e.g. 2h behind in CEST.
-func systemTimeArg(timestamp int64) string {
-	return time.Unix(timestamp, 0).Format("2006-01-02 15:04:05")
-}
-
 func (s *Service) setSystemTimeDirect(timestamp int64) error {
-	t := time.Unix(timestamp, 0)
-	cmd := exec.Command("timedatectl", "set-time", systemTimeArg(timestamp))
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to set time: %w (%s)", err, strings.TrimSpace(string(out)))
+	if timestamp < 0 || timestamp > 9223372036 {
+		return fmt.Errorf("timestamp outside supported range")
 	}
-	s.log.Infof("System time set to %s", t.Format(time.RFC3339))
+	tv := syscall.NsecToTimeval(timestamp * int64(time.Second))
+	if err := syscall.Settimeofday(&tv); err != nil {
+		return fmt.Errorf("failed to set time: %w", err)
+	}
+	s.log.Infof("System time set to %s", time.Unix(timestamp, 0).UTC().Format(time.RFC3339))
 	return nil
 }
 

@@ -30,6 +30,7 @@ type nrfTimeState struct {
 	pending    bool
 	generation uint64
 	token      uint64
+	deadline   time.Time
 }
 
 func (s *Service) timeNow() time.Time {
@@ -113,6 +114,7 @@ func (s *Service) requestNRFTime() {
 	generation := s.nrfTimeState.generation
 	s.nrfTimeState.pending = true
 	s.nrfTimeState.token = token
+	s.nrfTimeState.deadline = s.timeNow().Add(nrfTimeResponseWindow)
 	s.nrfTimeMu.Unlock()
 
 	if err := writeUARTMessageRTCGet(s.usock, token); err != nil {
@@ -144,6 +146,7 @@ func (s *Service) expireNRFTimeRequest(generation uint64) {
 }
 
 func (s *Service) handleNRFTimeReply(params map[uint16]interface{}) {
+	receivedAt := s.timeNow()
 	getKey := uint16(ble.TypeRTC) + uint16(ble.TypeRTCGet)
 	tokenKey := uint16(ble.TypeRTC) + uint16(ble.TypeRTCToken)
 	value, hasValue := params[getKey]
@@ -159,8 +162,14 @@ func (s *Service) handleNRFTimeReply(params map[uint16]interface{}) {
 		s.log.Debugf("Ignored unsolicited, duplicate, or stale nRF RTC reply")
 		return
 	}
+	deadline := s.nrfTimeState.deadline
 	s.nrfTimeState.pending = false
 	s.nrfTimeState.token = 0
+
+	if !s.timeNow().Before(deadline) {
+		s.log.Infof("nRF RTC sample rejected: response deadline expired")
+		return
+	}
 
 	epoch, ok := nrfTimeValue(value)
 	if !ok {
@@ -177,7 +186,7 @@ func (s *Service) handleNRFTimeReply(params map[uint16]interface{}) {
 		s.log.Infof("nRF RTC sample not applied: Linux clock is already current")
 		return
 	}
-	current, applied, err := s.setClockIfNewer(epoch)
+	current, applied, err := s.setClockIfNewerBefore(epoch, receivedAt, deadline)
 	if err != nil {
 		s.log.Errorf("nRF RTC restoration failed: %v", err)
 		return
@@ -334,11 +343,15 @@ func (s *Service) setClock(epoch int64) error {
 	return s.setClockLocked(epoch)
 }
 
-func (s *Service) setClockIfNewer(epoch int64) (current int64, applied bool, err error) {
+func (s *Service) setClockIfNewerBefore(epoch int64, receivedAt, deadline time.Time) (current int64, applied bool, err error) {
 	s.clockMu.Lock()
 	defer s.clockMu.Unlock()
-	current = s.timeNow().Unix()
-	if epoch <= current {
+	now := s.timeNow()
+	current = now.Unix()
+	if elapsed := now.Sub(receivedAt); elapsed > 0 {
+		epoch += int64(elapsed / time.Second)
+	}
+	if !now.Before(deadline) || epoch <= current {
 		return current, false, nil
 	}
 	if err := s.setClockLocked(epoch); err != nil {

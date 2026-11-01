@@ -26,7 +26,7 @@ func newNRFTimeTestService(setter func(int64) error) (*Service, *mockUSOCK) {
 
 func armNRFTime(s *Service, generation, token uint64) {
 	s.nrfTimeMu.Lock()
-	s.nrfTimeState = nrfTimeState{pending: true, generation: generation, token: token}
+	s.nrfTimeState = nrfTimeState{pending: true, generation: generation, token: token, deadline: s.timeNow().Add(nrfTimeResponseWindow)}
 	s.nrfTimeMu.Unlock()
 }
 
@@ -368,5 +368,50 @@ func TestTrustedTimeSeedsForEachGPSConfirmation(t *testing.T) {
 
 	if got := mock.messageCount(); got != 2 {
 		t.Errorf("GPS seed writes = %d, want 2", got)
+	}
+}
+
+func TestNRFTimeReplyDeadlineEnforcedWhileTimeoutBlocked(t *testing.T) {
+	calls := 0
+	s, _ := newNRFTimeTestService(func(int64) error { calls++; return nil })
+	armNRFTime(s, 1, 1)
+	s.nrfTimeNow = func() time.Time { return time.Unix(testNow, 0).Add(nrfTimeResponseWindow) }
+	s.handleNRFTimeReply(map[uint16]interface{}{
+		uint16(ble.TypeRTC) + uint16(ble.TypeRTCGet):   uint64(testNow + 100),
+		uint16(ble.TypeRTC) + uint16(ble.TypeRTCToken): uint64(1),
+	})
+	if calls != 0 {
+		t.Fatal("expired sample applied")
+	}
+}
+
+func TestNRFTimeApplyChecksAgeAndCurrentClock(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		delay   time.Duration
+		current int64
+		want    int64
+	}{
+		{"immediate", 0, testNow, testNow + 100},
+		{"delayed", time.Second, testNow + 1, testNow + 101},
+		{"deadline", 2 * time.Second, testNow + 2, 0},
+		{"ten seconds", 10 * time.Second, testNow + 10, 0},
+		{"twenty seconds", 20 * time.Second, testNow + 20, 0},
+		{"clock moved ahead", time.Second, testNow + 200, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got int64
+			s, _ := newNRFTimeTestService(func(epoch int64) error { got = epoch; return nil })
+			received := time.Unix(testNow, 0)
+			s.nrfTimeNow = func() time.Time { return time.Unix(tc.current, 0) }
+			// The simulated wall clock may jump, while elapsed time stays monotonic.
+			if tc.name == "clock moved ahead" {
+				received = time.Unix(tc.current, 0).Add(-tc.delay)
+			}
+			_, applied, err := s.setClockIfNewerBefore(testNow+100, received, received.Add(2*time.Second))
+			if err != nil || got != tc.want || applied != (tc.want != 0) {
+				t.Fatalf("got epoch=%d applied=%t err=%v, want epoch=%d", got, applied, err, tc.want)
+			}
+		})
 	}
 }
