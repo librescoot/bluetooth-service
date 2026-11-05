@@ -431,7 +431,6 @@ func (s *Server) control(p []byte, generation uint64) {
 			}
 			if !isDownload(t.request.Op) {
 				if err := t.stored.commit(); err != nil {
-					s.fail(req, codeFor(err))
 					if errors.Is(err, errChecksum) {
 						if t.stored.isData {
 							_ = t.stored.root.Remove(t.stored.stagePath)
@@ -440,6 +439,7 @@ func (s *Server) control(p []byte, generation uint64) {
 							_ = t.stored.root.Remove(".partial/" + t.stored.info.Name + ".json")
 						}
 					}
+					s.fail(req, codeFor(err))
 					s.finish()
 					return
 				}
