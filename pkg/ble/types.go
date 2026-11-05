@@ -41,8 +41,9 @@ const (
 
 // Link capability bits reported via TypeLinkCaps.
 const (
-	LinkCapBaud1M    = 0x01 // firmware supports 1 Mbaud operation
-	LinkCapOTATunnel = 0x02 // firmware forwards the OTA tunnel frames
+	LinkCapBaud1M         = 0x01 // firmware supports 1 Mbaud operation
+	LinkCapOTATunnel      = 0x02 // firmware forwards the OTA tunnel frames
+	LinkCapHibernationLED = 0x08 // firmware supports configurable L1 indicator supply retention
 )
 
 // SubType represents the sub-type of a message
@@ -108,6 +109,7 @@ const (
 	TypePowerManagementHibernationRequest SubType = 3 // BLE_SCOOTER_SERVICE_POWER_MANAGEMENT_HIBERNATION_REQUEST
 	TypePowerManagementRebootRequest      SubType = 4 // BLE_SCOOTER_SERVICE_POWER_MANAGEMENT_REBOOT_REQUEST
 	TypePowerManagementWakeTimerSet       SubType = 5 // BLE_SCOOTER_SERVICE_POWER_MANAGEMENT_WAKE_TIMER_SET (uint32 seconds; 0 disarms)
+	TypePowerManagementHibernationLED     SubType = 6 // USOCK-only boolean: retain indicator supply in L1
 
 	// BLE debug sub-types
 	TypeBLEDebugResetAck SubType = 3 // BLE_SCOOTER_SERVICE_DEBUG_RESET_ACK

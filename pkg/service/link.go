@@ -260,6 +260,9 @@ func (lm *LinkManager) negotiate() {
 	lm.svc.log.Infof("Link: nRF capabilities 0x%x", caps)
 
 	if caps&ble.LinkCapBaud1M == 0 {
+		if err := lm.svc.syncHibernationLED(); err != nil {
+			lm.svc.log.Warnf("Synchronizing hibernation LED after capability probe: %v", err)
+		}
 		lm.publishStatus()
 		lm.svc.requestNRFTime()
 		return

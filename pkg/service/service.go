@@ -52,6 +52,8 @@ type Service struct {
 	mu              sync.RWMutex
 	reconnectMu     sync.Mutex
 
+	hibernationLEDMu sync.Mutex
+
 	nrfTimeNow   func() time.Time
 	bootNow      func() (int64, error)
 	clockSocket  string

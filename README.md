@@ -161,6 +161,17 @@ retains the unversioned `alarm` category.
 
 Explicit BLE hibernation forwards `hibernate-manual` to PM regardless of vehicle state; extended `pm:hibernate-for <duration>` forwards `hibernate-for:<seconds>`. PM owns parked-state admission and graceful vehicle preparation. Controller-originated automatic hibernation forwards `hibernate-auto` and does not initiate vehicle locking.
 
+The advanced `alarm.armed-led-hibernate` setting defaults to `true`. Indicator
+supply retention during L1 hibernation requires `alarm.armed-led=true`, this
+setting enabled, and `alarm[status]=armed`. Bluetooth-service sends the effective
+boolean over USOCK power-management subtype 6 (absolute key `0x0806`) only when
+the nRF advertises link capability `0x08`. It refreshes the decision on settings
+and alarm changes, subscription restart, link negotiation, and before power
+transitions. Unavailable settings disable retention; missing general LED settings
+also disable it. Missing `alarm.armed-led-hibernate` uses its default `true`.
+The nRF defaults to no retention after reset; L2 and hard-reboot power cuts are
+unchanged. This is independent of the alarm horn setting.
+
 Wake-timer acknowledgements publish the nRF's duration echo as `power-manager[wake-timer-ack-seconds]`, alongside `wake-timer-armed` for telemetry. PM requires the echoed duration to match its request; deploy the corresponding PM and vehicle-service preparation handlers together.
 
 DBC power commands do not unlock the vehicle or change its state:

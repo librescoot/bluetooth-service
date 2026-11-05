@@ -685,6 +685,13 @@ func (s *Service) handlePowerManagementMessage(subType ble.SubType, value interf
 		} else {
 			s.log.Debugf("Forwarded reboot request to scooter:power")
 		}
+	case ble.TypePowerManagementHibernationLED:
+		ack, ok := convertToInt(value)
+		if !ok || (ack != 0 && ack != 1) {
+			s.log.Warnf("Invalid hibernation LED retention ACK: %v", value)
+		} else {
+			s.log.Debugf("nRF hibernation LED retention acknowledged: %t", ack == 1)
+		}
 	case ble.TypePowerManagementWakeTimerSet:
 		// ACK from nRF echoing the seconds value we just programmed. A non-zero
 		// echo means the timer is now armed; zero means it was disarmed.

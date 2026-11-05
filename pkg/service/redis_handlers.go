@@ -31,6 +31,11 @@ func (s *Service) SubscribeToRedisChannels() {
 		KeyUSB,             // "usb"
 		KeyKeycard,         // "keycard"
 		KeyAlarm,           // "alarm"
+		"settings",
+	}
+
+	if err := s.syncHibernationLED(); err != nil {
+		s.log.Warnf("Synchronizing hibernation LED: %v", err)
 	}
 
 	// Ensure only unique keys are subscribed
@@ -175,9 +180,19 @@ func (s *Service) SubscribeToRedisChannels() {
 						}
 					}
 
+				case "settings":
+					if field == alarmLEDSetting || field == alarmLEDHibernateSetting {
+						if err := s.syncHibernationLED(); err != nil {
+							s.log.Warnf("Synchronizing hibernation LED: %v", err)
+						}
+					}
+
 				case KeyAlarm:
 					switch field {
 					case "status":
+						if err := s.syncHibernationLED(); err != nil {
+							s.log.Warnf("Synchronizing hibernation LED: %v", err)
+						}
 						if err := writeUARTMessageString(s.usock, ble.TypeAlarm, ble.TypeAlarmStatus, value); err != nil {
 							s.log.Errorf("Error sending alarm status update: %v", err)
 						}
@@ -642,6 +657,11 @@ func (s *Service) UpdatePowerManagementState(stateStr string) error {
 	default:
 		s.log.Warnf("Unknown power management state string: %s. Sending default (running).", stateStr)
 		stateInt = 1
+	}
+
+	// Refresh before the shutdown announcement, even if settings notifications lag.
+	if err := s.syncHibernationLED(); err != nil {
+		s.log.Warnf("Synchronizing hibernation LED before power transition: %v", err)
 	}
 
 	// Pass the relative subtype
