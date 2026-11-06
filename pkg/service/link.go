@@ -61,13 +61,15 @@ const (
 type LinkManager struct {
 	svc *Service
 
-	mu          sync.Mutex
-	currentBaud int
-	caps        int
-	opBusy      bool // a negotiation or fallback is running (owns the port)
-	suspended   bool // firmware updater owns the port; refuse all operations
-	stopped     bool // terminal service shutdown; Resume cannot clear this
-	keepStop    chan struct{}
+	mu                   sync.Mutex
+	currentBaud          int
+	caps                 int
+	opBusy               bool // a negotiation or fallback is running (owns the port)
+	suspended            bool // firmware updater owns the port; refuse all operations
+	stopped              bool // terminal service shutdown; Resume cannot clear this
+	keepStop             chan struct{}
+	serviceChangedStatus int
+	serviceChangedKnown  bool
 
 	capsCh chan int
 	ackCh  chan int
@@ -93,6 +95,7 @@ func (lm *LinkManager) resetToDefault() {
 	lm.stopKeepalive()
 	lm.mu.Lock()
 	lm.currentBaud = linkBaudDefault
+	lm.serviceChangedKnown = false
 	lm.mu.Unlock()
 }
 
@@ -202,6 +205,15 @@ func (lm *LinkManager) HandleLinkMessage(absSubTypeKey uint16, value interface{}
 	case ble.TypeLinkStats:
 		// stats arrive as an array and are handled in HandleUSockMessage's
 		// generic logging; nothing to correlate here
+	case ble.TypeLinkServiceChanged:
+		lm.mu.Lock()
+		changed := !lm.serviceChangedKnown || lm.serviceChangedStatus != v
+		lm.serviceChangedKnown = true
+		lm.serviceChangedStatus = v
+		lm.mu.Unlock()
+		if changed {
+			lm.svc.log.Infof("Bluetooth Service Changed: requested=%t sent=%t confirmed=%t (flags=0x%x)", v&1 != 0, v&2 != 0, v&4 != 0, v)
+		}
 	default:
 		lm.svc.log.Debugf("Link: unhandled subtype 0x%04x = %d", absSubTypeKey, v)
 	}

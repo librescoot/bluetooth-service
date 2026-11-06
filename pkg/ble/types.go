@@ -168,10 +168,11 @@ const (
 	TypeUMSStatus        SubType = 5 // BLE_SCOOTER_SERVICE_UMS_STATUS
 
 	// UART link management sub-types (relative to TypeLink 0xA0A0)
-	TypeLinkCaps    SubType = 1 // BLE_SCOOTER_SERVICE_LINK_CAPS: uint32 capability bitmask
-	TypeLinkBaudSet SubType = 2 // BLE_SCOOTER_SERVICE_LINK_BAUD_SET: uint32 literal baud rate
-	TypeLinkPing    SubType = 3 // BLE_SCOOTER_SERVICE_LINK_PING: uint32 nonce, echoed
-	TypeLinkStats   SubType = 4 // BLE_SCOOTER_SERVICE_LINK_STATS: int array [crc, uart, overrun, txdrop]
+	TypeLinkCaps           SubType = 1 // BLE_SCOOTER_SERVICE_LINK_CAPS: uint32 capability bitmask
+	TypeLinkBaudSet        SubType = 2 // BLE_SCOOTER_SERVICE_LINK_BAUD_SET: uint32 literal baud rate
+	TypeLinkPing           SubType = 3 // BLE_SCOOTER_SERVICE_LINK_PING: uint32 nonce, echoed
+	TypeLinkStats          SubType = 4 // BLE_SCOOTER_SERVICE_LINK_STATS: int array [crc, uart, overrun, txdrop]
+	TypeLinkServiceChanged SubType = 5 // request, indication-sent and confirmation flags
 
 	// Retained UTC clock sub-types (relative to TypeRTC 0xA0C0).
 	TypeRTCGet   SubType = 1
