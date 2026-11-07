@@ -96,6 +96,8 @@ func TestBundleIDValidation(t *testing.T) {
 		"bundle-v1",
 		"librescoot-unu-mdb-nightly-20260701T000000",
 		"librescoot-unu-mdb-nightly-20260701T000000.delta",
+		"librescoot-unu-mdb-nightly-20260701T000000.hdelta",
+		string(bytes.Repeat([]byte{'a'}, 57)) + ".hdelta",
 		"librescoot-unu-dbc-v1.2.3.mender",
 		"A_b-c.d",
 	}

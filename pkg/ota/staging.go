@@ -59,13 +59,17 @@ func (st *Staging) componentDir(component byte) string {
 	return filepath.Join(st.dir, componentName(component))
 }
 
+func isDelta(bundleID string) bool {
+	return strings.HasSuffix(bundleID, ".delta") || strings.HasSuffix(bundleID, ".hdelta")
+}
+
 // stagedName returns the on-disk name of a completed bundle. IDs that already
 // carry a known artifact extension are used verbatim — the phone sends the
 // full asset filename for deltas so update-service can dispatch on the
 // extension — while everything else is a full image and gets ".mender"
 // appended (the phone historically sends the filename stem for those).
 func stagedName(bundleID string) string {
-	if strings.HasSuffix(bundleID, ".delta") || strings.HasSuffix(bundleID, ".mender") {
+	if isDelta(bundleID) || strings.HasSuffix(bundleID, ".mender") {
 		return bundleID
 	}
 	return bundleID + ".mender"
@@ -189,7 +193,8 @@ func (st *Staging) CleanupStale() int {
 			continue
 		}
 		for _, e := range entries {
-			if !strings.HasSuffix(e.Name(), ".mender.part") && !strings.HasSuffix(e.Name(), ".delta.part") {
+			if !strings.HasSuffix(e.Name(), ".part") ||
+				(!strings.HasSuffix(e.Name(), ".mender.part") && !isDelta(strings.TrimSuffix(e.Name(), ".part"))) {
 				continue
 			}
 			info, err := e.Info()

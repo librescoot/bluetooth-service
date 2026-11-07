@@ -272,7 +272,7 @@ func TestQueueFailure(t *testing.T) {
 	fi.err = os.ErrPermission
 	data, sha := makeBundle(500)
 
-	r.HandleControl(startMsg(data, sha, 240, "bundle-g"))
+	r.HandleControl(startMsg(data, sha, 240, "bundle-g.hdelta"))
 	sendAll(r, data, 240, 0)
 	r.HandleControl([]byte{OpComplete})
 
@@ -375,6 +375,8 @@ func TestFinishInstallRetention(t *testing.T) {
 		{"mender explicit success kept", "bundle-v2", PhaseSuccess, true},
 		{"mender failure discarded", "bundle-v3", PhaseFailure, false},
 		{"delta success discarded", "librescoot-unu-mdb-nightly-20260101T000000.delta", PhasePendingReboot, false},
+		{"hdelta success discarded", "librescoot-unu-mdb-nightly-20260101T000000.hdelta", PhasePendingReboot, false},
+		{"hdelta failure discarded", "librescoot-unu-mdb-nightly-20260101T000000.hdelta", PhaseFailure, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -560,6 +562,58 @@ func TestFailureClearsToIdleAndAllowsNewTransfer(t *testing.T) {
 	}
 }
 
+func TestHdeltaTransferResumeAndErrors(t *testing.T) {
+	for _, component := range []byte{ComponentMDB, ComponentDBC} {
+		t.Run(componentName(component), func(t *testing.T) {
+			r, fw, fi, dir := newTestReceiver(t)
+			r.inst[component] = fi
+			data, sha := makeBundle(1000)
+			id := "librescoot-unu-" + componentName(component) + "-nightly-20260101T000000.hdelta"
+			start := func(hash [32]byte) []byte {
+				return EncodeStart(Start{Version: 1, Component: component, ChunkSize: 240, TotalSize: uint32(len(data)), SHA256: hash, BundleID: id})
+			}
+			r.HandleControl(start(sha))
+			sendAll(r, data[:480], 240, 0)
+			r.HandleControl([]byte{OpAbort, AbortUserCancel})
+			r.HandleControl(start(sha))
+			ack := fw.lastOfOp(OpStartAck)
+			if ack == nil || ack[1] != StartResume || ack[2] != 0xe0 || ack[3] != 1 {
+				t.Fatalf("resume ack = %x", ack)
+			}
+			sendAll(r, data, 240, 480)
+			r.HandleControl([]byte{OpComplete})
+			if ack := fw.lastOfOp(OpCompleteAck); ack == nil || ack[1] != CompleteOK {
+				t.Fatalf("complete ack = %x", ack)
+			}
+			want := filepath.Join(dir, componentName(component), id)
+			if len(fi.calls) != 1 || fi.calls[0] != want {
+				t.Fatalf("installer paths = %v, want %s", fi.calls, want)
+			}
+			got, err := os.ReadFile(want)
+			if err != nil || !bytes.Equal(got, data) {
+				t.Fatalf("staged data mismatch: %v", err)
+			}
+			r.mu.Lock()
+			r.lastPhase = PhasePendingReboot
+			r.finishInstallLocked()
+			r.mu.Unlock()
+			if _, err := os.Stat(want); !os.IsNotExist(err) {
+				t.Fatalf("hdelta survived install: %v", err)
+			}
+
+			r.HandleControl(start([32]byte{}))
+			sendAll(r, data, 240, 0)
+			r.HandleControl([]byte{OpComplete})
+			if ack := fw.lastOfOp(OpCompleteAck); ack == nil || ack[1] != CompleteSHAMismatch {
+				t.Fatalf("SHA mismatch ack = %x", ack)
+			}
+			if matches, _ := filepath.Glob(filepath.Join(dir, componentName(component), id+"*")); len(matches) != 0 {
+				t.Fatalf("SHA failure left files: %v", matches)
+			}
+		})
+	}
+}
+
 func TestSameVersionStartRejected(t *testing.T) {
 	r, fw, _, _ := newTestReceiver(t)
 	r.installedVersion = func(byte) string { return "1.3.0" }
@@ -573,6 +627,13 @@ func TestSameVersionStartRejected(t *testing.T) {
 	}
 	if r.state != stateIdle {
 		t.Fatalf("state = %v, want idle", r.state)
+	}
+
+	msg = EncodeStart(Start{Version: 1, Component: ComponentMDB, ChunkSize: 240,
+		TotalSize: uint32(len(data)), SHA256: sha, BundleID: "librescoot-unu-mdb-v1.3.0.hdelta"})
+	r.HandleControl(msg)
+	if ack := fw.lastOfOp(OpStartAck); ack == nil || ack[1] != StartAlreadyInstalled {
+		t.Fatalf("same-version hdelta accepted: %x", ack)
 	}
 
 	msg = EncodeStart(Start{Version: 1, Component: ComponentMDB, ChunkSize: 240,

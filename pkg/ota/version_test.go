@@ -6,6 +6,8 @@ func TestVersionFromBundleID(t *testing.T) {
 	cases := map[string]string{
 		"librescoot-unu-mdb-v1.3.0":                         "v1.3.0",
 		"librescoot-unu-dbc-nightly-20260101T000000.delta":  "nightly-20260101T000000",
+		"librescoot-unu-dbc-nightly-20260101T000000.hdelta": "nightly-20260101T000000",
+		"librescoot-unu-mdb-testing-20260101T000000.hdelta": "testing-20260101T000000",
 		"librescoot-unu-mdb-testing-20260101T000000.mender": "testing-20260101T000000",
 		"librescoot-unu-mdb":                                "",
 		"librescoot-unu-mdb-":                               "",

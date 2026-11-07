@@ -7,7 +7,7 @@ import "strings"
 // The component prefix ends at the third hyphen. Returns "" if the ID does not
 // have that shape.
 func versionFromBundleID(id string) string {
-	for _, suffix := range []string{".mender", ".delta"} {
+	for _, suffix := range []string{".mender", ".delta", ".hdelta"} {
 		if strings.HasSuffix(id, suffix) {
 			id = strings.TrimSuffix(id, suffix)
 			break

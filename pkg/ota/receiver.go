@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -673,10 +672,10 @@ func (r *Receiver) finishInstallLocked() {
 	// update-service's download dir and is the base for future delta updates
 	// (update-service's retention keeps the newest). Everything else is
 	// discarded: failures need a fresh transfer, DBC bundles have been copied
-	// to the DBC by the handoff, and .delta files are consumed by
+	// to the DBC by the handoff, and delta files are consumed by
 	// update-service during apply.
 	installed := phase == PhasePendingReboot || phase == PhaseSuccess
-	if installed && r.installComp == ComponentMDB && !strings.HasSuffix(r.installBundleID, ".delta") {
+	if installed && r.installComp == ComponentMDB && !isDelta(r.installBundleID) {
 		r.staging.Forget(r.installComp, r.installBundleID)
 	} else {
 		r.staging.Discard(r.installComp, r.installBundleID)

@@ -17,6 +17,7 @@ func TestStagedNamePaths(t *testing.T) {
 		{"bundle-v1", "/base/mdb/bundle-v1.mender"},
 		{"librescoot-unu-mdb-nightly-20260101T000000.delta", "/base/mdb/librescoot-unu-mdb-nightly-20260101T000000.delta"},
 		{"already.mender", "/base/mdb/already.mender"},
+		{"librescoot-unu-mdb-nightly-20260101T000000.hdelta", "/base/mdb/librescoot-unu-mdb-nightly-20260101T000000.hdelta"},
 	}
 	for _, tc := range tests {
 		if got := st.FinalPath(ComponentMDB, tc.bundleID); got != tc.wantFinal {
@@ -88,19 +89,26 @@ func TestCleanupStaleBothExtensions(t *testing.T) {
 	staleDelta := write("stale2.delta.part")
 	age(staleDelta)
 	staleDeltaSidecar := write("stale2.delta.json")
+	staleHdelta := write("stale3.hdelta.part")
+	age(staleHdelta)
+	staleHdeltaSidecar := write("stale3.hdelta.json")
+	legacy := write("legacy.hdelta.mender.part")
+	age(legacy)
+	legacySidecar := write("legacy.hdelta.json")
+	freshHdelta := write("fresh.hdelta.part")
 	freshDelta := write("fresh.delta.part")
 	keptFinal := write("base.mender") // owned by update-service, must survive
 	age(keptFinal)
 
-	if removed := st.CleanupStale(); removed != 2 {
-		t.Errorf("CleanupStale removed %d, want 2", removed)
+	if removed := st.CleanupStale(); removed != 4 {
+		t.Errorf("CleanupStale removed %d, want 4", removed)
 	}
-	for _, gone := range []string{staleMender, staleMenderSidecar, staleDelta, staleDeltaSidecar} {
+	for _, gone := range []string{staleMender, staleMenderSidecar, staleDelta, staleDeltaSidecar, staleHdelta, staleHdeltaSidecar, legacy, legacySidecar} {
 		if _, err := os.Stat(gone); !os.IsNotExist(err) {
 			t.Errorf("%s survived cleanup", filepath.Base(gone))
 		}
 	}
-	for _, kept := range []string{freshDelta, keptFinal} {
+	for _, kept := range []string{freshDelta, freshHdelta, keptFinal} {
 		if _, err := os.Stat(kept); err != nil {
 			t.Errorf("%s removed by cleanup: %v", filepath.Base(kept), err)
 		}
