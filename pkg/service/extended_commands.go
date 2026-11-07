@@ -1,6 +1,8 @@
 package service
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"strconv"
 	"strings"
@@ -787,6 +789,13 @@ func (s *Service) handleStatusQuery(key string) {
 		}
 		s.sendExtendedResponse(fmt.Sprintf("status:navigation-available:%s", val))
 
+	case "hdelta:mdb", "hdelta:dbc":
+		component := strings.TrimPrefix(key, "hdelta:")
+		go func() {
+			supported := probeHdelta(s.ipc, component)
+			s.sendExtendedResponse(fmt.Sprintf("status:hdelta:%s:%t", component, supported))
+		}()
+
 	case "version:mdb", "version:dbc":
 		// Installed firmware (OS image) version, published to the
 		// version:<component> hash by version-service on boot. DBC may be
@@ -800,6 +809,37 @@ func (s *Service) handleStatusQuery(key string) {
 
 	default:
 		s.sendExtendedResponse("status:error:unknown key")
+	}
+}
+
+func probeHdelta(client *ipc.Client, component string) bool {
+	var random [16]byte
+	if client == nil || (component != "mdb" && component != "dbc") {
+		return false
+	}
+	if _, err := rand.Read(random[:]); err != nil {
+		return false
+	}
+	nonce := hex.EncodeToString(random[:])
+	key := "ota:hdelta-probe:" + component + ":" + nonce
+	if _, err := client.LPush("scooter:update:"+component, "probe-hdelta:"+nonce); err != nil {
+		return false
+	}
+	deadline := time.NewTimer(2 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-deadline.C:
+			return false
+		case <-ticker.C:
+			value, err := client.Get(key)
+			if err == nil {
+				_, _ = client.Do("DEL", key)
+				return value == "1"
+			}
+		}
 	}
 }
 
@@ -964,7 +1004,7 @@ var capabilityMap = map[string][]string{
 	"service-mode":  {"on", "off"},
 	"time":          {"set"},
 	"config":        {"apn", "hibernate-timer", "update-channel", "auto-standby-seconds"},
-	"status":        {"maps-available", "navigation-available", "version:mdb", "version:dbc"},
+	"status":        {"maps-available", "navigation-available", "version:mdb", "version:dbc", "hdelta:mdb", "hdelta:dbc"},
 	"alarm":         {"enable", "disable", "arm", "disarm", "start", "start:<seconds>", "stop"},
 	"ltc":           {"enable", "disable", "force-enable", "force-disable", "status"},
 	"ble":           {"forget"},

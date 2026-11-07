@@ -14,6 +14,11 @@ The Bluetooth Service connects the vehicle's nRF52 controller to the Librescoot 
 
 ## Operation and interfaces
 
+`status:hdelta:mdb` and `status:hdelta:dbc` query the respective running
+update-service and return `status:hdelta:<component>:true` only when it
+confirms that its decoder is available. An unavailable board, older updater,
+missing decoder, or timeout returns `false`. The query does not power on the DBC.
+
 The service starts a serial USOCK connection and Redis/Valkey hash watchers. It subscribes to `vehicle`, `battery:0`, `battery:1`, `power-manager`, `engine-ecu`, `system`, `ble`, `navigation`, `usb`, and `keycard`; initial state is synchronized when the watchers start.
 
 It processes these Redis/Valkey list commands on `scooter:ble`:
