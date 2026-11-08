@@ -3,11 +3,13 @@ package ota
 import (
 	"bytes"
 	"crypto/sha256"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/librescoot/bluetooth-service/pkg/logger"
 )
@@ -25,6 +27,17 @@ func (fw *fakeWriter) WriteWithFrameID(frameID byte, data []byte) error {
 	copy(cp, data)
 	fw.frames = append(fw.frames, cp)
 	return nil
+}
+
+func (fw *fakeWriter) hasOp(op byte, predicate func([]byte) bool) bool {
+	fw.mu.Lock()
+	defer fw.mu.Unlock()
+	for _, frame := range fw.frames {
+		if len(frame) > 0 && frame[0] == op && (predicate == nil || predicate(frame)) {
+			return true
+		}
+	}
+	return false
 }
 
 func (fw *fakeWriter) lastOfOp(op byte) []byte {
@@ -559,6 +572,95 @@ func TestFailureClearsToIdleAndAllowsNewTransfer(t *testing.T) {
 	r.HandleControl(startMsg(data, sha, 240, "bundle-new"))
 	if ack := fw.lastOfOp(OpStartAck); ack == nil || ack[1] == StartInstalling {
 		t.Fatalf("new START after failure rejected/busy: %x", ack)
+	}
+}
+
+// A queued install whose updater never reports must not hold the receiver in
+// stateInstalling: the phone would get StartInstalling for every new transfer
+// and restarting the scooter would be the only way out.
+func TestInstallFeedbackTimeoutReleasesInstalling(t *testing.T) {
+	r, fw, _, _ := newTestReceiver(t)
+	previous := installFeedbackTimeout
+	installFeedbackTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { installFeedbackTimeout = previous })
+
+	data, sha := makeBundle(1_000)
+	r.HandleControl(startMsg(data, sha, 240, "bundle-quiet"))
+	sendAll(r, data, 240, 0)
+	r.HandleControl([]byte{OpComplete})
+	if cack := fw.lastOfOp(OpCompleteAck); cack == nil || cack[1] != CompleteOK {
+		t.Fatalf("complete ack = %x", cack)
+	}
+	if r.state != stateInstalling {
+		t.Fatalf("state after queue = %v, want installing", r.state)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && !fw.hasOp(OpInstallProgress, func(f []byte) bool { return f[1] == PhaseFailure }) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !fw.hasOp(OpInstallProgress, func(f []byte) bool { return f[1] == PhaseFailure }) {
+		t.Fatal("no failure reported after silence")
+	}
+	r.mu.Lock()
+	state := r.state
+	r.mu.Unlock()
+	if state != stateIdle {
+		t.Fatalf("state = %v, want idle", state)
+	}
+
+	// A new transfer must be accepted immediately, not rejected as busy.
+	r.HandleControl(startMsg(data, sha, 240, "bundle-next"))
+	if ack := fw.lastOfOp(OpStartAck); ack == nil || ack[1] == StartInstalling {
+		t.Fatalf("new START after silence rejected: %x", ack)
+	}
+}
+
+func TestInstallRefusalReportedImmediately(t *testing.T) {
+	r, fw, _, _ := newTestReceiver(t)
+
+	r.mu.Lock()
+	r.state = stateInstalling
+	r.installComp = ComponentMDB
+	r.installBundleID = "librescoot-unu-mdb-v1.4.0"
+	r.installQueuedAt = time.Now().Unix()
+	r.mu.Unlock()
+
+	r.onInstallField("mdb", "install-refused:mdb",
+		fmt.Sprintf("%d:update-service is busy", time.Now().Unix()))
+	if !fw.hasOp(OpInstallProgress, func(f []byte) bool { return f[1] == PhaseFailure }) {
+		t.Fatal("refusal not relayed")
+	}
+	r.mu.Lock()
+	state := r.state
+	r.mu.Unlock()
+	if state != stateIdle {
+		t.Fatalf("state = %v, want idle", state)
+	}
+}
+
+// A refusal written before this install was queued describes an earlier
+// attempt and must not fail the one now running.
+func TestStaleInstallRefusalIgnored(t *testing.T) {
+	r, fw, _, _ := newTestReceiver(t)
+
+	r.mu.Lock()
+	r.state = stateInstalling
+	r.installComp = ComponentMDB
+	r.installBundleID = "librescoot-unu-mdb-v1.4.0"
+	r.installQueuedAt = time.Now().Unix()
+	r.mu.Unlock()
+
+	r.onInstallField("mdb", "install-refused:mdb",
+		fmt.Sprintf("%d:stale", time.Now().Add(-time.Hour).Unix()))
+	if p := fw.lastOfOp(OpInstallProgress); p != nil && p[1] == PhaseFailure {
+		t.Fatalf("stale refusal failed the install: %x", p)
+	}
+	r.mu.Lock()
+	state := r.state
+	r.mu.Unlock()
+	if state != stateInstalling {
+		t.Fatalf("state = %v, want installing", state)
 	}
 }
 

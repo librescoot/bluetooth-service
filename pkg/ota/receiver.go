@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -45,6 +46,16 @@ const (
 	installHash      = "ota" // written by update-service's status reporter
 	progressMinGap   = 100 * time.Millisecond
 )
+
+// installFeedbackTimeout is how long update-service may stay silent about a
+// queued install before the phone is told it never started. update-service
+// heartbeats every 30 s for the whole operation, so silence this long means the
+// request was dropped (busy updater, open commit gate, dead service) rather
+// than an install making slow progress. Without it the receiver would sit in
+// "installing" for the full inhibitorTimeout and refuse every START in the
+// meantime, which is what makes a scooter restart the only way out. A variable
+// so tests can shorten it.
+var installFeedbackTimeout = 2 * time.Minute
 
 type recvState int
 
@@ -95,6 +106,8 @@ type Receiver struct {
 	waitingOutcome  bool // install finished, still observing status until it clears to idle
 	idleTimer       *time.Timer
 	inhibitTmr      *time.Timer
+	feedbackTmr     *time.Timer
+	installQueuedAt int64     // unix seconds the install was queued, for refusal freshness
 	lastSent        time.Time // pacing for INSTALL_PROGRESS notifications
 }
 
@@ -441,11 +454,13 @@ func (r *Receiver) handleCompleteLocked() {
 	r.state = stateInstalling
 	r.installComp = start.Component
 	r.installBundleID = start.BundleID
+	r.installQueuedAt = time.Now().Unix()
 	r.sess = nil
 	r.lastPhase = PhaseInstalling
 	r.lastPercent = 0
 	r.publishStatusLocked("installing")
 	r.startInstallWatcherLocked()
+	r.armInstallFeedbackLocked()
 	r.armInhibitorTimeoutLocked()
 	r.send(EncodeCompleteAck(CompleteOK))
 }
@@ -566,6 +581,34 @@ func (r *Receiver) stopInstallWatcherLocked() {
 		r.inhibitTmr.Stop()
 		r.inhibitTmr = nil
 	}
+	if r.feedbackTmr != nil {
+		r.feedbackTmr.Stop()
+		r.feedbackTmr = nil
+	}
+}
+
+// armInstallFeedbackLocked (re)starts the silence watchdog for a queued
+// install. Every field update-service writes for this component re-arms it,
+// including its 30-second heartbeat, so it only fires when update-service
+// produced no sign of life at all.
+func (r *Receiver) armInstallFeedbackLocked() {
+	if r.feedbackTmr != nil {
+		r.feedbackTmr.Stop()
+	}
+	comp := r.installComp
+	r.feedbackTmr = time.AfterFunc(installFeedbackTimeout, func() {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		if r.state != stateInstalling || r.installComp != comp {
+			return
+		}
+		r.log.Warnf("OTA: update-service reported nothing for %s within %s; the install did not start",
+			componentName(comp), installFeedbackTimeout)
+		r.lastPhase = PhaseFailure
+		r.lastPercent = 0
+		r.send(EncodeInstallProgress(PhaseFailure, 0, "the scooter did not start the installation"))
+		r.finishInstallLocked()
+	})
 }
 
 func (r *Receiver) onInstallField(comp, field, value string) {
@@ -580,7 +623,32 @@ func (r *Receiver) onInstallField(comp, field, value string) {
 		return
 	}
 
+	// Any field for this component proves update-service is alive; only this
+	// component's fields count, so an unrelated DBC update cannot mask a dead
+	// MDB install.
+	if r.state == stateInstalling && strings.HasSuffix(field, ":"+comp) {
+		r.armInstallFeedbackLocked()
+	}
+
 	switch field {
+	case "install-refused:" + comp:
+		if r.waitingOutcome {
+			return
+		}
+		// update-service dropped the request without touching its status
+		// (another operation holds the updater, or the commit gate is open).
+		// Report it here so the phone does not sit in "installing" until the
+		// watchdog expires. The timestamp keeps a refusal written before this
+		// install was queued from failing it.
+		ts, reason, ok := parseInstallRefusal(value)
+		if !ok || ts < r.installQueuedAt {
+			return
+		}
+		r.log.Warnf("OTA: update-service refused the %s install: %s", comp, reason)
+		r.lastPhase = PhaseFailure
+		r.lastPercent = 0
+		r.send(EncodeInstallProgress(PhaseFailure, 0, reason))
+		r.finishInstallLocked()
 	case "install-progress:" + comp:
 		if r.waitingOutcome {
 			return
@@ -651,6 +719,24 @@ func (r *Receiver) onInstallField(comp, field, value string) {
 	}
 }
 
+// parseInstallRefusal decodes an install-refused:<component> value, written by
+// update-service as "<unix-seconds>:<reason>".
+func parseInstallRefusal(value string) (int64, string, bool) {
+	sep := strings.IndexByte(value, ':')
+	if sep <= 0 {
+		return 0, "", false
+	}
+	ts, err := strconv.ParseInt(value[:sep], 10, 64)
+	if err != nil {
+		return 0, "", false
+	}
+	reason := strings.TrimSpace(value[sep+1:])
+	if reason == "" {
+		reason = "the scooter is busy with another update"
+	}
+	return ts, reason, true
+}
+
 // watcherFetch reads a field from the install hash (best effort).
 func (r *Receiver) watcherFetch(field string) (string, bool) {
 	if r.watcher == nil {
@@ -682,10 +768,14 @@ func (r *Receiver) finishInstallLocked() {
 	}
 	r.installBundleID = ""
 
-	// The inhibitor is released below; its watchdog must not fire later.
+	// The inhibitor is released below; its watchdogs must not fire later.
 	if r.inhibitTmr != nil {
 		r.inhibitTmr.Stop()
 		r.inhibitTmr = nil
+	}
+	if r.feedbackTmr != nil {
+		r.feedbackTmr.Stop()
+		r.feedbackTmr = nil
 	}
 
 	r.state = stateIdle
