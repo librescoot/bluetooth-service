@@ -244,8 +244,11 @@ uncooperative process can still race the final target check and atomic rename; t
 service does not claim a portable filesystem compare-and-swap guarantee. Non-UTF-8
 directory names and special files are not transferable; unsupported entries may be
 omitted or marked unsupported. The `.ble-transfer` name prefix is reserved for
-private transfer staging and is not addressable through the browser; legacy
-`.partial` staging names are reserved as well. The kernel's aggregate path-length
+private transfer staging and is not addressable through the browser. Partial
+uploads become eligible for cleanup after seven days; when the 512-partial limit
+is reached, the oldest partial is evicted to make room. Old partials can also be
+evicted to recover disk space. Cleanup runs when a new upload starts.
+Legacy `.partial` staging names are reserved as well. The kernel's aggregate path-length
 limit still applies; an overlong path returns the protocol's invalid-request error
 without falling back to a host path.
 

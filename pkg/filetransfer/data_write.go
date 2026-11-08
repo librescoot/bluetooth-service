@@ -8,11 +8,16 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
+	"time"
 )
 
-const maxDataPartialFiles = 128
+const (
+	maxDataPartialFiles = 512
+	maxDataPartialAge   = 7 * 24 * time.Hour
+)
 
 func dataStageName(path string, req Request, oldIdentity fileIdentity) string {
 	h := sha256.New()
@@ -73,27 +78,23 @@ func (s *Server) beginDataWrite(req Request, path string, check func() error) (*
 		return nil, 0, os.ErrPermission
 	}
 	stage := dataStageName(path, req, oldIdentity)
-	if _, err := s.dataRoot.Lstat(stage); errors.Is(err, os.ErrNotExist) {
-		entries, readErr := s.dataRoot.Open(".ble-transfer")
-		if readErr != nil {
-			return nil, 0, readErr
+	_, stageErr := s.dataRoot.Lstat(stage)
+	newStage := errors.Is(stageErr, os.ErrNotExist)
+	if newStage {
+		if err := cleanDataStages(s.dataRoot, time.Now()); err != nil {
+			return nil, 0, err
 		}
-		listing, listErr := entries.ReadDir(maxDataPartialFiles + 1)
-		entries.Close()
-		if listErr != nil && !errors.Is(listErr, io.EOF) {
-			return nil, 0, listErr
-		}
-		if len(listing) >= maxDataPartialFiles {
-			return nil, 0, syscall.ENOSPC
-		}
-	} else if err != nil {
-		return nil, 0, err
+	} else if stageErr != nil {
+		return nil, 0, stageErr
 	}
 	var fs syscall.Statfs_t
 	if err := syscall.Statfs(s.dataPath, &fs); err != nil {
 		return nil, 0, err
 	}
-	flags := os.O_CREATE | os.O_RDWR | syscall.O_NOFOLLOW | syscall.O_NONBLOCK
+	flags := os.O_RDWR | syscall.O_NOFOLLOW | syscall.O_NONBLOCK
+	if newStage {
+		flags |= os.O_CREATE | os.O_EXCL
+	}
 	f, err := s.dataRoot.OpenFile(stage, flags, 0600)
 	if err != nil {
 		return nil, 0, err
@@ -114,8 +115,14 @@ func (s *Server) beginDataWrite(req Request, path string, check func() error) (*
 	offset := uint64(info.Size())
 	offset -= offset % uint64(req.Chunk)
 	if fs.Bavail*uint64(fs.Bsize) < req.Size-offset+freeMargin {
-		f.Close()
-		return nil, 0, syscall.ENOSPC
+		err := reclaimDataSpace(s.dataRoot, s.dataPath, filepath.Base(stage), req.Size-offset+freeMargin, fs.Bavail*uint64(fs.Bsize))
+		if err != nil {
+			f.Close()
+			if newStage {
+				_ = s.dataRoot.Remove(stage)
+			}
+			return nil, 0, err
+		}
 	}
 	if err := f.Truncate(int64(offset)); err != nil {
 		f.Close()
@@ -127,6 +134,135 @@ func (s *Server) beginDataWrite(req Request, path string, check func() error) (*
 		return nil, 0, err
 	}
 	return stored, offset, nil
+}
+
+func cleanDataStages(root *os.Root, now time.Time) error {
+	for {
+		dir, err := root.Open(".ble-transfer")
+		if err != nil {
+			return err
+		}
+		entries, readErr := dir.ReadDir(maxDataPartialFiles + 1)
+		_ = dir.Close()
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			return readErr
+		}
+		remaining := len(entries)
+		oldest := ""
+		var oldestTime time.Time
+		for _, entry := range entries {
+			name := entry.Name()
+			if len(name) != 69 || !strings.HasSuffix(name, ".part") {
+				continue
+			}
+			if _, err := hex.DecodeString(name[:64]); err != nil {
+				continue
+			}
+			info, err := root.Lstat(".ble-transfer/" + name)
+			if errors.Is(err, os.ErrNotExist) {
+				remaining--
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			st, ok := info.Sys().(*syscall.Stat_t)
+			if !info.Mode().IsRegular() || !ok || int(st.Uid) != os.Geteuid() {
+				continue
+			}
+			if info.ModTime().Before(now.Add(-maxDataPartialAge)) {
+				if err := root.Remove(".ble-transfer/" + name); err != nil && !errors.Is(err, os.ErrNotExist) {
+					return err
+				}
+				remaining--
+				continue
+			}
+			if oldest == "" || info.ModTime().Before(oldestTime) {
+				oldest, oldestTime = name, info.ModTime()
+			}
+		}
+		if remaining < maxDataPartialFiles {
+			if len(entries) == maxDataPartialFiles+1 {
+				continue
+			}
+			return nil
+		}
+		if oldest == "" {
+			return syscall.ENOSPC
+		}
+		if err := root.Remove(".ble-transfer/" + oldest); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+}
+
+type dataStageCandidate struct {
+	name      string
+	modified  time.Time
+	allocated uint64
+}
+
+func reclaimDataSpace(root *os.Root, dataPath, exclude string, required, available uint64) error {
+	dir, err := root.Open(".ble-transfer")
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	var candidates []dataStageCandidate
+	for {
+		entries, readErr := dir.ReadDir(64)
+		for _, entry := range entries {
+			name := entry.Name()
+			if name == exclude || len(name) != 69 || !strings.HasSuffix(name, ".part") {
+				continue
+			}
+			if _, err := hex.DecodeString(name[:64]); err != nil {
+				continue
+			}
+			info, err := root.Lstat(".ble-transfer/" + name)
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			st, ok := info.Sys().(*syscall.Stat_t)
+			if !info.Mode().IsRegular() || !ok || int(st.Uid) != os.Geteuid() || st.Blocks <= 0 {
+				continue
+			}
+			candidates = append(candidates, dataStageCandidate{name, info.ModTime(), uint64(st.Blocks) * 512})
+		}
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+		if readErr != nil {
+			return readErr
+		}
+	}
+	potential := available
+	for _, candidate := range candidates {
+		potential += candidate.allocated
+		if potential >= required {
+			break
+		}
+	}
+	if potential < required {
+		return syscall.ENOSPC
+	}
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].modified.Before(candidates[j].modified) })
+	for _, candidate := range candidates {
+		if err := root.Remove(".ble-transfer/" + candidate.name); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		var fs syscall.Statfs_t
+		if err := syscall.Statfs(dataPath, &fs); err != nil {
+			return err
+		}
+		if fs.Bavail*uint64(fs.Bsize) >= required {
+			return nil
+		}
+	}
+	return syscall.ENOSPC
 }
 
 func (f *storedFile) commitData() error {
