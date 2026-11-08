@@ -24,7 +24,7 @@ commands:
 `
 
 func TestRestrictedDataPath(t *testing.T) {
-	for _, p := range []string{".", "ota", "ota/mdb", "ota/mdb/update.mender", "ota/mdb/update.delta", "radio-gaga", "radio-gaga/config.yaml"} {
+	for _, p := range []string{".", "ota", "ota/mdb", "ota/mdb/update.mender", "ota/mdb/update.delta", "ota/mdb/update.hdelta", "radio-gaga", "radio-gaga/config.yaml"} {
 		if !restrictedDataPath(p) {
 			t.Errorf("%q denied", p)
 		}

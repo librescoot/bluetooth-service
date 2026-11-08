@@ -26,7 +26,8 @@ func restrictedDataPath(path string) bool {
 	}
 	name := strings.TrimPrefix(path, "ota/mdb/")
 	return validComponent(name) && !strings.HasPrefix(name, ".") &&
-		(strings.HasSuffix(name, ".mender") || strings.HasSuffix(name, ".delta"))
+		(strings.HasSuffix(name, ".mender") || strings.HasSuffix(name, ".delta") ||
+			strings.HasSuffix(name, ".hdelta"))
 }
 
 // A broker selected in the configuration must not gain a route to rewrite the
