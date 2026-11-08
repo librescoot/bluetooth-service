@@ -34,11 +34,29 @@ func TestGoldenVectors(t *testing.T) {
 				"18191a1b1c1d1e1f" +
 				"09" + hex.EncodeToString([]byte("bundle-v1")),
 		},
+		{
+			"start_staged",
+			EncodeStart(Start{
+				Version:   1,
+				Component: ComponentMDB,
+				ChunkSize: 240,
+				TotalSize: 0x01020304,
+				SHA256:    sha,
+				BundleID:  "bundle-v1",
+				Staged:    true,
+			}),
+			"020100f000040302010001020304050607" +
+				"08090a0b0c0d0e0f1011121314151617" +
+				"18191a1b1c1d1e1f" +
+				"09" + hex.EncodeToString([]byte("bundle-v1")),
+		},
+		{"apply_staged", EncodeApplyStaged(ComponentDBC), "0601"},
 		{"data", EncodeData(0xAABBCCDD, []byte{0xde, 0xad}), "ddccbbaadead"},
 		{"start_ack", EncodeStartAck(StartResume, 0x00010000, 64, 16, 240), "8100000001004000" + "10" + "f000"},
 		{"ack", EncodeAck(AckFlagRewind, 0x12345678), "820178563412"},
 		{"complete_ack", EncodeCompleteAck(CompleteOK), "8300"},
 		{"install_progress", EncodeInstallProgress(PhaseInstalling, 42, "ok"), "84012a026f6b"},
+		{"install_up_to_date", EncodeInstallProgress(PhaseUpToDate, 100, ""), "84076400"},
 		{"error", EncodeError(ErrOverflow, "E:overflow"), "86020a" + hex.EncodeToString([]byte("E:overflow"))},
 		{"abort_ack", EncodeAbortAck(), "85"},
 	}
@@ -87,6 +105,30 @@ func TestDecodeStartErrors(t *testing.T) {
 	p = p[:len(p)-1] // truncate bundle id
 	if _, err := DecodeStart(p); err == nil {
 		t.Error("truncated bundle id accepted")
+	}
+
+	// START_STAGED carries the same payload and must decode to the same fields
+	// with the staging flag set.
+	staged := EncodeStart(Start{Version: 1, ChunkSize: 240, TotalSize: 10, SHA256: sha, BundleID: "x", Staged: true})
+	parsed, err := DecodeStart(staged)
+	if err != nil || !parsed.Staged || parsed.BundleID != "x" {
+		t.Fatalf("staged START decode = %+v, %v", parsed, err)
+	}
+}
+
+func TestDecodeApplyStaged(t *testing.T) {
+	component, err := DecodeApplyStaged(EncodeApplyStaged(ComponentDBC))
+	if err != nil || component != ComponentDBC {
+		t.Fatalf("component = %d, %v", component, err)
+	}
+	for _, bad := range [][]byte{
+		{OpApplyStaged},
+		{OpApplyStaged, ComponentMDB, 0},
+		{OpStart, ComponentMDB},
+	} {
+		if _, err := DecodeApplyStaged(bad); err == nil {
+			t.Errorf("DecodeApplyStaged(%x) accepted", bad)
+		}
 	}
 }
 
