@@ -1010,7 +1010,7 @@ var capabilityMap = map[string][]string{
 	"ble":           {"forget"},
 	"pm":            {"hibernate-for <duration>", "hibernate-cancel"},
 	"dbc":           {"status", "on", "off", "on-wait", "off-wait"},
-	"ota":           {"transfer"}, // BLE OTA bundle transfer via the 0x0500 GATT service
+	"ota":           {"transfer", "staged"}, // BLE OTA bundle transfer via the 0x0500 GATT service; "staged" adds upload-without-install and a staged install
 	"cap":           {"list", "<category>"},
 	"get":           {"<key>", "list", "list:<prefix>"},
 	"set":           {"<key>:<value>"},
@@ -1050,7 +1050,13 @@ func capabilityRegistryFor(bondDelete, tripCounter bool) string {
 	if bondDelete {
 		categories = append(categories, "ble")
 	}
-	categories = append(categories, "pm", "dbc", "ota", "settings")
+	// The ota capability version is what tells a client whether this build can
+	// stage several artifacts and install them on request (OpStartStaged /
+	// OpApplyStaged), instead of uploading and installing one at a time. Older
+	// builds advertise the group without a version and answer such a request
+	// with nothing at all, so the version is the only answer available before
+	// the first write.
+	categories = append(categories, "pm", "dbc", "ota=2", "settings")
 	if tripCounter {
 		categories = append(categories, "trip")
 	}
