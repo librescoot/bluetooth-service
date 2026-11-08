@@ -121,7 +121,7 @@ func (s *Server) beginDataWrite(req Request, path string, check func() error) (*
 		f.Close()
 		return nil, 0, err
 	}
-	stored := &storedFile{file: f, info: FileInfo{Name: filepath.Base(path), Size: req.Size, Hash: req.Hash}, check: check, isData: true, targetPath: path, stagePath: stage, intent: req.Intent, oldSize: req.OldSize, oldHash: req.OldHash, oldIdentity: oldIdentity, oldUID: oldUID, oldGID: oldGID, oldMode: oldMode}
+	stored := &storedFile{file: f, info: FileInfo{Name: filepath.Base(path), Size: req.Size, Hash: req.Hash}, check: check, isData: true, targetPath: path, stagePath: stage, intent: req.Intent, oldSize: req.OldSize, oldHash: req.OldHash, oldIdentity: oldIdentity, oldUID: oldUID, oldGID: oldGID, oldMode: oldMode, restrictedData: s.restrictedData}
 	if err := check(); err != nil {
 		stored.close()
 		return nil, 0, err
@@ -143,6 +143,11 @@ func (f *storedFile) commitData() error {
 	}
 	if hash != f.info.Hash {
 		return errChecksum
+	}
+	if f.restrictedData && f.targetPath == "radio-gaga/config.yaml" {
+		if err := validateRadioGagaConfig(f.file, f.info.Size); err != nil {
+			return err
+		}
 	}
 	root := f.root
 	if root == nil {

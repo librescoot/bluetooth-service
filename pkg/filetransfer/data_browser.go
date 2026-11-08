@@ -98,8 +98,17 @@ func (s *Server) SetDataRoot(path string) error {
 		s.dataRoot.Close()
 	}
 	s.dataRoot, s.dataPath = root, path
+	s.restrictedData = false
 	s.dataDirs = make(map[[16]byte]*dataDirectory)
 	s.dataNodes = make(map[[16]byte]*dataNode)
+	return nil
+}
+
+func (s *Server) SetRestrictedDataRoot(path string) error {
+	if err := s.SetDataRoot(path); err != nil {
+		return err
+	}
+	s.restrictedData = true
 	return nil
 }
 
@@ -132,7 +141,7 @@ func sameDirectoryObject(a, b fileIdentity) bool {
 }
 
 func (s *Server) checkedInfo(path string) (os.FileInfo, error) {
-	if s.dataRoot == nil {
+	if s.dataRoot == nil || (s.restrictedData && !restrictedDataPath(path)) {
 		return nil, os.ErrPermission
 	}
 	if path == "." {
@@ -493,6 +502,10 @@ func (s *Server) controlV2(req Request, generation uint64) bool {
 			return true
 		}
 		n.touched = time.Now()
+		if s.restrictedData && !restrictedDataDirectory(n.path) {
+			s.fail(req, ErrDenied)
+			return true
+		}
 		if n.kind != 0 {
 			s.fail(req, ErrChanged)
 			return true
@@ -597,6 +610,13 @@ func (s *Server) listEntry(d *dataDirectory, cursor uint32, check func() error) 
 			continue
 		}
 		name := e.Name()
+		path := name
+		if d.path != "." {
+			path = d.path + "/" + name
+		}
+		if s.restrictedData && !restrictedDataPath(path) {
+			continue
+		}
 		kind := byte(3)
 		size := uint64(0)
 		modified := int64(0)

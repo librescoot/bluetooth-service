@@ -27,7 +27,7 @@ var (
 	firmwareDir       = flag.String("firmware-dir", service.DefaultFirmwareDir, "Directory containing firmware files")
 	autoUpdate        = flag.Bool("auto-update", true, "Automatically update firmware on startup if newer version available")
 	otaStaging        = flag.String("ota-staging-dir", ota.DefaultStagingDir, "Staging directory for BLE OTA bundle transfers")
-	enableDataBrowser = flag.Bool("enable-data-browser", false, "Enable administrative BLE browsing and file writes rooted at /data")
+	enableDataBrowser = flag.Bool("enable-data-browser", false, "Deprecated; use bluetooth.data-browser in settings.toml")
 )
 
 const (
@@ -130,8 +130,15 @@ func main() {
 		log.Fatalf("Failed to initialize file transfer: %v", err)
 	}
 	if *enableDataBrowser {
+		log.Warnf("--enable-data-browser is ignored; set bluetooth.data-browser in settings.toml")
+	}
+	dataBrowser, err := loadDataBrowserSetting("/data/settings.toml")
+	if err != nil {
+		log.Warnf("Data browser disabled: local settings are invalid or unavailable")
+	}
+	if dataBrowser {
 		if err := svc.EnableDataBrowser(); err != nil {
-			log.Fatalf("Failed to enable administrative data browser: %v", err)
+			log.Fatalf("Failed to enable restricted data browser: %v", err)
 		}
 	}
 

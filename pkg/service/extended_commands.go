@@ -1207,6 +1207,10 @@ func (s *Service) handleSettingsSet(cmd string) {
 		s.sendExtendedResponse("set:error:format (expected set:<key>:<value>)")
 		return
 	}
+	if key == "bluetooth.data-browser" {
+		s.sendExtendedResponse("set:error:read-only")
+		return
+	}
 
 	schema, err := s.getSettingsSchema()
 	if err != nil {

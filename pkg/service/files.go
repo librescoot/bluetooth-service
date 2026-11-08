@@ -60,12 +60,12 @@ func (s *Service) EnableFileTransfer(logDir, inboxDir string) error {
 	return nil
 }
 
-// EnableDataBrowser enables administrative access rooted at /data.
+// EnableDataBrowser enables the restricted file browser rooted at /data.
 func (s *Service) EnableDataBrowser() error {
 	if s.files == nil {
 		return errors.New("file transfer is not enabled")
 	}
-	if err := s.files.SetDataRoot("/data"); err != nil {
+	if err := s.files.SetRestrictedDataRoot("/data"); err != nil {
 		return err
 	}
 	s.dataBrowserEnabled.Store(true)

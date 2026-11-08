@@ -216,28 +216,28 @@ Uploads are verified before non-overwriting publication. Transfers never install
 firmware or activate maps. Log archives contain sensitive diagnostic data.
 
 Legacy read-only Logs listing and downloads remain available whenever the BLE
-file tunnel is supported; they do not depend on the `/data` opt-in. The
-administrative `/data` browser uses protocol v2 and is disabled by default.
-Enable it only for a root-administered development session by adding a local
-systemd override:
+file tunnel is supported; they do not depend on the data browser. The protocol v2
+browser is disabled by default. To enable it, edit `settings.toml` through USB
+or local administration:
 
-```sh
-sudo systemctl edit librescoot-bluetooth.service
+```toml
+[bluetooth]
+data-browser = true
 ```
 
-Set the override to:
+Restart `librescoot-bluetooth.service` after changing the setting. It is read
+only at service startup, not from runtime Redis updates. The deprecated
+`--enable-data-browser` flag is ignored. The service advertises `data=1` only
+when the local setting is enabled and the nRF file tunnel is available.
 
-```ini
-[Service]
-ExecStart=
-ExecStart=/usr/bin/bluetooth-service --serial=/dev/ttymxc1 --baud=115200 --redis-addr=localhost:6379 --log-level=3 --firmware-dir=/usr/share/nrf-fw --auto-update=true --ota-staging-dir=/data/ota --enable-data-browser
-```
-
-Then restart `librescoot-bluetooth.service`; remove the override to disable the
-browser. The service advertises `data=1` only while this option is enabled and
-the nRF file tunnel is available. This grants paired BLE clients administrative
-read/write access across `/data`; uploaded files may affect other services that
-consume them, but are never automatically installed or executed. File replacement
+Within the browser, paired phones can access only `/data/ota/mdb/` files ending in `.mender` or
+`.delta`, and `/data/radio-gaga/config.yaml`. They cannot browse other `/data`
+paths. A radio-gaga configuration must declare `environment: production`, a
+non-empty scooter identifier and token, no bootstrap section, and explicitly
+disable the `shell`, `redis`, `self_update`, `config:set`,
+`config:del`, `config:save`, `txn:replace`, `update_ca_cert`, and
+`migrate_broker` commands. Uploads do not install firmware, restart services, or
+apply the configuration. File replacement
 requires explicit client intent and a match against the target's expected size
 and SHA-256. Publication is atomic after complete-file verification. A separate,
 uncooperative process can still race the final target check and atomic rename; the
@@ -266,7 +266,7 @@ Configuration is supplied as command-line flags:
 | `--firmware-dir` | service default | Directory containing nRF firmware files |
 | `--auto-update` | `true` | Update nRF firmware at startup when a newer version is available |
 | `--ota-staging-dir` | `/data/ota` | Directory for incoming BLE OTA bundles |
-| `--enable-data-browser` | `false` | Enable administrative BLE browser rooted at `/data` |
+| `--enable-data-browser` | `false` | Deprecated and ignored; use the local-only `bluetooth.data-browser` setting |
 | `--version` | — | Print the build version and exit |
 
 The production recipe installs the firmware updater and bundled firmware under `/usr/share/nrf-fw/`; its systemd unit starts `/usr/bin/bluetooth-service`.

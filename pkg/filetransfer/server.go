@@ -53,6 +53,7 @@ type Server struct {
 	completedAt      time.Time
 	idSource         io.Reader
 	dataRoot         *os.Root
+	restrictedData   bool
 	dataPath         string
 	dataDirs         map[[16]byte]*dataDirectory
 	dataNodes        map[[16]byte]*dataNode
