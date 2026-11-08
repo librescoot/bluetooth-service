@@ -230,13 +230,10 @@ only at service startup, not from runtime Redis updates. The deprecated
 `--enable-data-browser` flag is ignored. The service advertises `data=1` only
 when the local setting is enabled and the nRF file tunnel is available.
 
-Within the browser, paired phones can access only `/data/ota/mdb/` files ending in `.mender` or
-`.delta`, and `/data/radio-gaga/config.yaml`. They cannot browse other `/data`
-paths. A radio-gaga configuration must declare `environment: production`, a
-non-empty scooter identifier and token, no bootstrap section, and explicitly
-disable the `shell`, `redis`, `self_update`, `config:set`,
-`config:del`, `config:save`, `txn:replace`, `update_ca_cert`, and
-`migrate_broker` commands. Uploads do not install firmware, restart services, or
+Within the browser, paired phones can access `/data/ota/mdb/` files ending in
+`.mender`, `.delta`, or `.hdelta`, and `/data/radio-gaga/config.yaml`. They
+cannot browse other `/data` paths. The browser does not inspect or modify the
+configuration contents. Uploads do not install firmware, restart services, or
 apply the configuration. File replacement
 requires explicit client intent and a match against the target's expected size
 and SHA-256. Publication is atomic after complete-file verification. A separate,

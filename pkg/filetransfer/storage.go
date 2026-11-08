@@ -39,23 +39,22 @@ type identity struct {
 	Hash string
 }
 type storedFile struct {
-	root           *os.Root
-	file           *os.File
-	info           FileInfo
-	partial        string
-	check          func() error
-	isData         bool
-	targetPath     string
-	stagePath      string
-	intent         byte
-	oldSize        uint64
-	oldHash        [32]byte
-	oldIdentity    fileIdentity
-	oldUID         int
-	oldGID         int
-	oldMode        os.FileMode
-	borrowedRoot   bool
-	restrictedData bool
+	root         *os.Root
+	file         *os.File
+	info         FileInfo
+	partial      string
+	check        func() error
+	isData       bool
+	targetPath   string
+	stagePath    string
+	intent       byte
+	oldSize      uint64
+	oldHash      [32]byte
+	oldIdentity  fileIdentity
+	oldUID       int
+	oldGID       int
+	oldMode      os.FileMode
+	borrowedRoot bool
 }
 
 func (f *storedFile) close() {

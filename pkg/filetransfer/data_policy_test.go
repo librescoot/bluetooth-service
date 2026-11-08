@@ -9,20 +9,6 @@ import (
 	"testing"
 )
 
-const safeRadioConfig = `environment: production
-scooter: {identifier: scooter, token: secret}
-commands:
-  shell: {disabled: true}
-  redis: {disabled: true}
-  self_update: {disabled: true}
-  config:set: {disabled: true}
-  config:del: {disabled: true}
-  config:save: {disabled: true}
-  txn:replace: {disabled: true}
-  update_ca_cert: {disabled: true}
-  migrate_broker: {disabled: true}
-`
-
 func TestRestrictedDataPath(t *testing.T) {
 	for _, p := range []string{".", "ota", "ota/mdb", "ota/mdb/update.mender", "ota/mdb/update.delta", "ota/mdb/update.hdelta", "radio-gaga", "radio-gaga/config.yaml"} {
 		if !restrictedDataPath(p) {
@@ -81,19 +67,15 @@ func TestRestrictedRootHidesAndRejectsPathsOverProtocol(t *testing.T) {
 	}
 }
 
-func TestRadioGagaUploadRequiresSafeConfiguration(t *testing.T) {
+func TestRadioGagaUploadDoesNotInspectContents(t *testing.T) {
 	for _, tc := range []struct {
 		name, data string
-		accepted   bool
 	}{
-		{"safe", safeRadioConfig, true},
-		{"development", strings.Replace(safeRadioConfig, "production", "development", 1), false},
-		{"bootstrap", safeRadioConfig + "bootstrap: {code: attack}\n", false},
-		{"no token", strings.Replace(safeRadioConfig, "token: secret", "token: ''", 1), false},
-		{"shell", strings.Replace(safeRadioConfig, "shell: {disabled: true}", "shell: {disabled: false}", 1), false},
-		{"redis missing", strings.Replace(safeRadioConfig, "  redis: {disabled: true}\n", "", 1), false},
-		{"duplicate", safeRadioConfig + "environment: development\n", false},
-		{"malformed", "[", false},
+		{"development", "environment: development\ncommands:\n  shell: {disabled: false}\n"},
+		{"bootstrap", "bootstrap: {code: example}\n"},
+		{"malformed yaml", "["},
+		{"empty", ""},
+		{"over one MiB", strings.Repeat("x", (1<<20)+1)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -116,13 +98,12 @@ func TestRadioGagaUploadRequiresSafeConfiguration(t *testing.T) {
 			if _, err := f.file.WriteAt(data, 0); err != nil {
 				t.Fatal(err)
 			}
-			err = f.commitData()
-			if (err == nil) != tc.accepted {
-				t.Fatalf("commit error = %v, accepted = %v", err, tc.accepted)
+			if err := f.commitData(); err != nil {
+				t.Fatalf("commit: %v", err)
 			}
-			_, err = os.Stat(filepath.Join(root, "radio-gaga", "config.yaml"))
-			if (err == nil) != tc.accepted {
-				t.Fatalf("published: %v", err)
+			got, err := os.ReadFile(filepath.Join(root, "radio-gaga", "config.yaml"))
+			if err != nil || string(got) != tc.data {
+				t.Fatalf("published content differs: %v", err)
 			}
 		})
 	}
