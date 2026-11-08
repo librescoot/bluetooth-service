@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -65,6 +66,91 @@ func (fi *fakeInstaller) Install(component byte, path string) error {
 	}
 	fi.calls = append(fi.calls, path)
 	return nil
+}
+
+// fakeStager records the staged transfers and staged applies a component
+// backend was asked for, while inheriting the installer's call recording.
+type fakeStager struct {
+	fakeInstaller
+	staged   []string
+	applied  []string
+	stageErr error
+}
+
+func (fs *fakeStager) Stage(component byte, path string) error {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	if fs.stageErr != nil {
+		return fs.stageErr
+	}
+	fs.staged = append(fs.staged, path)
+	return nil
+}
+
+func (fs *fakeStager) ApplyStaged(component byte) error {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	fs.applied = append(fs.applied, componentName(component))
+	return nil
+}
+
+// fakeDBCStager additionally stands in for the cross-board staging that drops
+// its local copies once the dashboard has them; the MDB backend has none.
+type fakeDBCStager struct {
+	fakeStager
+	pruned []string
+}
+
+func (fs *fakeDBCStager) PruneStaged(component byte) {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	fs.pruned = append(fs.pruned, componentName(component))
+}
+
+// A staged install for the dashboard is delivered by copying the artifacts to
+// it; once it has installed them, the MDB's copies are only wasted space.
+func TestStagedApplyPrunesDeliveredArtifacts(t *testing.T) {
+	dir := t.TempDir()
+	fw := &fakeWriter{}
+	dbc := &fakeDBCStager{}
+	lg := logger.NewLogger(log.New(os.Stderr, "", 0), logger.LogLevelError)
+	r := New(lg, nil, func() FrameWriter { return fw }, dir, map[byte]Installer{ComponentDBC: dbc})
+
+	r.HandleControl(EncodeApplyStaged(ComponentDBC))
+	r.onInstallField("dbc", "status:dbc", "pending-reboot")
+
+	if len(dbc.pruned) != 1 || dbc.pruned[0] != "dbc" {
+		t.Fatalf("pruned = %v, want [dbc]", dbc.pruned)
+	}
+}
+
+// A transferred bundle is not cross-board staging, so it is not pruned.
+func TestTransferredInstallDoesNotPrune(t *testing.T) {
+	r, _, st, _ := newStagedTestReceiver(t)
+	data, sha := makeBundle(100)
+
+	r.HandleControl(EncodeStart(Start{Version: 1, Component: ComponentDBC, ChunkSize: 240,
+		TotalSize: uint32(len(data)), SHA256: sha, BundleID: "librescoot-unu-dbc-v1.4.0"}))
+	sendAll(r, data, 240, 0)
+	r.HandleControl([]byte{OpComplete})
+	r.onInstallField("dbc", "status:dbc", "pending-reboot")
+
+	if len(st.calls) != 1 {
+		t.Fatalf("installer calls = %v", st.calls)
+	}
+}
+
+func newStagedTestReceiver(t *testing.T) (*Receiver, *fakeWriter, *fakeStager, string) {
+	t.Helper()
+	dir := t.TempDir()
+	fw := &fakeWriter{}
+	st := &fakeStager{}
+	lg := logger.NewLogger(log.New(os.Stderr, "", 0), logger.LogLevelError)
+	r := New(lg, nil, func() FrameWriter { return fw }, dir, map[byte]Installer{
+		ComponentMDB: st,
+		ComponentDBC: st,
+	})
+	return r, fw, st, dir
 }
 
 func newTestReceiver(t *testing.T) (*Receiver, *fakeWriter, *fakeInstaller, string) {
@@ -661,6 +747,171 @@ func TestStaleInstallRefusalIgnored(t *testing.T) {
 	r.mu.Unlock()
 	if state != stateInstalling {
 		t.Fatalf("state = %v, want installing", state)
+	}
+}
+
+// A staged transfer must verify and keep the artifact without installing it:
+// that is what lets several files be uploaded before one install, and a delta
+// chain needs its base image present first.
+func TestStagedTransferKeepsArtifactWithoutInstalling(t *testing.T) {
+	for _, component := range []byte{ComponentMDB, ComponentDBC} {
+		t.Run(componentName(component), func(t *testing.T) {
+			r, fw, st, dir := newStagedTestReceiver(t)
+			data, sha := makeBundle(1000)
+			id := "librescoot-unu-" + componentName(component) + "-v1.4.0"
+
+			r.HandleControl(EncodeStart(Start{Version: 1, Component: component,
+				ChunkSize: 240, TotalSize: uint32(len(data)), SHA256: sha, BundleID: id, Staged: true}))
+			if ack := fw.lastOfOp(OpStartAck); ack == nil || ack[1] != StartNew {
+				t.Fatalf("staged START ack = %x", ack)
+			}
+			sendAll(r, data, 240, 0)
+			r.HandleControl([]byte{OpComplete})
+
+			if ack := fw.lastOfOp(OpCompleteAck); ack == nil || ack[1] != CompleteOK {
+				t.Fatalf("staged COMPLETE ack = %x", ack)
+			}
+			if len(st.calls) != 0 {
+				t.Fatalf("a staged transfer installed %v", st.calls)
+			}
+			want := filepath.Join(dir, componentName(component), id+".mender")
+			if len(st.staged) != 1 || st.staged[0] != want {
+				t.Fatalf("staged = %v, want %s", st.staged, want)
+			}
+			got, err := os.ReadFile(want)
+			if err != nil || !bytes.Equal(got, data) {
+				t.Fatalf("staged data mismatch: %v", err)
+			}
+			if matches, _ := filepath.Glob(filepath.Join(dir, componentName(component), id+".json")); len(matches) != 0 {
+				t.Fatalf("staged transfer left sidecars: %v", matches)
+			}
+			r.mu.Lock()
+			state := r.state
+			r.mu.Unlock()
+			if state != stateIdle {
+				t.Fatalf("state = %v, want idle", state)
+			}
+
+			// Another artifact can follow immediately.
+			r.HandleControl(EncodeStart(Start{Version: 1, Component: component,
+				ChunkSize: 240, TotalSize: uint32(len(data)), SHA256: sha,
+				BundleID: "librescoot-unu-" + componentName(component) + "-v1.5.0.delta", Staged: true}))
+			if ack := fw.lastOfOp(OpStartAck); ack == nil || ack[1] != StartNew {
+				t.Fatalf("second staged START ack = %x", ack)
+			}
+		})
+	}
+}
+
+// Staging the version a board already runs is the delta base case, not a
+// mistake, so the same-version refusal must not apply to staged transfers.
+func TestStagedTransferAcceptsRunningVersionAsBase(t *testing.T) {
+	r, fw, _, _ := newStagedTestReceiver(t)
+	r.installedVersion = func(byte) string { return "1.3.0" }
+	data, sha := makeBundle(100)
+
+	r.HandleControl(EncodeStart(Start{Version: 1, Component: ComponentMDB, ChunkSize: 240,
+		TotalSize: uint32(len(data)), SHA256: sha, BundleID: "librescoot-unu-mdb-v1.3.0", Staged: true}))
+	if ack := fw.lastOfOp(OpStartAck); ack == nil || ack[1] == StartAlreadyInstalled {
+		t.Fatalf("staged base image refused: %x", ack)
+	}
+}
+
+// APPLY_STAGED hands the component's staged set to update-service and then
+// reports the install through the same relay as a transferred bundle.
+func TestApplyStagedQueuesInstallAndRelaysProgress(t *testing.T) {
+	r, fw, st, _ := newStagedTestReceiver(t)
+
+	r.HandleControl(EncodeApplyStaged(ComponentMDB))
+	if len(st.applied) != 1 || st.applied[0] != "mdb" {
+		t.Fatalf("applied = %v", st.applied)
+	}
+	if p := fw.lastOfOp(OpInstallProgress); p == nil || p[1] != PhaseInstalling {
+		t.Fatalf("apply ack = %x", p)
+	}
+	r.mu.Lock()
+	state := r.state
+	r.mu.Unlock()
+	if state != stateInstalling {
+		t.Fatalf("state = %v, want installing", state)
+	}
+
+	r.onInstallField("mdb", "status:mdb", "pending-reboot")
+	if p := fw.lastOfOp(OpInstallProgress); p == nil || p[1] != PhasePendingReboot {
+		t.Fatalf("pending-reboot relay = %x", p)
+	}
+	r.mu.Lock()
+	state, waiting := r.state, r.waitingOutcome
+	r.mu.Unlock()
+	if state != stateIdle || !waiting {
+		t.Fatalf("state = %v waiting = %v, want idle/true", state, waiting)
+	}
+}
+
+// update-service resolves a staged set that is not newer than what runs to
+// staged-noop, a terminal status that never clears itself. The receiver has to
+// end the wait there, and the phone has to see it as up to date rather than as
+// a failure.
+func TestStagedNoopEndsTheInstallAsUpToDate(t *testing.T) {
+	r, fw, _, _ := newStagedTestReceiver(t)
+	r.HandleControl(EncodeApplyStaged(ComponentMDB))
+	r.onInstallField("mdb", "status:mdb", "staged-noop")
+
+	if !fw.hasOp(OpInstallProgress, func(f []byte) bool { return f[1] == PhaseUpToDate }) {
+		t.Fatal("staged-noop was not reported as up to date")
+	}
+	r.mu.Lock()
+	state, waiting := r.state, r.waitingOutcome
+	r.mu.Unlock()
+	if state != stateIdle || waiting {
+		t.Fatalf("state = %v waiting = %v, want idle/false", state, waiting)
+	}
+
+	// And a fresh transfer is accepted again.
+	data, sha := makeBundle(100)
+	r.HandleControl(EncodeStart(Start{Version: 1, Component: ComponentMDB, ChunkSize: 240,
+		TotalSize: uint32(len(data)), SHA256: sha, BundleID: "librescoot-unu-mdb-v1.5.0"}))
+	if ack := fw.lastOfOp(OpStartAck); ack == nil || ack[1] == StartInstalling {
+		t.Fatalf("START after staged-noop rejected: %x", ack)
+	}
+}
+
+// The handoff liveness field keeps a slow cross-board handoff from timing out
+// and is relayed to the phone as the install's current activity.
+func TestHandoffLivenessIsRelayedAndKeepsInstallAlive(t *testing.T) {
+	r, fw, _, _ := newStagedTestReceiver(t)
+	r.mu.Lock()
+	r.state = stateInstalling
+	r.installComp = ComponentDBC
+	r.installQueuedAt = time.Now().Unix()
+	r.mu.Unlock()
+
+	r.onInstallField("dbc", "handoff:dbc", "waiting for the dashboard")
+	if p := fw.lastOfOp(OpInstallProgress); p == nil || p[1] != PhaseInstalling ||
+		!strings.Contains(string(p[4:]), "waiting for the dashboard") {
+		t.Fatalf("handoff relay = %x", p)
+	}
+	r.mu.Lock()
+	armed := r.feedbackTmr != nil
+	r.mu.Unlock()
+	if !armed {
+		t.Fatal("handoff did not re-arm the install watchdog")
+	}
+}
+
+func TestApplyStagedRejectedWhileInstalling(t *testing.T) {
+	r, fw, st, _ := newStagedTestReceiver(t)
+	r.mu.Lock()
+	r.state = stateInstalling
+	r.installComp = ComponentMDB
+	r.mu.Unlock()
+
+	r.HandleControl(EncodeApplyStaged(ComponentDBC))
+	if len(st.applied) != 0 {
+		t.Fatalf("second apply ran: %v", st.applied)
+	}
+	if e := fw.lastOfOp(OpError); e == nil {
+		t.Fatal("no error answered for a concurrent apply")
 	}
 }
 

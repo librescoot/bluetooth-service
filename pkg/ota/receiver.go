@@ -27,8 +27,38 @@ type Installer interface {
 	Install(component byte, path string) error
 }
 
+// Stager copies a completed, verified bundle into a component's own update
+// directory without installing it, so a later StagedApplier can install whatever
+// is staged there. It is asynchronous for components whose update directory
+// lives on another board, and reports progress through the ota hash.
+type Stager interface {
+	Stage(component byte, path string) error
+}
+
+// StagedApplier installs everything staged in a component's update directory,
+// the equivalent of update-service's `apply-staged-updates` command.
+// Asynchronous like Stager.
+type StagedApplier interface {
+	ApplyStaged(component byte) error
+}
+
+// StagedPruner drops a component's local copies of artifacts that have been
+// installed elsewhere. Only cross-board staging needs it: the copies are
+// transport, and the board that received them keeps its own.
+type StagedPruner interface {
+	PruneStaged(component byte)
+}
+
 // frameOTAStatus mirrors ble.FrameOTAStatus without importing pkg/ble.
 const frameOTAStatus = 0xB2
+
+// handoffFieldPrefix names the liveness field a cross-board handoff writes
+// while it runs (waiting for the dashboard to boot, copying an artifact to
+// it). The receiver re-arms its install watchdog on it and relays it as
+// progress, so a handoff that takes minutes is not mistaken for a dead
+// update-service. It is not an update-service field and does not touch the
+// status or error fields the commit gate reads.
+const handoffFieldPrefix = "handoff:"
 
 // Receiver tuning; announced to the phone in START_ACK so the constants live
 // in exactly one place.
@@ -108,6 +138,7 @@ type Receiver struct {
 	inhibitTmr      *time.Timer
 	feedbackTmr     *time.Timer
 	installQueuedAt int64     // unix seconds the install was queued, for refusal freshness
+	installStaged   bool      // the running install came from APPLY_STAGED
 	lastSent        time.Time // pacing for INSTALL_PROGRESS notifications
 }
 
@@ -237,12 +268,39 @@ func (r *Receiver) HandleControl(payload []byte) {
 	defer r.mu.Unlock()
 
 	switch payload[0] {
-	case OpStart:
+	case OpStart, OpStartStaged:
 		r.handleStartLocked(payload)
 	case OpComplete:
 		r.handleCompleteLocked()
 	case OpAbort:
 		r.handleAbortLocked()
+	case OpApplyStaged:
+		component, err := DecodeApplyStaged(payload)
+		if err != nil {
+			r.log.Warnf("OTA: %v", err)
+			r.send(EncodeError(ErrInternal, "bad APPLY_STAGED"))
+			return
+		}
+		if r.inst[component] == nil {
+			r.send(EncodeError(ErrInternal, "unsupported component"))
+			return
+		}
+		if r.state == stateInstalling {
+			r.send(EncodeError(ErrInternal, "an install is already running"))
+			return
+		}
+		// A staged install replaces any interrupted transfer: that data is
+		// untouched in the component directory and the phone can add to it
+		// later, but the session is closed so no partial write races the apply.
+		if r.state == stateReceiving {
+			r.abortSessionLocked(false)
+		}
+		if r.watcher != nil {
+			_ = r.watcher.Stop()
+			r.watcher = nil
+			r.waitingOutcome = false
+		}
+		r.applyStagedLocked(component)
 	case OpStatusReq:
 		// With no session and no pending outcome, answer (and re-latch) idle:
 		// the OTA_STATUS characteristic stores the last notified value on the nRF
@@ -285,12 +343,16 @@ func (r *Receiver) handleStartLocked(payload []byte) {
 
 	// Refuse a bundle for the version that board already runs here, at the
 	// cost of one round trip, instead of after the whole transfer when
-	// update-service would refuse it anyway.
-	if target := versionFromBundleID(start.BundleID); target != "" {
-		if installed := r.installedVersion(start.Component); sameVersion(target, installed) {
-			r.log.Warnf("OTA: %s is already installed on %s, refusing START", target, componentName(start.Component))
-			r.send(EncodeStartAck(StartAlreadyInstalled, 0, windowChunks, ackEvery, MaxChunkSize))
-			return
+	// update-service would refuse it anyway. A staged transfer skips this:
+	// staging the running version's own image is exactly what a delta chain
+	// needs as its base, and nothing is installed until the phone asks for it.
+	if !start.Staged {
+		if target := versionFromBundleID(start.BundleID); target != "" {
+			if installed := r.installedVersion(start.Component); sameVersion(target, installed) {
+				r.log.Warnf("OTA: %s is already installed on %s, refusing START", target, componentName(start.Component))
+				r.send(EncodeStartAck(StartAlreadyInstalled, 0, windowChunks, ackEvery, MaxChunkSize))
+				return
+			}
 		}
 	}
 
@@ -393,8 +455,12 @@ func (r *Receiver) handleStartLocked(payload []byte) {
 	if resume > 0 {
 		status = StartResume
 	}
-	r.log.Infof("OTA: transfer of %s (%s, %d bytes) starting at offset %d",
-		start.BundleID, componentName(start.Component), start.TotalSize, resume)
+	mode := "transfer"
+	if start.Staged {
+		mode = "staged transfer"
+	}
+	r.log.Infof("OTA: %s of %s (%s, %d bytes) starting at offset %d",
+		mode, start.BundleID, componentName(start.Component), start.TotalSize, resume)
 	r.send(EncodeStartAck(status, resume, windowChunks, ackEvery, MaxChunkSize))
 }
 
@@ -443,6 +509,11 @@ func (r *Receiver) handleCompleteLocked() {
 		return
 	}
 
+	if start.Staged {
+		r.finishStagedTransferLocked(start, finalPath)
+		return
+	}
+
 	if err := r.inst[start.Component].Install(start.Component, finalPath); err != nil {
 		r.log.Errorf("OTA: queueing install failed: %v", err)
 		r.send(EncodeCompleteAck(CompleteQueueFailed))
@@ -454,6 +525,7 @@ func (r *Receiver) handleCompleteLocked() {
 	r.state = stateInstalling
 	r.installComp = start.Component
 	r.installBundleID = start.BundleID
+	r.installStaged = false
 	r.installQueuedAt = time.Now().Unix()
 	r.sess = nil
 	r.lastPhase = PhaseInstalling
@@ -463,6 +535,64 @@ func (r *Receiver) handleCompleteLocked() {
 	r.armInstallFeedbackLocked()
 	r.armInhibitorTimeoutLocked()
 	r.send(EncodeCompleteAck(CompleteOK))
+}
+
+// finishStagedTransferLocked ends a verified staged transfer: the artifact
+// stays in the component's update directory (or is copied to the board that
+// owns it) and nothing is installed. There is no update-service feedback to
+// wait for, so the receiver returns to idle right away and the phone learns
+// what it staged from COMPLETE_ACK.
+func (r *Receiver) finishStagedTransferLocked(start Start, finalPath string) {
+	// The sidecar tracks a partial transfer; a staged artifact is complete and
+	// is now owned by update-service's retention, same as an installed full
+	// image. The .part file is gone either way.
+	r.staging.Forget(start.Component, start.BundleID)
+
+	if stager, ok := r.inst[start.Component].(Stager); ok {
+		if err := stager.Stage(start.Component, finalPath); err != nil {
+			r.log.Errorf("OTA: staging %s for %s failed: %v", start.BundleID, componentName(start.Component), err)
+			r.send(EncodeCompleteAck(CompleteQueueFailed))
+			r.releaseSessionLocked()
+			return
+		}
+	}
+
+	r.log.Infof("OTA: %s staged for %s", start.BundleID, componentName(start.Component))
+	r.send(EncodeCompleteAck(CompleteOK))
+	r.releaseSessionLocked()
+}
+
+// applyStagedLocked queues an install of everything staged in a component's
+// update directory and starts watching update-service, exactly like a normal
+// transfer's install phase.
+func (r *Receiver) applyStagedLocked(component byte) {
+	applier, ok := r.inst[component].(StagedApplier)
+	if !ok {
+		r.send(EncodeError(ErrInternal, "staged installs unsupported"))
+		return
+	}
+	if err := applier.ApplyStaged(component); err != nil {
+		r.log.Errorf("OTA: queueing staged install for %s failed: %v", componentName(component), err)
+		r.send(EncodeError(ErrInternal, "could not start the install"))
+		return
+	}
+
+	// A single artifact's bundle ID is not known here; the phone identifies the
+	// operation by the component.
+	r.state = stateInstalling
+	r.installComp = component
+	r.installBundleID = ""
+	r.installStaged = true
+	r.installQueuedAt = time.Now().Unix()
+	r.sess = nil
+	r.lastPhase = PhaseInstalling
+	r.lastPercent = 0
+	r.publishStatusLocked("installing")
+	r.startInstallWatcherLocked()
+	r.armInstallFeedbackLocked()
+	r.armInhibitorTimeoutLocked()
+	r.setInhibitorLocked("BLE staged install")
+	r.send(EncodeInstallProgress(PhaseInstalling, 0, "applying staged updates"))
 }
 
 func (r *Receiver) handleAbortLocked() {
@@ -631,6 +761,14 @@ func (r *Receiver) onInstallField(comp, field, value string) {
 	}
 
 	switch field {
+	case handoffFieldPrefix + comp:
+		if r.waitingOutcome {
+			return
+		}
+		// A cross-board handoff (dashboard boot, artifact copy) is update-service
+		// work in all but name; relay it as the install's current activity.
+		r.lastPhase = PhaseInstalling
+		r.sendProgressPacedLocked(strings.TrimSpace(value))
 	case "install-refused:" + comp:
 		if r.waitingOutcome {
 			return
@@ -710,6 +848,17 @@ func (r *Receiver) onInstallField(comp, field, value string) {
 			r.waitingOutcome = false
 			r.send(EncodeInstallProgress(r.lastPhase, r.lastPercent, ""))
 			r.stopInstallWatcherLocked()
+		case "staged-noop":
+			if r.waitingOutcome {
+				return
+			}
+			// update-service resolved the staged set to nothing applicable, so
+			// nothing is installed and nothing reboots. That status never clears
+			// itself, so this is where the receiver stops waiting for it.
+			r.log.Infof("OTA: update-service found nothing to install for %s", comp)
+			r.lastPhase, r.lastPercent = PhaseUpToDate, 100
+			r.send(EncodeInstallProgress(PhaseUpToDate, 100, "nothing to install"))
+			r.finishInstallLocked()
 		case "error":
 			r.lastPhase = PhaseFailure
 			msg, _ := r.watcherFetch("error-message:" + comp)
@@ -761,10 +910,15 @@ func (r *Receiver) finishInstallLocked() {
 	// to the DBC by the handoff, and delta files are consumed by
 	// update-service during apply.
 	installed := phase == PhasePendingReboot || phase == PhaseSuccess
-	if installed && r.installComp == ComponentMDB && !isDelta(r.installBundleID) {
-		r.staging.Forget(r.installComp, r.installBundleID)
-	} else {
-		r.staging.Discard(r.installComp, r.installBundleID)
+	// A staged apply has no single bundle ID: its artifacts belong to
+	// update-service's retention (deltas it consumed, the base it kept) and
+	// must not be swept here.
+	if r.installBundleID != "" {
+		if installed && r.installComp == ComponentMDB && !isDelta(r.installBundleID) {
+			r.staging.Forget(r.installComp, r.installBundleID)
+		} else {
+			r.staging.Discard(r.installComp, r.installBundleID)
+		}
 	}
 	r.installBundleID = ""
 
@@ -801,6 +955,18 @@ func (r *Receiver) finishInstallLocked() {
 		r.stopInstallWatcherLocked()
 		r.send(EncodeInstallProgress(PhaseIdle, 0, ""))
 	}
+
+	// A staged apply has no single bundle ID, so it is the one case whose
+	// artifacts are not the receiver's to keep: cross-board staging copies them
+	// to the board that installs them, and a repeat only needs the source. Only
+	// a queued install means the dashboard has them; a staged set that turned
+	// out to be up to date is still the user's only copy.
+	if phase == PhasePendingReboot && r.installStaged {
+		if pruner, ok := r.inst[r.installComp].(StagedPruner); ok {
+			pruner.PruneStaged(r.installComp)
+		}
+	}
+	r.installStaged = false
 }
 
 func (r *Receiver) sendProgressPacedLocked(msg string) {

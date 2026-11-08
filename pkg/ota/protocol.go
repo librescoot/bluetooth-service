@@ -15,10 +15,26 @@ import (
 
 // Phone -> scooter control opcodes (OTA_CONTROL characteristic / frame 0xB1).
 const (
-	OpStart     = 0x01
-	OpComplete  = 0x03
-	OpAbort     = 0x04
+	OpStart    = 0x01
+	OpComplete = 0x03
+	OpAbort    = 0x04
+
+	// OpStatusReq asks for the receiver's last install phase/percent.
 	OpStatusReq = 0x05
+
+	// OpStartStaged is START with staging semantics: the payload is identical,
+	// but a completed transfer is verified and kept in the component's update
+	// directory instead of being queued for install. It exists so several
+	// artifacts (a delta chain, both boards' images) can be uploaded in one
+	// sitting and applied by one OpApplyStaged, which is how a local update
+	// directory is filled over USB. Staging installs nothing and touches no
+	// running system, so it is safe to interrupt and resume.
+	OpStartStaged = 0x02
+
+	// OpApplyStaged asks update-service to install everything staged in a
+	// component's update directory, exactly as its `apply-staged-updates`
+	// command does. Payload: [op][component].
+	OpApplyStaged = 0x06
 )
 
 // Scooter -> phone opcodes (OTA_STATUS characteristic / frame 0xB2).
@@ -64,6 +80,11 @@ const (
 	PhaseSuccess       = 0x04
 	PhaseFailure       = 0x05
 	PhaseIdle          = 0x06
+
+	// PhaseUpToDate ends a staged install that had nothing to install: the
+	// staged set resolved to nothing newer than what the board already runs.
+	// Not a failure and not an install: nothing is running and nothing reboots.
+	PhaseUpToDate = 0x07
 )
 
 // ERROR codes. 1 and 2 are emitted by the nRF tunnel itself (see ota_tunnel.c).
@@ -100,18 +121,23 @@ type Start struct {
 	TotalSize uint32
 	SHA256    [32]byte
 	BundleID  string
+
+	// Staged is set when the transfer came in as OpStartStaged: the artifact is
+	// staged for a later apply instead of being installed on completion.
+	Staged bool
 }
 
-// DecodeStart parses a START payload:
+// DecodeStart parses a START or START_STAGED payload:
 // [op][ver][component][chunk_size:u16][total_size:u32][sha256:32][id_len][bundle_id].
 func DecodeStart(p []byte) (Start, error) {
 	var s Start
 	if len(p) < 42 {
 		return s, fmt.Errorf("START too short: %d bytes", len(p))
 	}
-	if p[0] != OpStart {
+	if p[0] != OpStart && p[0] != OpStartStaged {
 		return s, fmt.Errorf("not a START message: opcode 0x%02x", p[0])
 	}
+	s.Staged = p[0] == OpStartStaged
 	s.Version = p[1]
 	s.Component = p[2]
 	s.ChunkSize = binary.LittleEndian.Uint16(p[3:5])
@@ -153,8 +179,12 @@ func validBundleID(id string) bool {
 
 // EncodeStart builds a START payload (used by tests and bench tooling).
 func EncodeStart(s Start) []byte {
+	op := byte(OpStart)
+	if s.Staged {
+		op = OpStartStaged
+	}
 	p := make([]byte, 0, 42+len(s.BundleID))
-	p = append(p, OpStart, s.Version, s.Component)
+	p = append(p, op, s.Version, s.Component)
 	p = binary.LittleEndian.AppendUint16(p, s.ChunkSize)
 	p = binary.LittleEndian.AppendUint32(p, s.TotalSize)
 	p = append(p, s.SHA256[:]...)
@@ -226,4 +256,20 @@ func EncodeError(code byte, msg string) []byte {
 // EncodeAbortAck builds [op].
 func EncodeAbortAck() []byte {
 	return []byte{OpAbortAck}
+}
+
+// EncodeApplyStaged builds [op][component].
+func EncodeApplyStaged(component byte) []byte {
+	return []byte{OpApplyStaged, component}
+}
+
+// DecodeApplyStaged parses an APPLY_STAGED payload and returns its component.
+func DecodeApplyStaged(p []byte) (byte, error) {
+	if len(p) != 2 {
+		return 0, fmt.Errorf("APPLY_STAGED wants 2 bytes, got %d", len(p))
+	}
+	if p[0] != OpApplyStaged {
+		return 0, fmt.Errorf("not an APPLY_STAGED message: opcode 0x%02x", p[0])
+	}
+	return p[1], nil
 }
