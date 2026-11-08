@@ -876,6 +876,35 @@ func TestStagedNoopEndsTheInstallAsUpToDate(t *testing.T) {
 	}
 }
 
+// The dashboard is installed by its own request: APPLY_STAGED carries the
+// component, so the MDB hands the staged set to the DBC backend, which copies
+// it over and queues the DBC's own update-service.
+func TestApplyStagedReachesTheDBCBackend(t *testing.T) {
+	r, fw, st, _ := newStagedTestReceiver(t)
+
+	r.HandleControl(EncodeApplyStaged(ComponentDBC))
+
+	if len(st.applied) != 1 || st.applied[0] != "dbc" {
+		t.Fatalf("applied = %v, want [dbc]", st.applied)
+	}
+	if p := fw.lastOfOp(OpInstallProgress); p == nil || p[1] != PhaseInstalling {
+		t.Fatalf("apply ack = %x", p)
+	}
+	r.mu.Lock()
+	comp := r.installComp
+	r.mu.Unlock()
+	if comp != ComponentDBC {
+		t.Fatalf("install component = %d, want dbc", comp)
+	}
+
+	// The dashboard's update-service reports in the shared ota hash under :dbc,
+	// which is what the receiver relays to the phone.
+	r.onInstallField("dbc", "status:dbc", "pending-reboot")
+	if p := fw.lastOfOp(OpInstallProgress); p == nil || p[1] != PhasePendingReboot {
+		t.Fatalf("pending-reboot relay = %x", p)
+	}
+}
+
 // The handoff liveness field keeps a slow cross-board handoff from timing out
 // and is relayed to the phone as the install's current activity.
 func TestHandoffLivenessIsRelayedAndKeepsInstallAlive(t *testing.T) {
