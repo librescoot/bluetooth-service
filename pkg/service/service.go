@@ -49,6 +49,7 @@ type Service struct {
 	firmwareUpdater firmwareUpdaterInterface
 	autoUpdate      bool
 	lastMileage     string // last mileage value sent to nRF (for dedup)
+	deadband        deadbandFilter
 	mu              sync.RWMutex
 	reconnectMu     sync.Mutex
 

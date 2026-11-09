@@ -340,8 +340,11 @@ func (s *Service) handleVehicleStateMessage(subType ble.SubType, value interface
 		if temp, ok := convertToInt(value); ok {
 			tempC := float64(temp) / 10.0
 			s.log.Debugf("Received external temperature: %.1f °C", tempC)
-			if err := s.ipc.Hash("scooter").Set("temperature", strconv.FormatFloat(tempC, 'f', 1, 64)); err != nil {
-				s.log.Errorf("Failed to update external temperature in Redis: %v", err)
+			if s.deadband.admit("scooter/temperature", int64(temp), scooterTemperatureDeadband, time.Now()) {
+				if err := s.ipc.Hash("scooter").Set("temperature", strconv.FormatFloat(tempC, 'f', 1, 64)); err != nil {
+					s.deadband.forget("scooter/temperature")
+					s.log.Errorf("Failed to update external temperature in Redis: %v", err)
+				}
 			}
 		} else {
 			s.log.Warnf("Could not decode external temperature value: %v", value)
@@ -1073,7 +1076,15 @@ func (s *Service) handleBatteryInfoMessage(subType ble.SubType, value interface{
 	// Write standard types to Redis only if processed and field name is set
 	if processedStandard && redisField != "" {
 		var err error
-		if isInt {
+		if rule, banded := cbBatteryDeadband[redisField]; banded && isInt {
+			key := redisKey + "/" + redisField
+			if !s.deadband.admit(key, int64(valueInt), rule, time.Now()) {
+				return
+			}
+			if err = s.ipc.Hash(redisKey).Set(redisField, fmt.Sprintf("%d", valueInt)); err != nil {
+				s.deadband.forget(key)
+			}
+		} else if isInt {
 			err = s.ipc.Hash(redisKey).Set(redisField, fmt.Sprintf("%d", valueInt))
 		} else if isString {
 			err = s.ipc.Hash(redisKey).Set(redisField, valueStr)
