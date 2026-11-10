@@ -1,11 +1,10 @@
 package ota
 
 import (
+	"context"
 	"fmt"
 	"net"
-	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -14,6 +13,7 @@ import (
 	ipc "github.com/librescoot/redis-ipc"
 
 	"github.com/librescoot/bluetooth-service/pkg/logger"
+	dataupload "github.com/librescoot/data-server/client"
 )
 
 // DBCInstaller delivers a completed bundle to the dashboard controller (DBC)
@@ -24,8 +24,8 @@ import (
 //     update lock: forces dashboard power on, installs a suspend-only
 //     inhibitor, and arms a watchdog that we feed with periodic heartbeats.
 //  2. Wait until the DBC is reachable (it may have to boot first).
-//  3. Transfer the bundle: HTTP PUT to librescoot-data-server on the DBC
-//     (paths are relative to its /data dir), falling back to scp.
+//  3. Transfer the bundle with the shared resumable HTTP client to
+//     librescoot-data-server on the DBC (paths are relative to /data).
 //  4. LPush "update-from-file:<dbc-local path>" to scooter:update:dbc — the
 //     DBC's update-service (connected to the MDB's Redis) runs the install
 //     and reports progress into the shared "ota" hash under :dbc fields,
@@ -35,9 +35,9 @@ import (
 //     lock here would let the vehicle FSM cut DBC power mid-handoff.
 //
 // Staged transfers do not install anything: the artifact stays in the MDB's
-// /data/ota/dbc directory until the phone asks for the staged set to be
-// applied, at which point every staged artifact is copied to the DBC in one
-// pass and then installed through the DBC's own `apply-staged-updates`.
+// /data/ota/ble/dbc directory until the phone asks for the staged set to be
+// applied, at which point only artifacts marked by this receiver are copied to
+// the DBC in one pass and installed through its `apply-staged-updates`.
 //
 // On failure the lock is released (complete-dbc) and an error is written to
 // the "ota" hash so the phone gets a failure notification through the same
@@ -46,21 +46,19 @@ type DBCInstaller struct {
 	IPC *ipc.Client
 	Log *logger.Logger
 
-	// StagingDir is the MDB directory holding artifacts addressed to the DBC,
-	// the same directory the receiver stages into. Defaults to
-	// DefaultStagingDir's dbc subdirectory.
+	// StagingDir is the root passed to the receiver. DBC artifacts live in its
+	// isolated ble/dbc subdirectory; Defaults to DefaultStagingDir.
 	StagingDir string
 }
 
 const (
 	dbcAddr           = "192.168.7.2"
-	dbcSSHPort        = 22
 	dbcDataServerPort = 8080
 	dbcOtaDir         = "/data/ota/dbc"
 
 	dbcBootTimeout       = 3 * time.Minute
 	dbcHeartbeatInterval = 5 * time.Minute
-	dbcTransferTimeout   = 10 * time.Minute
+	stagedMarkerSuffix   = ".ble-staged"
 
 	// handoffInterval is how often an in-flight handoff republishes its
 	// liveness field. It is well under the receiver's install-feedback
@@ -79,12 +77,25 @@ func (di *DBCInstaller) Install(component byte, path string) error {
 	return nil
 }
 
-// Stage is a no-op for the DBC: the artifact already sits in the MDB's
-// /data/ota/dbc directory, which is where staged DBC artifacts wait. Copying it
-// to the dashboard happens once, when the whole staged set is applied.
+// Stage marks the completed BLE artifact so unrelated or legacy files are not
+// copied to the dashboard with this batch.
 func (di *DBCInstaller) Stage(component byte, path string) error {
 	if component != ComponentDBC {
 		return fmt.Errorf("DBC installer only handles the dbc component")
+	}
+	cleanPath := filepath.Clean(path)
+	if filepath.Dir(cleanPath) != filepath.Clean(di.dbcStagingDir()) || !isInstallableArtifact(cleanPath) {
+		return fmt.Errorf("staged artifact is outside the DBC staging directory: %s", path)
+	}
+	if info, err := os.Stat(cleanPath); err != nil || info.IsDir() {
+		if err != nil {
+			return fmt.Errorf("staged artifact is unavailable: %w", err)
+		}
+		return fmt.Errorf("staged artifact is a directory: %s", path)
+	}
+	marker := cleanPath + stagedMarkerSuffix
+	if err := os.WriteFile(marker, []byte(filepath.Base(cleanPath)+"\n"), 0o644); err != nil {
+		return fmt.Errorf("marking staged DBC artifact: %w", err)
 	}
 	return nil
 }
@@ -107,7 +118,7 @@ func (di *DBCInstaller) stagingDir() string {
 }
 
 func (di *DBCInstaller) dbcStagingDir() string {
-	return filepath.Join(di.stagingDir(), "dbc")
+	return filepath.Join(di.stagingDir(), "ble", "dbc")
 }
 
 func (di *DBCInstaller) run(path string) {
@@ -211,22 +222,37 @@ func (di *DBCInstaller) PruneStaged(component byte) {
 	if component != ComponentDBC {
 		return
 	}
-	sources, err := di.stagedArtifacts()
-	if err != nil {
-		di.Log.Warnf("OTA: listing staged DBC artifacts for cleanup failed: %v", err)
-		return
-	}
-	for _, source := range sources {
-		if err := os.Remove(source); err != nil {
-			di.Log.Warnf("OTA: removing %s after the dashboard install failed: %v", source, err)
+	// Remove both the isolated BLE batch and artifacts left in the old MDB-side
+	// /data/ota/dbc directory. The DBC's own updater retains its base on the DBC.
+	for _, dir := range []string{di.dbcStagingDir(), filepath.Join(di.stagingDir(), "dbc")} {
+		entries, err := os.ReadDir(dir)
+		if err != nil && !os.IsNotExist(err) {
+			di.Log.Warnf("OTA: listing %s for cleanup failed: %v", dir, err)
+			continue
+		}
+		for _, entry := range entries {
+			name := entry.Name()
+			if entry.IsDir() || (!isInstallableArtifact(name) && !strings.HasSuffix(name, stagedMarkerSuffix)) {
+				continue
+			}
+			if err := os.Remove(filepath.Join(dir, name)); err != nil && !os.IsNotExist(err) {
+				di.Log.Warnf("OTA: removing %s after the dashboard install: %v", filepath.Join(dir, name), err)
+			}
 		}
 	}
 }
 
-// stagedArtifacts lists the installable artifacts waiting for the dashboard.
-// Partial transfers and dot files are not artifacts.
+// isInstallableArtifact reports whether name is a supported full image or delta.
+func isInstallableArtifact(path string) bool {
+	return strings.HasSuffix(path, ".mender") || strings.HasSuffix(path, ".delta") ||
+		strings.HasSuffix(path, ".hdelta")
+}
+
+// stagedArtifacts lists only bundles received as BLE staged transfers. Files
+// without a marker are not part of the phone's current staged set.
 func (di *DBCInstaller) stagedArtifacts() ([]string, error) {
-	entries, err := os.ReadDir(di.dbcStagingDir())
+	dir := di.dbcStagingDir()
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -236,30 +262,31 @@ func (di *DBCInstaller) stagedArtifacts() ([]string, error) {
 	var sources []string
 	for _, entry := range entries {
 		name := entry.Name()
-		if entry.IsDir() || strings.HasPrefix(name, ".") {
+		if entry.IsDir() || !strings.HasSuffix(name, stagedMarkerSuffix) {
 			continue
 		}
-		if !strings.HasSuffix(name, ".mender") && !strings.HasSuffix(name, ".delta") &&
-			!strings.HasSuffix(name, ".hdelta") {
+		artifact := strings.TrimSuffix(name, stagedMarkerSuffix)
+		if !isInstallableArtifact(artifact) {
 			continue
 		}
-		sources = append(sources, filepath.Join(di.dbcStagingDir(), name))
+		path := filepath.Join(dir, artifact)
+		info, err := os.Stat(path)
+		if err != nil || info.IsDir() {
+			continue
+		}
+		sources = append(sources, path)
 	}
 	return sources, nil
 }
 
 func (di *DBCInstaller) copyToDBC(localPath, remotePath string) error {
-	if err := di.putToDataServer(localPath, remotePath); err != nil {
-		di.Log.Warnf("OTA: data-server PUT failed (%v), falling back to scp", err)
-		return di.scpTransfer(localPath, remotePath)
-	}
-	return nil
+	return di.putToDataServer(localPath, remotePath)
 }
 
 func (di *DBCInstaller) waitReachable(timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", dbcAddr, dbcSSHPort), 2*time.Second)
+		conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", dbcAddr, dbcDataServerPort), 2*time.Second)
 		if err == nil {
 			// This is a reachability probe; the connection carries no data,
 			// so a close failure has nothing left to report.
@@ -271,61 +298,17 @@ func (di *DBCInstaller) waitReachable(timeout time.Duration) error {
 	return fmt.Errorf("DBC not reachable within %s", timeout)
 }
 
-// putToDataServer uploads via librescoot-data-server, which joins request
-// paths under its /data directory (PUT /ota/dbc/x writes /data/ota/dbc/x).
+// putToDataServer uploads through the shared client. Each chunk has its own
+// timeout and retry budget; there is no transfer-wide deadline or SCP restart.
 func (di *DBCInstaller) putToDataServer(localPath, remotePath string) error {
 	urlPath := strings.TrimPrefix(remotePath, "/data")
 	if urlPath == "" || urlPath[0] != '/' {
 		return fmt.Errorf("remote path must be under /data, got %q", remotePath)
 	}
-
-	f, err := os.Open(localPath)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	st, err := f.Stat()
-	if err != nil {
-		return err
-	}
-
 	url := fmt.Sprintf("http://%s:%d%s", dbcAddr, dbcDataServerPort, urlPath)
-	req, err := http.NewRequest(http.MethodPut, url, f)
-	if err != nil {
-		return err
-	}
-	req.ContentLength = st.Size()
-	req.Header.Set("Content-Type", "application/octet-stream")
-
-	client := &http.Client{Timeout: dbcTransferTimeout}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("PUT %s: HTTP %d", url, resp.StatusCode)
-	}
-	return nil
-}
-
-// scpTransfer is the fallback for images without librescoot-data-server. The
-// remote mkdir uses `ssh -y` (dropbear auto-accepts unknown host keys).
-func (di *DBCInstaller) scpTransfer(localPath, remotePath string) error {
-	mkdir := exec.Command("ssh", "-y", "root@"+dbcAddr, "mkdir -p "+filepath.Dir(remotePath))
-	if out, err := mkdir.CombinedOutput(); err != nil {
-		return fmt.Errorf("remote mkdir: %v (%s)", err, strings.TrimSpace(string(out)))
-	}
-
-	scp := exec.Command("scp",
-		"-o", "StrictHostKeyChecking=no",
-		"-o", "UserKnownHostsFile=/dev/null",
-		localPath,
-		fmt.Sprintf("root@%s:%s", dbcAddr, remotePath))
-	if out, err := scp.CombinedOutput(); err != nil {
-		return fmt.Errorf("scp: %v (%s)", err, strings.TrimSpace(string(out)))
-	}
-	return nil
+	return dataupload.UploadFile(context.Background(), url, localPath, dataupload.Options{
+		RequestTimeout: 2 * time.Minute,
+	})
 }
 
 // handoffLiveness holds the DBC update lock and keeps the "ota" hash showing

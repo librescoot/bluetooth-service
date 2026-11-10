@@ -702,6 +702,48 @@ func TestInstallFeedbackTimeoutReleasesInstalling(t *testing.T) {
 	}
 }
 
+func TestInhibitorTimeoutIsRearmedByInstallActivity(t *testing.T) {
+	previousInhibitor, previousFeedback := inhibitorTimeout, installFeedbackTimeout
+	inhibitorTimeout = 60 * time.Millisecond
+	installFeedbackTimeout = 300 * time.Millisecond
+	t.Cleanup(func() {
+		inhibitorTimeout = previousInhibitor
+		installFeedbackTimeout = previousFeedback
+	})
+
+	r, fw, _, _ := newTestReceiver(t)
+	r.mu.Lock()
+	r.state = stateInstalling
+	r.installComp = ComponentDBC
+	r.lastPhase = PhaseInstalling
+	r.armInstallFeedbackLocked()
+	r.armInhibitorTimeoutLocked()
+	r.mu.Unlock()
+
+	for i := 0; i < 6; i++ {
+		time.Sleep(20 * time.Millisecond)
+		r.onInstallField("dbc", "install-progress:dbc", "10")
+	}
+
+	r.mu.Lock()
+	state, phase := r.state, r.lastPhase
+	r.mu.Unlock()
+	if state != stateInstalling || phase != PhaseInstalling {
+		t.Fatalf("install ended during ongoing activity: state=%v phase=%#x", state, phase)
+	}
+	if fw.hasOp(OpInstallProgress, func(f []byte) bool { return f[1] == PhaseIdle }) {
+		t.Fatal("ongoing install activity was reported as idle")
+	}
+
+	r.onInstallField("dbc", "status:dbc", "pending-reboot")
+	r.mu.Lock()
+	state, phase = r.state, r.lastPhase
+	r.mu.Unlock()
+	if state != stateIdle || phase != PhasePendingReboot {
+		t.Fatalf("terminal status not retained: state=%v phase=%#x", state, phase)
+	}
+}
+
 func TestInstallRefusalReportedImmediately(t *testing.T) {
 	r, fw, _, _ := newTestReceiver(t)
 
@@ -756,7 +798,7 @@ func TestStaleInstallRefusalIgnored(t *testing.T) {
 func TestStagedTransferKeepsArtifactWithoutInstalling(t *testing.T) {
 	for _, component := range []byte{ComponentMDB, ComponentDBC} {
 		t.Run(componentName(component), func(t *testing.T) {
-			r, fw, st, dir := newStagedTestReceiver(t)
+			r, fw, st, _ := newStagedTestReceiver(t)
 			data, sha := makeBundle(1000)
 			id := "librescoot-unu-" + componentName(component) + "-v1.4.0"
 
@@ -774,7 +816,7 @@ func TestStagedTransferKeepsArtifactWithoutInstalling(t *testing.T) {
 			if len(st.calls) != 0 {
 				t.Fatalf("a staged transfer installed %v", st.calls)
 			}
-			want := filepath.Join(dir, componentName(component), id+".mender")
+			want := r.staging.FinalPath(component, id)
 			if len(st.staged) != 1 || st.staged[0] != want {
 				t.Fatalf("staged = %v, want %s", st.staged, want)
 			}
@@ -782,7 +824,7 @@ func TestStagedTransferKeepsArtifactWithoutInstalling(t *testing.T) {
 			if err != nil || !bytes.Equal(got, data) {
 				t.Fatalf("staged data mismatch: %v", err)
 			}
-			if matches, _ := filepath.Glob(filepath.Join(dir, componentName(component), id+".json")); len(matches) != 0 {
+			if matches, _ := filepath.Glob(filepath.Join(filepath.Dir(want), id+".json")); len(matches) != 0 {
 				t.Fatalf("staged transfer left sidecars: %v", matches)
 			}
 			r.mu.Lock()
@@ -947,7 +989,7 @@ func TestApplyStagedRejectedWhileInstalling(t *testing.T) {
 func TestHdeltaTransferResumeAndErrors(t *testing.T) {
 	for _, component := range []byte{ComponentMDB, ComponentDBC} {
 		t.Run(componentName(component), func(t *testing.T) {
-			r, fw, fi, dir := newTestReceiver(t)
+			r, fw, fi, _ := newTestReceiver(t)
 			r.inst[component] = fi
 			data, sha := makeBundle(1000)
 			id := "librescoot-unu-" + componentName(component) + "-nightly-20260101T000000.hdelta"
@@ -967,7 +1009,7 @@ func TestHdeltaTransferResumeAndErrors(t *testing.T) {
 			if ack := fw.lastOfOp(OpCompleteAck); ack == nil || ack[1] != CompleteOK {
 				t.Fatalf("complete ack = %x", ack)
 			}
-			want := filepath.Join(dir, componentName(component), id)
+			want := r.staging.FinalPath(component, id)
 			if len(fi.calls) != 1 || fi.calls[0] != want {
 				t.Fatalf("installer paths = %v, want %s", fi.calls, want)
 			}
@@ -989,7 +1031,7 @@ func TestHdeltaTransferResumeAndErrors(t *testing.T) {
 			if ack := fw.lastOfOp(OpCompleteAck); ack == nil || ack[1] != CompleteSHAMismatch {
 				t.Fatalf("SHA mismatch ack = %x", ack)
 			}
-			if matches, _ := filepath.Glob(filepath.Join(dir, componentName(component), id+"*")); len(matches) != 0 {
+			if matches, _ := filepath.Glob(filepath.Join(filepath.Dir(want), id+"*")); len(matches) != 0 {
 				t.Fatalf("SHA failure left files: %v", matches)
 			}
 		})

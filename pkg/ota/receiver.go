@@ -70,12 +70,13 @@ const (
 	idleTimeout  = 10 * time.Minute       // release the power inhibitor after this much silence
 	rewindMinGap = 100 * time.Millisecond // rate limit for REWIND ACKs on an offset gap
 
-	inhibitorID      = "ble-ota"
-	inhibitorTimeout = 30 * time.Minute // safety release if install feedback never arrives
-	statusHash       = "ota:ble"
-	installHash      = "ota" // written by update-service's status reporter
-	progressMinGap   = 100 * time.Millisecond
+	inhibitorID    = "ble-ota"
+	statusHash     = "ota:ble"
+	installHash    = "ota" // written by update-service's status reporter
+	progressMinGap = 100 * time.Millisecond
 )
+
+var inhibitorTimeout = 30 * time.Minute // silence backstop, re-armed by component feedback
 
 // installFeedbackTimeout is how long update-service may stay silent about a
 // queued install before the phone is told it never started. update-service
@@ -125,21 +126,23 @@ type Receiver struct {
 
 	staging *Staging
 
-	mu              sync.Mutex
-	state           recvState
-	sess            *session
-	installComp     byte
-	installBundleID string
-	lastPhase       byte
-	lastPercent     byte
-	watcher         *ipc.HashWatcher
-	waitingOutcome  bool // install finished, still observing status until it clears to idle
-	idleTimer       *time.Timer
-	inhibitTmr      *time.Timer
-	feedbackTmr     *time.Timer
-	installQueuedAt int64     // unix seconds the install was queued, for refusal freshness
-	installStaged   bool      // the running install came from APPLY_STAGED
-	lastSent        time.Time // pacing for INSTALL_PROGRESS notifications
+	mu                 sync.Mutex
+	state              recvState
+	sess               *session
+	installComp        byte
+	installBundleID    string
+	lastPhase          byte
+	lastPercent        byte
+	watcher            *ipc.HashWatcher
+	waitingOutcome     bool // install finished, still observing status until it clears to idle
+	idleTimer          *time.Timer
+	inhibitTmr         *time.Timer
+	feedbackTmr        *time.Timer
+	feedbackGeneration uint64
+	inhibitGeneration  uint64
+	installQueuedAt    int64     // unix seconds the install was queued, for refusal freshness
+	installStaged      bool      // the running install came from APPLY_STAGED
+	lastSent           time.Time // pacing for INSTALL_PROGRESS notifications
 }
 
 // New creates a Receiver. writer returns the current frame writer (the USOCK
@@ -543,11 +546,6 @@ func (r *Receiver) handleCompleteLocked() {
 // wait for, so the receiver returns to idle right away and the phone learns
 // what it staged from COMPLETE_ACK.
 func (r *Receiver) finishStagedTransferLocked(start Start, finalPath string) {
-	// The sidecar tracks a partial transfer; a staged artifact is complete and
-	// is now owned by update-service's retention, same as an installed full
-	// image. The .part file is gone either way.
-	r.staging.Forget(start.Component, start.BundleID)
-
 	if stager, ok := r.inst[start.Component].(Stager); ok {
 		if err := stager.Stage(start.Component, finalPath); err != nil {
 			r.log.Errorf("OTA: staging %s for %s failed: %v", start.BundleID, componentName(start.Component), err)
@@ -557,6 +555,9 @@ func (r *Receiver) finishStagedTransferLocked(start Start, finalPath string) {
 		}
 	}
 
+	// The stager has recorded ownership of the completed artifact. Remove the
+	// partial-transfer sidecar only after that handoff succeeds.
+	r.staging.Forget(start.Component, start.BundleID)
 	r.log.Infof("OTA: %s staged for %s", start.BundleID, componentName(start.Component))
 	r.send(EncodeCompleteAck(CompleteOK))
 	r.releaseSessionLocked()
@@ -701,6 +702,8 @@ func (r *Receiver) startInstallWatcherLocked() {
 }
 
 func (r *Receiver) stopInstallWatcherLocked() {
+	r.inhibitGeneration++
+	r.feedbackGeneration++
 	if r.watcher != nil {
 		// The watcher is a progress relay; once we're tearing it down there
 		// is no listener left to hand a stop failure to.
@@ -719,17 +722,18 @@ func (r *Receiver) stopInstallWatcherLocked() {
 
 // armInstallFeedbackLocked (re)starts the silence watchdog for a queued
 // install. Every field update-service writes for this component re-arms it,
-// including its 30-second heartbeat, so it only fires when update-service
-// produced no sign of life at all.
+// including its heartbeat, so it only fires when the updater goes silent.
 func (r *Receiver) armInstallFeedbackLocked() {
 	if r.feedbackTmr != nil {
 		r.feedbackTmr.Stop()
 	}
+	r.feedbackGeneration++
+	generation := r.feedbackGeneration
 	comp := r.installComp
 	r.feedbackTmr = time.AfterFunc(installFeedbackTimeout, func() {
 		r.mu.Lock()
 		defer r.mu.Unlock()
-		if r.state != stateInstalling || r.installComp != comp {
+		if generation != r.feedbackGeneration || r.state != stateInstalling || r.installComp != comp {
 			return
 		}
 		r.log.Warnf("OTA: update-service reported nothing for %s within %s; the install did not start",
@@ -758,6 +762,7 @@ func (r *Receiver) onInstallField(comp, field, value string) {
 	// MDB install.
 	if r.state == stateInstalling && strings.HasSuffix(field, ":"+comp) {
 		r.armInstallFeedbackLocked()
+		r.armInhibitorTimeoutLocked()
 	}
 
 	switch field {
@@ -910,9 +915,9 @@ func (r *Receiver) finishInstallLocked() {
 	// to the DBC by the handoff, and delta files are consumed by
 	// update-service during apply.
 	installed := phase == PhasePendingReboot || phase == PhaseSuccess
-	// A staged apply has no single bundle ID: its artifacts belong to
-	// update-service's retention (deltas it consumed, the base it kept) and
-	// must not be swept here.
+	// A staged apply has no single bundle ID. Cross-board artifacts are cleaned
+	// by StagedPruner only after a successful handoff; the receiving updater
+	// keeps its own base and delta cache.
 	if r.installBundleID != "" {
 		if installed && r.installComp == ComponentMDB && !isDelta(r.installBundleID) {
 			r.staging.Forget(r.installComp, r.installBundleID)
@@ -923,6 +928,8 @@ func (r *Receiver) finishInstallLocked() {
 	r.installBundleID = ""
 
 	// The inhibitor is released below; its watchdogs must not fire later.
+	r.inhibitGeneration++
+	r.feedbackGeneration++
 	if r.inhibitTmr != nil {
 		r.inhibitTmr.Stop()
 		r.inhibitTmr = nil
@@ -1022,17 +1029,21 @@ func (r *Receiver) removeInhibitorLocked() {
 	}
 }
 
-// armInhibitorTimeoutLocked guards against update-service never reporting a
-// terminal state: the inhibitor must not outlive the install indefinitely.
+// armInhibitorTimeoutLocked is a long silence backstop for the power
+// inhibitor. Component feedback re-arms it; it is not a maximum install
+// duration.
 func (r *Receiver) armInhibitorTimeoutLocked() {
 	if r.inhibitTmr != nil {
 		r.inhibitTmr.Stop()
 	}
+	r.inhibitGeneration++
+	generation := r.inhibitGeneration
+	comp := r.installComp
 	r.inhibitTmr = time.AfterFunc(inhibitorTimeout, func() {
 		r.mu.Lock()
 		defer r.mu.Unlock()
-		if r.state == stateInstalling {
-			r.log.Warnf("OTA: no install feedback after %s; releasing inhibitor", inhibitorTimeout)
+		if generation == r.inhibitGeneration && r.state == stateInstalling && r.installComp == comp {
+			r.log.Warnf("OTA: no install feedback for %s; releasing inhibitor", inhibitorTimeout)
 			r.finishInstallLocked()
 		}
 	})

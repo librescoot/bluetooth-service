@@ -28,7 +28,7 @@ func TestStagedNamePaths(t *testing.T) {
 		}
 	}
 
-	if got := st.FinalPath(ComponentDBC, "x.delta"); got != "/base/dbc/x.delta" {
+	if got := st.FinalPath(ComponentDBC, "x.delta"); got != "/base/ble/dbc/x.delta" {
 		t.Errorf("DBC FinalPath = %q", got)
 	}
 }
@@ -58,6 +58,28 @@ func TestForgetKeepsFinalBundle(t *testing.T) {
 	}
 	if sc := st.LoadSidecar(ComponentMDB, id); sc != nil {
 		t.Error("sidecar survived Forget")
+	}
+}
+
+func TestDiscardRemovesStagedMarker(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStaging(dir)
+	id := "librescoot-unu-dbc-nightly-20260101T000000.hdelta"
+	final := st.FinalPath(ComponentDBC, id)
+	if err := os.MkdirAll(filepath.Dir(final), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{final, final + stagedMarkerSuffix} {
+		if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	st.Discard(ComponentDBC, id)
+	for _, path := range []string{final, final + stagedMarkerSuffix} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("%s survived Discard", filepath.Base(path))
+		}
 	}
 }
 

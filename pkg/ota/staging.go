@@ -11,11 +11,10 @@ import (
 )
 
 // DefaultStagingDir is where partial and completed bundles are staged. It lives
-// on the persistent /data partition so transfers survive reboots. The
-// per-component subdirectories (/data/ota/mdb, /data/ota/dbc) are
-// update-service's own download directories — staging there means a completed
-// full image is found by update-service's base lookup for later delta updates,
-// and keeps the files inside the dirs ums-service's orphan sweep leaves alone.
+// on the persistent /data partition so transfers survive reboots. MDB bundles
+// go directly into update-service's download directory; DBC bundles use an
+// isolated directory on the MDB because its update-service does not own the
+// dashboard's download directory.
 const DefaultStagingDir = "/data/ota"
 
 // freeSpaceMargin is kept free on top of the bundle size so the staging never
@@ -36,10 +35,10 @@ type Sidecar struct {
 	CreatedAt string `json:"created_at"`
 }
 
-// Staging manages the on-disk layout: <dir>/<component>/<stagedName>.part plus
-// <bundleID>.json sidecars, where stagedName is the bundle ID with ".mender"
-// appended unless the ID already names a delta or full artifact (see
-// stagedName).
+// Staging manages the on-disk layout: MDB bundles use <dir>/mdb; DBC bundles
+// use <dir>/ble/dbc. Each contains <stagedName>.part plus <bundleID>.json
+// sidecars, where stagedName is the bundle ID with ".mender" appended unless
+// the ID already names a delta or full artifact (see stagedName).
 type Staging struct {
 	dir string
 }
@@ -56,7 +55,10 @@ func componentName(component byte) string {
 }
 
 func (st *Staging) componentDir(component byte) string {
-	return filepath.Join(st.dir, componentName(component))
+	if component == ComponentDBC {
+		return filepath.Join(st.dir, "ble", "dbc")
+	}
+	return filepath.Join(st.dir, "mdb")
 }
 
 func isDelta(bundleID string) bool {
@@ -141,13 +143,13 @@ func (st *Staging) WriteSidecar(component byte, sc *Sidecar) error {
 func (st *Staging) Discard(component byte, bundleID string) {
 	_ = os.Remove(st.PartPath(component, bundleID))
 	_ = os.Remove(st.FinalPath(component, bundleID))
+	_ = os.Remove(st.FinalPath(component, bundleID) + stagedMarkerSuffix)
 	_ = os.Remove(st.sidecarPath(component, bundleID))
 }
 
-// Forget removes the transfer bookkeeping (partial file and sidecar) but keeps
-// the completed bundle. Used after a successful MDB full-image install: the
-// .mender stays in update-service's download dir as the base for future delta
-// updates, and update-service's own retention policy owns it from here.
+// Forget removes transfer bookkeeping (the partial file and sidecar) while
+// keeping the completed artifact. The installer or receiving update-service
+// owns its later retention.
 func (st *Staging) Forget(component byte, bundleID string) {
 	_ = os.Remove(st.PartPath(component, bundleID))
 	_ = os.Remove(st.sidecarPath(component, bundleID))
@@ -181,13 +183,12 @@ func (st *Staging) HasSpace(need uint64) bool {
 }
 
 // CleanupStale removes partial transfers that have not been touched for a week
-// and orphaned sidecars. Returns the number of files removed. Only .part files
-// and their sidecars are touched: completed .mender files in these directories
-// are owned by update-service (delta base retention), never by us.
+// and orphaned sidecars. It also sweeps partials from the legacy MDB-side DBC
+// directory, but leaves completed artifacts for explicit post-install cleanup.
 func (st *Staging) CleanupStale() int {
 	removed := 0
-	for _, comp := range []string{"mdb", "dbc"} {
-		dir := filepath.Join(st.dir, comp)
+	dirs := []string{st.componentDir(ComponentMDB), st.componentDir(ComponentDBC), filepath.Join(st.dir, "dbc")}
+	for _, dir := range dirs {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
 			continue

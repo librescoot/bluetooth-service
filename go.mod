@@ -6,6 +6,7 @@ require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/alicebob/miniredis/v2 v2.39.0
 	github.com/fxamacker/cbor/v2 v2.9.0
+	github.com/librescoot/data-server v0.1.5
 	github.com/librescoot/redis-ipc v0.15.4
 	github.com/nyaruka/phonenumbers v1.8.0
 	github.com/redis/go-redis/v9 v9.18.0
