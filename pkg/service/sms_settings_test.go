@@ -8,7 +8,8 @@ func TestSMSForwardSettingValidation(t *testing.T) {
 		value string
 		valid bool
 	}{
-		{"off", true}, {"+4915112345678", true}, {"+12345678", false}, {"+19009099099", false},
+		{"off", true}, {"+4915112345678", true}, {"+12345678", true}, {"+19009099099", true},
+		{"+123456789012345", true},
 		{"", false}, {"123456789", false}, {"+012345678", false},
 		{"+1234567", false}, {"+1234567890123456", false}, {"+49123 45678", false},
 	} {

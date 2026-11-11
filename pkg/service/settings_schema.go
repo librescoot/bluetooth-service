@@ -7,8 +7,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/nyaruka/phonenumbers"
 )
 
 // settingSchema mirrors the subset of settings-service's schema that we need
@@ -149,16 +147,7 @@ func validSMSForwardDestination(value string) bool {
 			return false
 		}
 	}
-	number, err := phonenumbers.Parse(value, "")
-	if err != nil || !phonenumbers.IsValidNumber(number) {
-		return false
-	}
-	switch phonenumbers.GetNumberType(number) {
-	case phonenumbers.MOBILE, phonenumbers.FIXED_LINE, phonenumbers.FIXED_LINE_OR_MOBILE:
-		return true
-	default:
-		return false
-	}
+	return true
 }
 
 func validTripExpunge(value string) bool {
