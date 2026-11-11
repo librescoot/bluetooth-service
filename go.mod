@@ -7,7 +7,7 @@ require (
 	github.com/alicebob/miniredis/v2 v2.39.0
 	github.com/fxamacker/cbor/v2 v2.9.0
 	github.com/librescoot/data-server v0.1.5
-	github.com/librescoot/redis-ipc v0.15.4
+	github.com/librescoot/redis-ipc v0.15.5-0.20261111175103-0bca8184dc69
 	github.com/redis/go-redis/v9 v9.18.0
 	github.com/tarm/serial v0.0.0-20180830185346-98f6abe2eb07
 	golang.org/x/sys v0.41.0
