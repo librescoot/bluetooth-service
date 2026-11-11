@@ -313,6 +313,8 @@ func (s *Service) CloseUSock() error {
 func (s *Service) ReconnectUSock() error {
 	s.reconnectMu.Lock()
 	defer s.reconnectMu.Unlock()
+	s.link.holdInitialization()
+	defer s.link.releaseInitialization()
 
 	s.invalidateNRFTimeRequest()
 	s.mu.Lock()
@@ -463,6 +465,9 @@ func (s *Service) Bootstrap() error {
 // failure rather than returning an error, since a bad init shouldn't prevent
 // the rest of the service from running.
 func (s *Service) startNormally() error {
+	s.link.holdInitialization()
+	defer s.link.releaseInitialization()
+
 	s.mu.RLock()
 	device := s.serialDevice
 	baud := s.baudRate
@@ -553,6 +558,9 @@ func (s *Service) resyncStateToNRF(reason string) {
 // sent to the pre-reset firmware. Debounced because the nRF re-sends
 // RESET_INFO until ACKed.
 func (s *Service) resyncAfterNRFReset() {
+	s.link.holdInitialization()
+	defer s.link.releaseInitialization()
+
 	s.resyncMu.Lock()
 	if time.Since(s.lastResetResync) < 5*time.Second {
 		s.resyncMu.Unlock()

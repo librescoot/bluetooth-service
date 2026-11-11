@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"io"
 	"sync"
 	"testing"
@@ -107,7 +108,33 @@ func (m *overlapUSOCK) WriteWithFrameID(_ byte, data []byte) error {
 
 func (m *overlapUSOCK) Close() error { return nil }
 
-func TestRunningNotificationStartsBaudProbeDuringInitialization(t *testing.T) {
+func TestInitializationHoldDefersQueuedNegotiation(t *testing.T) {
+	s, _ := newVersionPushService(t)
+	lm := newLinkManager(s)
+	lm.holdInitialization()
+	lm.holdInitialization()
+
+	// Simulate a negotiation goroutine queued before the hold was acquired.
+	lm.negotiate()
+	lm.mu.Lock()
+	pending := lm.negotiationPending
+	lm.mu.Unlock()
+	if !pending {
+		t.Fatal("negotiation was not deferred")
+	}
+	lm.releaseInitialization()
+	lm.mu.Lock()
+	pending = lm.negotiationPending
+	remaining := lm.initializing
+	lm.mu.Unlock()
+	if !pending || remaining != 1 {
+		t.Fatalf("pending=%t, holds=%d", pending, remaining)
+	}
+	lm.Stop()
+	lm.releaseInitialization()
+}
+
+func TestRunningNotificationDefersBaudProbeUntilInitialization(t *testing.T) {
 	s, mr := newVersionPushService(t)
 	mr.HSet("version:mdb", "version", "v1.4.2")
 	mock := &overlapUSOCK{
@@ -129,15 +156,20 @@ func TestRunningNotificationStartsBaudProbeDuringInitialization(t *testing.T) {
 	}
 	select {
 	case <-mock.probeStarted:
-		t.Log("baud capability probe started while the host handshake was still blocked")
-	case <-time.After(3 * time.Second):
 		close(mock.releaseHello)
 		s.link.Stop()
-		t.Fatal("baud probe did not start during initialization")
+		t.Fatal("baud probe started during initialization")
+	case <-time.After(100 * time.Millisecond):
 	}
 	close(mock.releaseHello)
 	if err := <-initDone; err != nil {
 		t.Fatalf("InitializeNRF52: %v", err)
+	}
+	select {
+	case <-mock.probeStarted:
+	case <-time.After(3 * time.Second):
+		s.link.Stop()
+		t.Fatal("deferred baud probe did not start")
 	}
 	s.link.Stop()
 }
@@ -157,16 +189,12 @@ func TestNRFInitializationInterruptedAfterHostHandshake(t *testing.T) {
 			s.usock = mock
 
 			err := s.InitializeNRF52()
-			if err != nil {
-				t.Fatalf("InitializeNRF52 returned %v", err)
-			}
 			if tc.interrupt {
-				if mock.failedWrites == 0 || mock.streamEnabled || mock.streamSynced {
-					t.Fatalf("failed writes=%d, stream enabled=%t, synced=%t", mock.failedWrites, mock.streamEnabled, mock.streamSynced)
+				if !errors.Is(err, io.ErrClosedPipe) || mock.failedWrites == 0 || mock.streamEnabled || mock.streamSynced {
+					t.Fatalf("error=%v, failed writes=%d, stream enabled=%t, synced=%t", err, mock.failedWrites, mock.streamEnabled, mock.streamSynced)
 				}
-				t.Logf("initialization returned success despite %d failed writes and no stream enable or sync", mock.failedWrites)
-			} else if mock.failedWrites != 0 || !mock.streamEnabled || !mock.streamSynced {
-				t.Fatalf("failed writes=%d, stream enabled=%t, synced=%t", mock.failedWrites, mock.streamEnabled, mock.streamSynced)
+			} else if err != nil || mock.failedWrites != 0 || !mock.streamEnabled || !mock.streamSynced {
+				t.Fatalf("error=%v, failed writes=%d, stream enabled=%t, synced=%t", err, mock.failedWrites, mock.streamEnabled, mock.streamSynced)
 			}
 		})
 	}

@@ -65,6 +65,8 @@ type LinkManager struct {
 	currentBaud          int
 	caps                 int
 	opBusy               bool // a negotiation or fallback is running (owns the port)
+	initializing         int
+	negotiationPending   bool
 	suspended            bool // firmware updater owns the port; refuse all operations
 	stopped              bool // terminal service shutdown; Resume cannot clear this
 	keepStop             chan struct{}
@@ -219,16 +221,52 @@ func (lm *LinkManager) HandleLinkMessage(absSubTypeKey uint16, value interface{}
 	}
 }
 
+// holdInitialization defers baud negotiation until all initialization callers finish.
+func (lm *LinkManager) holdInitialization() {
+	lm.mu.Lock()
+	lm.initializing++
+	lm.mu.Unlock()
+}
+
+func (lm *LinkManager) releaseInitialization() {
+	lm.mu.Lock()
+	lm.initializing--
+	start := lm.initializing == 0 && lm.negotiationPending
+	if start {
+		lm.negotiationPending = false
+	}
+	lm.mu.Unlock()
+	if start {
+		lm.StartNegotiation()
+	}
+}
+
 // StartNegotiation kicks off capability probing and (if supported) the upshift
 // to 1 Mbaud. Non-blocking; concurrent calls collapse into one negotiation.
 func (lm *LinkManager) StartNegotiation() {
+	lm.mu.Lock()
+	if lm.initializing > 0 {
+		lm.negotiationPending = true
+		lm.mu.Unlock()
+		return
+	}
+	lm.mu.Unlock()
 	go lm.negotiate()
 }
 
 func (lm *LinkManager) negotiate() {
-	if !lm.beginOp() {
+	lm.mu.Lock()
+	if lm.initializing > 0 {
+		lm.negotiationPending = true
+		lm.mu.Unlock()
 		return
 	}
+	if lm.stopped || lm.suspended || lm.opBusy {
+		lm.mu.Unlock()
+		return
+	}
+	lm.opBusy = true
+	lm.mu.Unlock()
 	recoverLink := false
 	defer func() {
 		restartNegotiation := false
