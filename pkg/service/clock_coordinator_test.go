@@ -246,6 +246,24 @@ func TestCoordinatorPeriodicExternalSeeding(t *testing.T) {
 	}
 }
 
+func TestGPSQualitySeedsNRFWithinHoldoverErrorBudget(t *testing.T) {
+	s, m, f, _ := setupClockTest(t)
+	f.mu.Lock()
+	f.q = clockQuality{BootID: "boot", Generation: 1, Source: "gps", External: true, AgeNS: int64(time.Second), ResidualSeconds: .1, UncertaintySeconds: 4}
+	f.mu.Unlock()
+	s.syncTrustedTime()
+	if m.messageCount() != 1 {
+		t.Fatalf("GPS seeds: %d", m.messageCount())
+	}
+	f.mu.Lock()
+	f.q.UncertaintySeconds = 5
+	f.mu.Unlock()
+	s.syncTrustedTime()
+	if m.messageCount() != 1 {
+		t.Fatal("GPS exceeded error budget")
+	}
+}
+
 func TestTimeCommandResponseAndLegacySubmission(t *testing.T) {
 	s, m, f, n := setupClockTest(t)
 	s.handleTimeCommand("set 1735689600", n.Load())

@@ -338,7 +338,12 @@ func (s *Service) syncTrustedTime() {
 		return
 	}
 	age := q.AgeNS + elapsed
-	if q.Preparing || !q.External || (q.Source != "ntp" && q.Source != "gps") || q.AgeNS < 0 || age > int64(30*time.Second) || math.IsNaN(q.ResidualSeconds) || math.IsNaN(q.UncertaintySeconds) || q.UncertaintySeconds < 0 || math.Abs(q.ResidualSeconds)+q.UncertaintySeconds > 1 {
+	// GPS precision is coarser than NTP, but still useful for offline holdover.
+	maxError := 1.0
+	if q.Source == "gps" {
+		maxError = 5
+	}
+	if q.Preparing || !q.External || (q.Source != "ntp" && q.Source != "gps") || q.AgeNS < 0 || age > int64(30*time.Second) || math.IsNaN(q.ResidualSeconds) || math.IsNaN(q.UncertaintySeconds) || q.UncertaintySeconds < 0 || math.Abs(q.ResidualSeconds)+q.UncertaintySeconds > maxError {
 		s.log.Infof("clock source=%s decision=seed_reject reason=quality age_ns=%d offset_s=%f uncertainty_s=%f", q.Source, age, q.ResidualSeconds, q.UncertaintySeconds)
 		return
 	}
