@@ -246,6 +246,24 @@ func TestCoordinatorPeriodicExternalSeeding(t *testing.T) {
 	}
 }
 
+func TestNRFSeedAcceptsHealthyNTPAtNormalPollAge(t *testing.T) {
+	s, m, f, _ := setupClockTest(t)
+	f.mu.Lock()
+	f.q = clockQuality{BootID: "boot", Generation: 1, Source: "ntp", External: true, AgeNS: int64(1024 * time.Second), ResidualSeconds: .01, UncertaintySeconds: .1}
+	f.mu.Unlock()
+	s.syncTrustedTime()
+	if m.messageCount() != 1 {
+		t.Fatal("healthy NTP rejected")
+	}
+	f.mu.Lock()
+	f.q.AgeNS = int64(2049 * time.Second)
+	f.mu.Unlock()
+	s.syncTrustedTime()
+	if m.messageCount() != 1 {
+		t.Fatal("expired NTP accepted")
+	}
+}
+
 func TestGPSQualitySeedsNRFWithinHoldoverErrorBudget(t *testing.T) {
 	s, m, f, _ := setupClockTest(t)
 	f.mu.Lock()

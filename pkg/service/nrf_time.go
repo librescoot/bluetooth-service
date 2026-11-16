@@ -333,7 +333,11 @@ func (s *Service) syncTrustedTime() {
 		return
 	}
 	elapsed := now - start
-	if q.AgeNS < 0 || q.AgeNS > int64(30*time.Second) || elapsed > int64(30*time.Second)-q.AgeNS {
+	maxAge := int64(30 * time.Second)
+	if q.Source == "ntp" {
+		maxAge = int64(2048 * time.Second)
+	}
+	if elapsed > int64(30*time.Second) || q.AgeNS < 0 || q.AgeNS > maxAge || elapsed > maxAge-q.AgeNS {
 		s.log.Infof("clock source=%s decision=seed_reject reason=stale", q.Source)
 		return
 	}
@@ -343,7 +347,7 @@ func (s *Service) syncTrustedTime() {
 	if q.Source == "gps" {
 		maxError = 5
 	}
-	if q.Preparing || !q.External || (q.Source != "ntp" && q.Source != "gps") || q.AgeNS < 0 || age > int64(30*time.Second) || math.IsNaN(q.ResidualSeconds) || math.IsNaN(q.UncertaintySeconds) || q.UncertaintySeconds < 0 || math.Abs(q.ResidualSeconds)+q.UncertaintySeconds > maxError {
+	if q.Preparing || !q.External || (q.Source != "ntp" && q.Source != "gps") || q.AgeNS < 0 || age > maxAge || math.IsNaN(q.ResidualSeconds) || math.IsNaN(q.UncertaintySeconds) || q.UncertaintySeconds < 0 || math.Abs(q.ResidualSeconds)+q.UncertaintySeconds > maxError {
 		s.log.Infof("clock source=%s decision=seed_reject reason=quality age_ns=%d offset_s=%f uncertainty_s=%f", q.Source, age, q.ResidualSeconds, q.UncertaintySeconds)
 		return
 	}
