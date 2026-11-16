@@ -55,11 +55,12 @@ type Service struct {
 
 	hibernationLEDMu sync.Mutex
 
-	nrfTimeNow   func() time.Time
-	bootNow      func() (int64, error)
-	clockSocket  string
-	nrfTimeMu    sync.Mutex
-	nrfTimeState nrfTimeState
+	nrfTimeNow       func() time.Time
+	bootNow          func() (int64, error)
+	clockSocket      string
+	nrfTimeMu        sync.Mutex
+	nrfTimeState     nrfTimeState
+	userTimeRequests chan int64
 
 	// Track the most recent vehicle state string for diagnostic/log paths.
 	lastVehicleState string
@@ -163,6 +164,7 @@ func New(ipcClient *ipc.Client, destinationClient *ipc.Client, log *logger.Logge
 		destIPC:          destinationClient,
 		log:              log,
 		stopCh:           make(chan struct{}),
+		userTimeRequests: make(chan int64, 1),
 		faults:           ipcClient.NewFaultReporter("ble"),
 		hostSessionAckCh: make(chan hostSessionAck, 4),
 	}

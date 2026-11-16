@@ -33,6 +33,7 @@ type clockQuality struct {
 	NRFEligible        bool    `json:"nrf_eligible"`
 	NRFDeadlineBootNS  int64   `json:"nrf_deadline_boot_ns"`
 	External           bool    `json:"external"`
+	Outcome            string  `json:"outcome"`
 	Preparing          bool    `json:"preparing"`
 	Source             string  `json:"source"`
 	AgeNS              int64   `json:"age_ns"`
@@ -299,38 +300,60 @@ func (s *Service) StartTrustedTimeMonitor() {
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		timer := time.NewTimer(5 * time.Second)
-		defer timer.Stop()
-		select {
-		case <-s.stopCh:
-			return
-		case <-timer.C:
-		}
-		ticker := time.NewTicker(trustedTimePollInterval)
-		defer ticker.Stop()
+		startup := time.NewTimer(5 * time.Second)
+		defer startup.Stop()
+		periodic := time.NewTicker(trustedTimePollInterval)
+		defer periodic.Stop()
+		retry := time.NewTimer(time.Hour)
+		retry.Stop()
+		defer retry.Stop()
+		var retryC <-chan time.Time
+		var userReceipt int64
 		for {
-			s.syncTrustedTime()
 			select {
 			case <-s.stopCh:
 				return
-			case <-ticker.C:
+			case <-startup.C:
+				s.syncTrustedTime()
+			case <-periodic.C:
+				s.syncTrustedTime()
+			case userReceipt = <-s.userTimeRequests:
+				if s.syncUserTime(userReceipt) {
+					retry.Stop()
+					retryC = nil
+				} else {
+					retry.Reset(time.Second)
+					retryC = retry.C
+				}
+			case <-retryC:
+				now, err := s.boottime()
+				if err != nil || now < userReceipt || now-userReceipt >= int64(30*time.Second) || s.syncUserTime(userReceipt) {
+					retryC = nil
+				} else {
+					retry.Reset(time.Second)
+				}
 			}
 		}
 	}()
 }
-func (s *Service) syncTrustedTime() {
+
+func (s *Service) syncTrustedTime() { s.seedFromClockQuality(0) }
+
+func (s *Service) syncUserTime(receipt int64) bool { return s.seedFromClockQuality(receipt) }
+
+func (s *Service) seedFromClockQuality(userReceipt int64) bool {
 	start, err := s.boottime()
 	if err != nil {
-		return
+		return false
 	}
 	q, err := s.clockCall(clockRequest{Op: "status"})
 	if err != nil {
 		s.log.Infof("clock source=unknown decision=seed_reject reason=coordinator error=%v", err)
-		return
+		return false
 	}
 	now, err := s.boottime()
 	if err != nil || now < start {
-		return
+		return false
 	}
 	elapsed := now - start
 	maxAge := int64(30 * time.Second)
@@ -339,19 +362,22 @@ func (s *Service) syncTrustedTime() {
 	}
 	if elapsed > int64(30*time.Second) || q.AgeNS < 0 || q.AgeNS > maxAge || elapsed > maxAge-q.AgeNS {
 		s.log.Infof("clock source=%s decision=seed_reject reason=stale", q.Source)
-		return
+		return false
 	}
 	age := q.AgeNS + elapsed
-	// GPS precision is coarser than NTP, but still useful for offline holdover.
 	maxError := 1.0
-	if q.Source == "gps" {
+	if q.Source == "gps" || q.Source == "user" {
 		maxError = 5
 	}
-	if q.Preparing || !q.External || (q.Source != "ntp" && q.Source != "gps") || q.AgeNS < 0 || age > maxAge || math.IsNaN(q.ResidualSeconds) || math.IsNaN(q.UncertaintySeconds) || q.UncertaintySeconds < 0 || math.Abs(q.ResidualSeconds)+q.UncertaintySeconds > maxError {
-		s.log.Infof("clock source=%s decision=seed_reject reason=quality age_ns=%d offset_s=%f uncertainty_s=%f", q.Source, age, q.ResidualSeconds, q.UncertaintySeconds)
-		return
+	sourceOK := q.External && (q.Source == "ntp" || q.Source == "gps") || !q.External && q.Source == "user" && q.Outcome != "" && q.Outcome != "unknown" && q.Outcome != "in-flight"
+	if userReceipt != 0 && (q.Source != "user" || now < userReceipt || age > now-userReceipt+int64(2*time.Second)) {
+		return false
 	}
-	s.seedNRFTime(s.timeNow().Unix(), q.Source)
+	if q.Preparing || !sourceOK || math.IsNaN(q.ResidualSeconds) || math.IsNaN(q.UncertaintySeconds) || q.UncertaintySeconds < 0 || math.Abs(q.ResidualSeconds)+q.UncertaintySeconds > maxError {
+		s.log.Infof("clock source=%s decision=seed_reject reason=quality age_ns=%d offset_s=%f uncertainty_s=%f", q.Source, age, q.ResidualSeconds, q.UncertaintySeconds)
+		return false
+	}
+	return s.seedNRFTime(s.timeNow().Unix(), q.Source)
 }
 func (s *Service) setSystemTime(timestampStr string, receipt int64) error {
 	timestamp, err := strconv.ParseInt(strings.TrimSpace(timestampStr), 10, 64)
@@ -390,5 +416,19 @@ func (s *Service) setSystemTime(timestampStr string, receipt int64) error {
 		return err
 	}
 	s.log.Infof("clock source=user decision=accepted age_ns=%d offset_s=%f", now-receipt, offset)
+	if s.userTimeRequests != nil {
+		select {
+		case s.userTimeRequests <- receipt:
+		default:
+			select {
+			case <-s.userTimeRequests:
+			default:
+			}
+			select {
+			case s.userTimeRequests <- receipt:
+			default:
+			}
+		}
+	}
 	return nil
 }

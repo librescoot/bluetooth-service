@@ -425,3 +425,69 @@ func TestNRFSeedingWaitsForPostWakeResume(t *testing.T) {
 		t.Fatal("fresh post-resume quality did not seed nRF")
 	}
 }
+
+type countingUSOCK struct{ count atomic.Int64 }
+
+func (m *countingUSOCK) WriteWithFrameID(_ byte, _ []byte) error { m.count.Add(1); return nil }
+func (m *countingUSOCK) Close() error                            { return nil }
+
+func TestUserTimeSeedsOnlyAfterDelayedSelectedQuality(t *testing.T) {
+	s, _, f, n := setupClockTest(t)
+	m := &countingUSOCK{}
+	s.usock = m
+	s.stopCh = make(chan struct{})
+	s.userTimeRequests = make(chan int64, 1)
+	s.StartTrustedTimeMonitor()
+	defer func() { close(s.stopCh); s.wg.Wait() }()
+	if err := s.setSystemTime(fmt.Sprint(testNow), n.Load()); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if int(m.count.Load()) != 0 {
+		t.Fatal("accepted sample seeded before selection")
+	}
+	f.mu.Lock()
+	f.q = clockQuality{BootID: "boot", Generation: 1, Source: "user", External: false, Outcome: "in-flight", UncertaintySeconds: 1}
+	f.mu.Unlock()
+	time.Sleep(1100 * time.Millisecond)
+	if int(m.count.Load()) != 0 {
+		t.Fatal("in-flight correction seeded")
+	}
+	f.mu.Lock()
+	f.q.Outcome = "completed"
+	f.q.ResidualSeconds = .1
+	f.mu.Unlock()
+	deadline := time.Now().Add(2 * time.Second)
+	for int(m.count.Load()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if int(m.count.Load()) != 1 {
+		t.Fatalf("selected user quality produced %d seeds", int(m.count.Load()))
+	}
+	time.Sleep(1100 * time.Millisecond)
+	if int(m.count.Load()) != 1 {
+		t.Fatal("user sample seeded repeatedly")
+	}
+}
+
+func TestUserQualitySeedBounds(t *testing.T) {
+	s, m, f, _ := setupClockTest(t)
+	for _, tc := range []struct {
+		q    clockQuality
+		want int
+	}{
+		{clockQuality{BootID: "boot", Generation: 1, Source: "user", Outcome: "completed", UncertaintySeconds: 1, ResidualSeconds: 3}, 1},
+		{clockQuality{BootID: "boot", Generation: 1, Source: "user", Outcome: "completed", UncertaintySeconds: 1, ResidualSeconds: 4.1}, 1},
+		{clockQuality{BootID: "boot", Generation: 1, Source: "user", Outcome: "completed", UncertaintySeconds: 1, AgeNS: int64(31 * time.Second)}, 1},
+		{clockQuality{BootID: "boot", Generation: 1, Source: "user", Outcome: "unknown", UncertaintySeconds: 1}, 1},
+		{clockQuality{BootID: "boot", Generation: 1, Source: "user", External: true, Outcome: "completed", UncertaintySeconds: 1}, 1},
+	} {
+		f.mu.Lock()
+		f.q = tc.q
+		f.mu.Unlock()
+		s.syncTrustedTime()
+		if got := m.messageCount(); got != tc.want {
+			t.Fatalf("%+v: got %d", tc.q, got)
+		}
+	}
+}
