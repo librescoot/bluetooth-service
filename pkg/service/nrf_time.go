@@ -60,6 +60,11 @@ type clockResponse struct {
 	Error   string       `json:"error"`
 	Quality clockQuality `json:"quality"`
 }
+type userTimeRequest struct {
+	receipt int64
+	utc     int64
+}
+
 type nrfTimeState struct {
 	pending         bool
 	generation      uint64
@@ -308,7 +313,7 @@ func (s *Service) StartTrustedTimeMonitor() {
 		retry.Stop()
 		defer retry.Stop()
 		var retryC <-chan time.Time
-		var userReceipt int64
+		var userRequest userTimeRequest
 		for {
 			select {
 			case <-s.stopCh:
@@ -317,8 +322,12 @@ func (s *Service) StartTrustedTimeMonitor() {
 				s.syncTrustedTime()
 			case <-periodic.C:
 				s.syncTrustedTime()
-			case userReceipt = <-s.userTimeRequests:
-				if s.syncUserTime(userReceipt) {
+			case request := <-s.userTimeRequests:
+				if request.receipt < userRequest.receipt {
+					continue
+				}
+				userRequest = request
+				if s.syncUserTime(userRequest) {
 					retry.Stop()
 					retryC = nil
 				} else {
@@ -327,7 +336,7 @@ func (s *Service) StartTrustedTimeMonitor() {
 				}
 			case <-retryC:
 				now, err := s.boottime()
-				if err != nil || now < userReceipt || now-userReceipt >= int64(30*time.Second) || s.syncUserTime(userReceipt) {
+				if err != nil || now < userRequest.receipt || now-userRequest.receipt >= int64(30*time.Second) || s.syncUserTime(userRequest) {
 					retryC = nil
 				} else {
 					retry.Reset(time.Second)
@@ -337,11 +346,11 @@ func (s *Service) StartTrustedTimeMonitor() {
 	}()
 }
 
-func (s *Service) syncTrustedTime() { s.seedFromClockQuality(0) }
+func (s *Service) syncTrustedTime() { s.seedFromClockQuality(nil) }
 
-func (s *Service) syncUserTime(receipt int64) bool { return s.seedFromClockQuality(receipt) }
+func (s *Service) syncUserTime(request userTimeRequest) bool { return s.seedFromClockQuality(&request) }
 
-func (s *Service) seedFromClockQuality(userReceipt int64) bool {
+func (s *Service) seedFromClockQuality(request *userTimeRequest) bool {
 	start, err := s.boottime()
 	if err != nil {
 		return false
@@ -370,7 +379,16 @@ func (s *Service) seedFromClockQuality(userReceipt int64) bool {
 		maxError = 5
 	}
 	sourceOK := q.External && (q.Source == "ntp" || q.Source == "gps") || !q.External && q.Source == "user" && q.Outcome != "" && q.Outcome != "unknown" && q.Outcome != "in-flight"
-	if userReceipt != 0 && (q.Source != "user" || now < userReceipt || age > now-userReceipt+int64(2*time.Second)) {
+	if request != nil {
+		s.userTimeMu.Lock()
+		defer s.userTimeMu.Unlock()
+		if *request != s.userTimeLatest {
+			return false
+		}
+		if q.Source != "user" || now < request.receipt || now-request.receipt >= int64(30*time.Second) || age > now-request.receipt+int64(2*time.Second) || math.Abs(time.Unix(0, request.utc).Add(time.Duration(now-request.receipt)).Sub(s.timeNow()).Seconds()) > maxError {
+			return false
+		}
+	} else if q.Source == "user" {
 		return false
 	}
 	if q.Preparing || !sourceOK || math.IsNaN(q.ResidualSeconds) || math.IsNaN(q.UncertaintySeconds) || q.UncertaintySeconds < 0 || math.Abs(q.ResidualSeconds)+q.UncertaintySeconds > maxError {
@@ -401,6 +419,8 @@ func (s *Service) setSystemTime(timestampStr string, receipt int64) error {
 		return fmt.Errorf("time sample expired")
 	}
 	offset := float64(timestamp) + float64(now-receipt)/1e9 - float64(s.timeNow().UnixNano())/1e9
+	s.userTimeMu.Lock()
+	defer s.userTimeMu.Unlock()
 	_, err = s.clockCall(req)
 	if after, clockErr := s.boottime(); clockErr == nil && after >= now {
 		now = after
@@ -416,16 +436,17 @@ func (s *Service) setSystemTime(timestampStr string, receipt int64) error {
 		return err
 	}
 	s.log.Infof("clock source=user decision=accepted age_ns=%d offset_s=%f", now-receipt, offset)
+	s.userTimeLatest = userTimeRequest{receipt: receipt, utc: req.UTCUnixNS}
 	if s.userTimeRequests != nil {
 		select {
-		case s.userTimeRequests <- receipt:
+		case s.userTimeRequests <- userTimeRequest{receipt: receipt, utc: req.UTCUnixNS}:
 		default:
 			select {
 			case <-s.userTimeRequests:
 			default:
 			}
 			select {
-			case s.userTimeRequests <- receipt:
+			case s.userTimeRequests <- userTimeRequest{receipt: receipt, utc: req.UTCUnixNS}:
 			default:
 			}
 		}

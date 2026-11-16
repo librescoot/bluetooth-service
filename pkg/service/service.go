@@ -60,7 +60,9 @@ type Service struct {
 	clockSocket      string
 	nrfTimeMu        sync.Mutex
 	nrfTimeState     nrfTimeState
-	userTimeRequests chan int64
+	userTimeRequests chan userTimeRequest
+	userTimeMu       sync.Mutex
+	userTimeLatest   userTimeRequest
 
 	// Track the most recent vehicle state string for diagnostic/log paths.
 	lastVehicleState string
@@ -164,7 +166,7 @@ func New(ipcClient *ipc.Client, destinationClient *ipc.Client, log *logger.Logge
 		destIPC:          destinationClient,
 		log:              log,
 		stopCh:           make(chan struct{}),
-		userTimeRequests: make(chan int64, 1),
+		userTimeRequests: make(chan userTimeRequest, 1),
 		faults:           ipcClient.NewFaultReporter("ble"),
 		hostSessionAckCh: make(chan hostSessionAck, 4),
 	}

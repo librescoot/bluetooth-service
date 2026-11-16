@@ -436,7 +436,7 @@ func TestUserTimeSeedsOnlyAfterDelayedSelectedQuality(t *testing.T) {
 	m := &countingUSOCK{}
 	s.usock = m
 	s.stopCh = make(chan struct{})
-	s.userTimeRequests = make(chan int64, 1)
+	s.userTimeRequests = make(chan userTimeRequest, 1)
 	s.StartTrustedTimeMonitor()
 	defer func() { close(s.stopCh); s.wg.Wait() }()
 	if err := s.setSystemTime(fmt.Sprint(testNow), n.Load()); err != nil {
@@ -472,6 +472,7 @@ func TestUserTimeSeedsOnlyAfterDelayedSelectedQuality(t *testing.T) {
 
 func TestUserQualitySeedBounds(t *testing.T) {
 	s, m, f, _ := setupClockTest(t)
+	s.userTimeLatest = userTimeRequest{receipt: int64(10 * time.Second), utc: testNow * int64(time.Second)}
 	for _, tc := range []struct {
 		q    clockQuality
 		want int
@@ -485,9 +486,75 @@ func TestUserQualitySeedBounds(t *testing.T) {
 		f.mu.Lock()
 		f.q = tc.q
 		f.mu.Unlock()
-		s.syncTrustedTime()
+		s.syncUserTime(userTimeRequest{receipt: int64(10 * time.Second), utc: testNow * int64(time.Second)})
 		if got := m.messageCount(); got != tc.want {
 			t.Fatalf("%+v: got %d", tc.q, got)
 		}
+	}
+}
+
+func TestRapidUserRequestsWaitForRequestedClockBeforeSeed(t *testing.T) {
+	s, _, f, n := setupClockTest(t)
+	m := &countingUSOCK{}
+	s.usock = m
+	s.stopCh = make(chan struct{})
+	s.userTimeRequests = make(chan userTimeRequest, 1)
+	var wall atomic.Int64
+	wall.Store(testNow)
+	s.nrfTimeNow = func() time.Time { return time.Unix(wall.Load(), 0) }
+	if err := s.setSystemTime(fmt.Sprint(testNow), n.Load()); err != nil {
+		t.Fatal(err)
+	}
+	n.Add(int64(time.Second))
+	wall.Store(testNow + 1)
+	if err := s.setSystemTime(fmt.Sprint(testNow+3600), n.Load()); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.q = clockQuality{BootID: "boot", Generation: 1, Source: "user", Outcome: "completed", UncertaintySeconds: 1}
+	f.mu.Unlock()
+	s.StartTrustedTimeMonitor()
+	defer func() { close(s.stopCh); s.wg.Wait() }()
+	time.Sleep(1200 * time.Millisecond)
+	if m.count.Load() != 0 {
+		t.Fatal("old selection seeded for different user request")
+	}
+	n.Add(int64(time.Second))
+	wall.Store(testNow + 3601)
+	deadline := time.Now().Add(2 * time.Second)
+	for m.count.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if m.count.Load() != 1 {
+		t.Fatalf("desired clock not seeded: %d", m.count.Load())
+	}
+}
+
+func TestSupersededUserRequestCannotSeed(t *testing.T) {
+	s, m, f, n := setupClockTest(t)
+	first := userTimeRequest{receipt: n.Load(), utc: testNow * int64(time.Second)}
+	s.userTimeLatest = userTimeRequest{receipt: first.receipt + int64(time.Second), utc: first.utc}
+	f.mu.Lock()
+	f.q = clockQuality{BootID: "boot", Generation: 1, Source: "user", Outcome: "completed", UncertaintySeconds: 1}
+	f.mu.Unlock()
+	if s.syncUserTime(first) || m.messageCount() != 0 {
+		t.Fatal("superseded user request seeded")
+	}
+}
+
+func TestUserSeedAcceptsEquivalentTimeWithinBudget(t *testing.T) {
+	s, m, f, n := setupClockTest(t)
+	req := userTimeRequest{receipt: n.Load(), utc: (testNow + 5) * int64(time.Second)}
+	s.userTimeLatest = req
+	f.mu.Lock()
+	f.q = clockQuality{BootID: "boot", Generation: 1, Source: "user", Outcome: "completed", UncertaintySeconds: 1}
+	f.mu.Unlock()
+	if !s.syncUserTime(req) || m.messageCount() != 1 {
+		t.Fatal("equivalent user time rejected")
+	}
+	req.utc += int64(time.Nanosecond)
+	s.userTimeLatest = req
+	if s.syncUserTime(req) || m.messageCount() != 1 {
+		t.Fatal("outside user budget accepted")
 	}
 }
