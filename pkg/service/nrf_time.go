@@ -369,7 +369,7 @@ func (s *Service) seedFromClockQuality(request *userTimeRequest) bool {
 	if q.Source == "ntp" {
 		maxAge = int64(2048 * time.Second)
 	}
-	if elapsed > int64(30*time.Second) || q.AgeNS < 0 || q.AgeNS > maxAge || elapsed > maxAge-q.AgeNS {
+	if elapsed >= int64(30*time.Second) || q.AgeNS < 0 || q.AgeNS > maxAge || elapsed > maxAge-q.AgeNS {
 		s.log.Infof("clock source=%s decision=seed_reject reason=stale", q.Source)
 		return false
 	}
