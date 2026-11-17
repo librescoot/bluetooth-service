@@ -100,9 +100,21 @@ func (s *Service) ShutdownNRF52() {
 
 	if s.link != nil {
 		// Stop keepalives and wait for any negotiation or fallback to release the
-		// UART, but retain direct access for the shutdown commands below.
+		// UART before draining state updates.
 		s.link.Suspend()
 		defer s.link.Stop()
+	}
+
+	// A final power-state update may still be in flight as systemd stops this
+	// service. Drain subscriptions before touching the UART, then replay the
+	// current state once while the link is stable.
+	s.StopSubscriptions()
+	if s.ipc != nil {
+		if state, err := s.ipc.HGet("power-manager", "state"); err == nil && state != "" && state != "running" {
+			if err := s.UpdatePowerManagementState(state); err != nil {
+				s.log.Warnf("failed to send final power state %q on shutdown: %v", state, err)
+			}
+		}
 	}
 
 	if s.usock == nil {

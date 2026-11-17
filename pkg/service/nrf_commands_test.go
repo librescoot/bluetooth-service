@@ -37,6 +37,34 @@ func newVersionPushService(t *testing.T) (*Service, *miniredis.Miniredis) {
 	}, mr
 }
 
+func TestShutdownNRF52DrainsAndReplaysFinalPowerState(t *testing.T) {
+	s, mr := newVersionPushService(t)
+	mr.HSet("power-manager", "state", "hibernating-imminent")
+
+	s.ShutdownNRF52()
+
+	messages := s.usock.(*mockUSOCK).messages
+	if len(messages) < 2 {
+		t.Fatalf("shutdown sent %d frames, want final power state and stream disable", len(messages))
+	}
+	state, err := decodeCBORMessage(messages[0].data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateKey := uint16(ble.TypePowerManagement) + uint16(ble.TypePowerManagementState)
+	if got := state[uint16(ble.TypePowerManagement)][stateKey]; got != uint16(4) {
+		t.Fatalf("final power state = %v, want hibernating-imminent (4)", got)
+	}
+	stream, err := decodeCBORMessage(messages[len(messages)-1].data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamKey := uint16(ble.TypeDataStream) + uint16(ble.TypeDataStreamEnable)
+	if got := stream[uint16(ble.TypeDataStream)][streamKey]; got != uint16(0) {
+		t.Fatalf("final frame stream-enable = %v, want disabled", got)
+	}
+}
+
 func versionPushFrames(t *testing.T, s *Service) []string {
 	t.Helper()
 
