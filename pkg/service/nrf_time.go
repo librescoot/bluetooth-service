@@ -123,7 +123,7 @@ func (s *Service) clockCall(req clockRequest) (clockQuality, error) {
 }
 func writeUARTMessageRTCGet(sock usockWriter, token uint64) error {
 	if sock == nil {
-		return fmt.Errorf("USOCK connection is not initialized")
+		return errLinkUnavailable
 	}
 	message := map[uint16]map[uint16]interface{}{
 		uint16(ble.TypeRTC): {
@@ -140,7 +140,7 @@ func writeUARTMessageRTCGet(sock usockWriter, token uint64) error {
 
 func writeUARTMessage64(sock usockWriter, messageType ble.MessageType, subType ble.SubType, value uint64) error {
 	if sock == nil {
-		return fmt.Errorf("USOCK connection is not initialized")
+		return errLinkUnavailable
 	}
 	absoluteKey := uint16(messageType) + uint16(subType)
 	message := map[uint16]map[uint16]uint64{

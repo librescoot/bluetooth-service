@@ -3,7 +3,9 @@ package usock
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
 	"log"
+	"os"
 	"strings"
 	"testing"
 
@@ -14,6 +16,34 @@ import (
 type memoryPort struct{ bytes.Buffer }
 
 func (p *memoryPort) Close() error { return nil }
+
+func TestWriteAfterCloseDoesNotTouchPort(t *testing.T) {
+	port := &memoryPort{}
+	u := &USOCK{port: port, stopChan: make(chan struct{}), log: logger.NewLogger(nil, logger.LogLevelNone)}
+	if err := u.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := u.WriteWithFrameID(0x20, []byte{1}); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("write after close: got %v, want os.ErrClosed", err)
+	}
+	if port.Len() != 0 {
+		t.Fatal("write touched the closed UART")
+	}
+}
+
+func TestWritePreservesPortError(t *testing.T) {
+	port, err := os.CreateTemp(t.TempDir(), "uart")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := port.Close(); err != nil {
+		t.Fatal(err)
+	}
+	u := &USOCK{port: port, stopChan: make(chan struct{}), log: logger.NewLogger(nil, logger.LogLevelNone)}
+	if err := u.WriteWithFrameID(0x20, []byte{1}); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("write with externally closed port: got %v, want os.ErrClosed", err)
+	}
+}
 
 func TestExtendedTransportRedactsPayloadAndFrameDumps(t *testing.T) {
 	for _, tc := range []struct {

@@ -153,7 +153,7 @@ func (s *Service) SubscribeToRedisChannels() {
 
 				case KeyBLEPairingPin:
 					if field == "pin-code" && value == "" {
-						if err := writeUARTMessage(s.usock, ble.TypeBLEPairingPinRemove, 0, 1); err != nil {
+						if err := writeUARTMessage(s.GetUSock(), ble.TypeBLEPairingPinRemove, 0, 1); err != nil {
 							s.log.Errorf("Error sending pairing pin removal command: %v", err)
 						}
 					}
@@ -164,7 +164,7 @@ func (s *Service) SubscribeToRedisChannels() {
 						if value != "" {
 							active = 1
 						}
-						if err := writeUARTMessage(s.usock, ble.TypeScooterInfo, ble.TypeNavigationActive, active); err != nil {
+						if err := writeUARTMessage(s.GetUSock(), ble.TypeScooterInfo, ble.TypeNavigationActive, active); err != nil {
 							s.log.Errorf("Error sending navigation active update: %v", err)
 						}
 					}
@@ -175,7 +175,7 @@ func (s *Service) SubscribeToRedisChannels() {
 						if value == "ums" {
 							mode = 1
 						}
-						if err := writeUARTMessage(s.usock, ble.TypeScooterInfo, ble.TypeUMSStatus, mode); err != nil {
+						if err := writeUARTMessage(s.GetUSock(), ble.TypeScooterInfo, ble.TypeUMSStatus, mode); err != nil {
 							s.log.Errorf("Error sending UMS status update: %v", err)
 						}
 					}
@@ -193,7 +193,7 @@ func (s *Service) SubscribeToRedisChannels() {
 						if err := s.syncHibernationLED(); err != nil {
 							s.log.Warnf("Synchronizing hibernation LED: %v", err)
 						}
-						if err := writeUARTMessageString(s.usock, ble.TypeAlarm, ble.TypeAlarmStatus, value); err != nil {
+						if err := writeUARTMessageString(s.GetUSock(), ble.TypeAlarm, ble.TypeAlarmStatus, value); err != nil {
 							s.log.Errorf("Error sending alarm status update: %v", err)
 						}
 						// motion-service arms the accelerometer for these states and no
@@ -203,7 +203,7 @@ func (s *Service) SubscribeToRedisChannels() {
 						case "armed", "level-1-triggered", "level-2-triggered":
 							armed = 1
 						}
-						if err := writeUARTMessage(s.usock, ble.TypeAlarm, ble.TypeAlarmMotionArmed, armed); err != nil {
+						if err := writeUARTMessage(s.GetUSock(), ble.TypeAlarm, ble.TypeAlarmMotionArmed, armed); err != nil {
 							s.log.Errorf("Error sending alarm motion-armed update: %v", err)
 						}
 					case "trigger:source":
@@ -212,7 +212,7 @@ func (s *Service) SubscribeToRedisChannels() {
 						if err != nil {
 							s.log.Errorf("Error reading alarm trigger timestamp: %v", err)
 						}
-						if err := writeUARTMessageString(s.usock, ble.TypeAlarm, ble.TypeAlarmLastTrigger, value+","+timestamp); err != nil {
+						if err := writeUARTMessageString(s.GetUSock(), ble.TypeAlarm, ble.TypeAlarmLastTrigger, value+","+timestamp); err != nil {
 							s.log.Errorf("Error sending alarm trigger update: %v", err)
 						}
 					}
@@ -343,7 +343,7 @@ func (s *Service) WatchRedisCommands() {
 			return nil // Not an error, just unknown command
 		}
 
-		if err := writeUARTMessage(s.usock, msgType, subType, valueInt); err != nil {
+		if err := writeUARTMessage(s.GetUSock(), msgType, subType, valueInt); err != nil {
 			s.log.Errorf("Failed to send command '%s' (Type: 0x%04x, SubType: 0x%04x) to nRF: %v", command, msgType, subType, err)
 			return err
 		}
@@ -384,8 +384,8 @@ func (s *Service) UpdateVehicleState(stateStr string) error {
 	s.lastVehicleState = stateStr
 	s.mu.Unlock()
 
-	if err := writeUARTMessage(s.usock, ble.TypeVehicleState, ble.TypeVehicleStateState, uint16(state)); err != nil {
-		return fmt.Errorf("failed to send vehicle state: %v", err)
+	if err := writeUARTMessage(s.GetUSock(), ble.TypeVehicleState, ble.TypeVehicleStateState, uint16(state)); err != nil {
+		return fmt.Errorf("failed to send vehicle state: %w", err)
 	}
 	s.log.Infof("Sent vehicle state: %d (from %s)", state, stateStr)
 	return nil
@@ -413,8 +413,8 @@ func (s *Service) UpdateSeatboxLock(stateStr string) error {
 	}
 
 	// Pass the relative subtype
-	if err := writeUARTMessage(s.usock, ble.TypeVehicleState, ble.TypeVehicleStateSeatbox, uint16(state)); err != nil {
-		return fmt.Errorf("failed to send seatbox lock state: %v", err)
+	if err := writeUARTMessage(s.GetUSock(), ble.TypeVehicleState, ble.TypeVehicleStateSeatbox, uint16(state)); err != nil {
+		return fmt.Errorf("failed to send seatbox lock state: %w", err)
 	}
 	s.log.Infof("Sent seatbox lock state: %d (%s)", state, stateDesc)
 	return nil
@@ -440,8 +440,8 @@ func (s *Service) UpdateHandlebarLock(stateStr string) error {
 	}
 
 	// Pass the relative subtype and the converted integer state
-	if err := writeUARTMessage(s.usock, ble.TypeVehicleState, ble.TypeVehicleStateHandlebar, stateInt); err != nil {
-		return fmt.Errorf("failed to send handlebar lock state: %v", err)
+	if err := writeUARTMessage(s.GetUSock(), ble.TypeVehicleState, ble.TypeVehicleStateHandlebar, stateInt); err != nil {
+		return fmt.Errorf("failed to send handlebar lock state: %w", err)
 	}
 	s.log.Infof("Sent handlebar lock state: %d (%s)", stateInt, stateStr)
 	return nil
@@ -449,15 +449,11 @@ func (s *Service) UpdateHandlebarLock(stateStr string) error {
 
 // UpdateMileage sends the current mileage to nRF52
 func (s *Service) UpdateMileage(mileageStr string) error {
-	s.mu.Lock()
-	if mileageStr == s.lastMileage {
-		s.mu.Unlock()
-		return nil
-	}
-	s.lastMileage = mileageStr
-	s.mu.Unlock()
+	s.mu.RLock()
+	alreadySent := mileageStr == s.lastMileage
+	s.mu.RUnlock()
 
-	if mileageStr == "" {
+	if alreadySent || mileageStr == "" {
 		return nil
 	}
 	mileage, err := strconv.Atoi(mileageStr)
@@ -466,9 +462,12 @@ func (s *Service) UpdateMileage(mileageStr string) error {
 		return nil
 	}
 	// Pass the relative subtype using 32-bit integer message to match nRF's int32_t
-	if err := writeUARTMessage32(s.usock, ble.TypeScooterInfo, ble.TypeMileage, int32(mileage)); err != nil {
-		return fmt.Errorf("failed to send mileage: %v", err)
+	if err := writeUARTMessage32(s.GetUSock(), ble.TypeScooterInfo, ble.TypeMileage, int32(mileage)); err != nil {
+		return fmt.Errorf("failed to send mileage: %w", err)
 	}
+	s.mu.Lock()
+	s.lastMileage = mileageStr
+	s.mu.Unlock()
 	s.log.Debugf("Sent mileage: %d", mileage)
 	return nil
 }
@@ -476,8 +475,8 @@ func (s *Service) UpdateMileage(mileageStr string) error {
 // UpdateFirmwareVersion sends the current firmware version to nRF52
 func (s *Service) UpdateFirmwareVersion(version string) error {
 	// Pass the relative subtype
-	if err := writeUARTMessageString(s.usock, ble.TypeScooterInfo, ble.TypeSoftwareVersion, version); err != nil {
-		return fmt.Errorf("failed to send firmware version: %v", err)
+	if err := writeUARTMessageString(s.GetUSock(), ble.TypeScooterInfo, ble.TypeSoftwareVersion, version); err != nil {
+		return fmt.Errorf("failed to send firmware version: %w", err)
 	}
 	s.log.Infof("Sent firmware version: %s", version)
 	return nil
@@ -515,8 +514,8 @@ func (s *Service) UpdateBatteryActiveStatus(slot int, stateStr string) error {
 	status := batteryStateToInt(stateStr)
 
 	// Pass the relative subtype
-	if err := writeUARTMessage(s.usock, ble.TypeBattery, baseSubType, uint16(status)); err != nil {
-		return fmt.Errorf("failed to send battery:%d status: %v", slot, err)
+	if err := writeUARTMessage(s.GetUSock(), ble.TypeBattery, baseSubType, uint16(status)); err != nil {
+		return fmt.Errorf("failed to send battery:%d status: %w", slot, err)
 	}
 	s.log.Infof("Set battery:%d state to %s", slot, stateStr)
 	return nil
@@ -548,8 +547,8 @@ func (s *Service) UpdateBatteryPresentStatus(slot int, presentStr string) error 
 	}
 
 	// Pass the relative subtype
-	if err := writeUARTMessage(s.usock, ble.TypeBattery, baseSubType, uint16(present)); err != nil {
-		return fmt.Errorf("failed to send battery:%d presence: %v", slot, err)
+	if err := writeUARTMessage(s.GetUSock(), ble.TypeBattery, baseSubType, uint16(present)); err != nil {
+		return fmt.Errorf("failed to send battery:%d presence: %w", slot, err)
 	}
 	s.log.Infof("Set battery:%d present to %s", slot, presentDesc)
 	return nil
@@ -571,8 +570,8 @@ func (s *Service) UpdateBatteryCycleCount(slot int, cyclesStr string) error {
 		return nil
 	}
 	// Pass the relative subtype
-	if err := writeUARTMessage(s.usock, ble.TypeBattery, baseSubType, uint16(cycles)); err != nil {
-		return fmt.Errorf("failed to send battery:%d cycle-count: %v", slot, err)
+	if err := writeUARTMessage(s.GetUSock(), ble.TypeBattery, baseSubType, uint16(cycles)); err != nil {
+		return fmt.Errorf("failed to send battery:%d cycle-count: %w", slot, err)
 	}
 	s.log.Infof("Set battery:%d cycle-count to %d", slot, cycles)
 	return nil
@@ -594,8 +593,8 @@ func (s *Service) UpdateBatteryRemainingCharge(slot int, chargeStr string) error
 		return nil
 	}
 	// Pass the relative subtype
-	if err := writeUARTMessage(s.usock, ble.TypeBattery, baseSubType, uint16(charge)); err != nil {
-		return fmt.Errorf("failed to send battery:%d charge: %v", slot, err)
+	if err := writeUARTMessage(s.GetUSock(), ble.TypeBattery, baseSubType, uint16(charge)); err != nil {
+		return fmt.Errorf("failed to send battery:%d charge: %w", slot, err)
 	}
 	s.log.Infof("Set battery:%d charge to %d%%", slot, charge)
 	return nil
@@ -665,8 +664,8 @@ func (s *Service) UpdatePowerManagementState(stateStr string) error {
 	}
 
 	// Pass the relative subtype
-	if err := writeUARTMessage(s.usock, ble.TypePowerManagement, ble.TypePowerManagementState, stateInt); err != nil {
-		return fmt.Errorf("failed to send power management state: %v", err)
+	if err := writeUARTMessage(s.GetUSock(), ble.TypePowerManagement, ble.TypePowerManagementState, stateInt); err != nil {
+		return fmt.Errorf("failed to send power management state: %w", err)
 	}
 	s.log.Infof("Sent power management state: %d (from %s)", stateInt, stateStr)
 
@@ -675,13 +674,13 @@ func (s *Service) UpdatePowerManagementState(stateStr string) error {
 	// on again once we resume. See bluetooth-service#11.
 	switch stateStr {
 	case "suspending-imminent":
-		if err := writeUARTMessage(s.usock, ble.TypeDataStream, ble.TypeDataStreamEnable, 0); err != nil {
+		if err := writeUARTMessage(s.GetUSock(), ble.TypeDataStream, ble.TypeDataStreamEnable, 0); err != nil {
 			s.log.Warnf("failed to disable data stream before suspend: %v", err)
 		} else {
 			s.log.Infof("Disabled data stream before suspend")
 		}
 	case "running":
-		if err := writeUARTMessage(s.usock, ble.TypeDataStream, ble.TypeDataStreamEnable, 1); err != nil {
+		if err := writeUARTMessage(s.GetUSock(), ble.TypeDataStream, ble.TypeDataStreamEnable, 1); err != nil {
 			s.log.Warnf("failed to re-enable data stream on running: %v", err)
 		} else {
 			s.log.Infof("Enabled data stream on running")
@@ -690,7 +689,7 @@ func (s *Service) UpdatePowerManagementState(stateStr string) error {
 		// next 1 s tick. Without this, any cb-battery / aux / scooter-state
 		// change that happened while the stream was disabled stays latched
 		// in the firmware's old_* cache and never reaches Redis.
-		if err := writeUARTMessage(s.usock, ble.TypeDataStream, ble.TypeDataStreamSync, 1); err != nil {
+		if err := writeUARTMessage(s.GetUSock(), ble.TypeDataStream, ble.TypeDataStreamSync, 1); err != nil {
 			s.log.Warnf("failed to sync data stream on running: %v", err)
 		} else {
 			s.log.Infof("Synced data stream on running")
@@ -709,7 +708,7 @@ func (s *Service) UpdatePowerManagementState(stateStr string) error {
 	if stateStr == "hibernating-l2" {
 		level := uint16(ble.HibernationLevelL2)
 		// Pass the relative subtype
-		if err := writeUARTMessage(s.usock, ble.TypePowerManagement, ble.TypePowerManagementPowerRequest, level); err != nil {
+		if err := writeUARTMessage(s.GetUSock(), ble.TypePowerManagement, ble.TypePowerManagementPowerRequest, level); err != nil {
 			s.log.Warnf(" failed to send power management level L2 request: %v", err)
 		} else {
 			s.log.Infof("Sent power management hibernation level request: L2")
@@ -719,7 +718,7 @@ func (s *Service) UpdatePowerManagementState(stateStr string) error {
 	// Handle hibernation commands to nRF chip
 	if stateStr == "hibernating" || stateStr == "hibernating-manual" || stateStr == "hibernating-timer" || stateStr == "hibernating-for" {
 		// Disable data streaming before hibernation to prevent automatic wake-up
-		if err := writeUARTMessage(s.usock, ble.TypeDataStream, ble.TypeDataStreamEnable, 0); err != nil {
+		if err := writeUARTMessage(s.GetUSock(), ble.TypeDataStream, ble.TypeDataStreamEnable, 0); err != nil {
 			s.log.Warnf(" failed to disable data stream before hibernation: %v", err)
 		} else {
 			s.log.Infof("Disabled data stream before hibernation")
@@ -727,7 +726,7 @@ func (s *Service) UpdatePowerManagementState(stateStr string) error {
 
 		// Send hibernation level request (default to L1)
 		hibernationLevel := uint16(ble.HibernationLevelL1)
-		if err := writeUARTMessage(s.usock, ble.TypePowerManagement, ble.TypePowerManagementPowerRequest, hibernationLevel); err != nil {
+		if err := writeUARTMessage(s.GetUSock(), ble.TypePowerManagement, ble.TypePowerManagementPowerRequest, hibernationLevel); err != nil {
 			s.log.Warnf(" failed to send hibernation level request to nRF: %v", err)
 		} else {
 			s.log.Infof("Sent hibernation level request to nRF: L%d", hibernationLevel+1)
@@ -742,7 +741,7 @@ func (s *Service) UpdatePowerManagementState(stateStr string) error {
 // an ACK over UART (handled in handlePowerManagementMessage), which flips the
 // power-manager:wake-timer-armed hash field that pm-service waits on.
 func (s *Service) SetWakeTimer(seconds uint32) error {
-	if err := writeUARTMessage32(s.usock, ble.TypePowerManagement, ble.TypePowerManagementWakeTimerSet, int32(seconds)); err != nil {
+	if err := writeUARTMessage32(s.GetUSock(), ble.TypePowerManagement, ble.TypePowerManagementWakeTimerSet, int32(seconds)); err != nil {
 		return fmt.Errorf("failed to send wake-timer-set: %w", err)
 	}
 	s.log.Infof("Sent wake-timer-set to nRF: %d seconds", seconds)

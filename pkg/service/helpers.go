@@ -77,7 +77,7 @@ func vehicleStateToInt(state string) (int, bool) {
 // It now calculates the absolute subtype key.
 func writeUARTMessage(sock usockWriter, messageType ble.MessageType, subType ble.SubType, value uint16) error {
 	if sock == nil {
-		return fmt.Errorf("USOCK connection is not initialized")
+		return errLinkUnavailable
 	}
 	absoluteKey := uint16(messageType) + uint16(subType)
 	message := map[uint16]map[uint16]uint16{
@@ -103,7 +103,7 @@ func writeUARTMessage(sock usockWriter, messageType ble.MessageType, subType ble
 // This is needed for values that don't fit in uint16, like mileage.
 func writeUARTMessage32(sock usockWriter, messageType ble.MessageType, subType ble.SubType, value int32) error {
 	if sock == nil {
-		return fmt.Errorf("USOCK connection is not initialized")
+		return errLinkUnavailable
 	}
 	absoluteKey := uint16(messageType) + uint16(subType)
 	message := map[uint16]map[uint16]int32{
@@ -129,7 +129,7 @@ func writeUARTMessage32(sock usockWriter, messageType ble.MessageType, subType b
 // It now calculates the absolute subtype key.
 func writeUARTMessageString(sock usockWriter, messageType ble.MessageType, subType ble.SubType, value string) error {
 	if sock == nil {
-		return fmt.Errorf("USOCK connection is not initialized")
+		return errLinkUnavailable
 	}
 	absoluteKey := uint16(messageType) + uint16(subType)
 	message := map[uint16]map[uint16]string{

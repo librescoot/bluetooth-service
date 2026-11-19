@@ -19,7 +19,7 @@ func (s *Service) InitializeNRF52() error {
 	s.log.Infof("Starting nRF52 initialization...")
 
 	// 1. Disable data streaming
-	if err := writeUARTMessage(s.usock, ble.TypeDataStream, ble.TypeDataStreamEnable, 0); err != nil {
+	if err := writeUARTMessage(s.GetUSock(), ble.TypeDataStream, ble.TypeDataStreamEnable, 0); err != nil {
 		s.log.Warnf(" failed to disable data streaming: %v", err)
 		initErrors = append(initErrors, fmt.Errorf("disable data stream: %w", err))
 	} else {
@@ -45,7 +45,7 @@ func (s *Service) InitializeNRF52() error {
 	time.Sleep(50 * time.Millisecond)
 
 	// 4. Request BLE MAC address
-	if err := writeUARTMessage(s.usock, ble.TypeBLEParam, ble.TypeBLEParamMACAddress, 0); err != nil {
+	if err := writeUARTMessage(s.GetUSock(), ble.TypeBLEParam, ble.TypeBLEParamMACAddress, 0); err != nil {
 		s.log.Warnf(" failed to request BLE MAC address: %v", err)
 		initErrors = append(initErrors, fmt.Errorf("request BLE MAC address: %w", err))
 	} else {
@@ -54,7 +54,7 @@ func (s *Service) InitializeNRF52() error {
 	time.Sleep(50 * time.Millisecond)
 
 	// 5. Enable data streaming
-	if err := writeUARTMessage(s.usock, ble.TypeDataStream, ble.TypeDataStreamEnable, 1); err != nil {
+	if err := writeUARTMessage(s.GetUSock(), ble.TypeDataStream, ble.TypeDataStreamEnable, 1); err != nil {
 		s.log.Warnf(" failed to enable data streaming: %v", err)
 		initErrors = append(initErrors, fmt.Errorf("enable data stream: %w", err))
 	} else {
@@ -63,7 +63,7 @@ func (s *Service) InitializeNRF52() error {
 	time.Sleep(50 * time.Millisecond)
 
 	// 6. Sync data stream
-	if err := writeUARTMessage(s.usock, ble.TypeDataStream, ble.TypeDataStreamSync, 1); err != nil {
+	if err := writeUARTMessage(s.GetUSock(), ble.TypeDataStream, ble.TypeDataStreamSync, 1); err != nil {
 		s.log.Warnf(" Failed to sync data stream: %v", err)
 		initErrors = append(initErrors, fmt.Errorf("sync data stream: %w", err))
 	} else {
@@ -72,7 +72,7 @@ func (s *Service) InitializeNRF52() error {
 	time.Sleep(50 * time.Millisecond)
 
 	// 7. Start advertising (No Whitelist)
-	if err := writeUARTMessage(s.usock, ble.TypeBLECommand, ble.SubType(ble.BLECommandAdvRestartNoWhitelist), 0); err != nil {
+	if err := writeUARTMessage(s.GetUSock(), ble.TypeBLECommand, ble.SubType(ble.BLECommandAdvRestartNoWhitelist), 0); err != nil {
 		s.log.Warnf(" failed to send command to restart advertising without whitelist: %v", err)
 		initErrors = append(initErrors, fmt.Errorf("restart advertising: %w", err))
 	} else {
@@ -117,10 +117,11 @@ func (s *Service) ShutdownNRF52() {
 		}
 	}
 
-	if s.usock == nil {
+	sock := s.GetUSock()
+	if sock == nil {
 		return
 	}
-	if err := writeUARTMessage(s.usock, ble.TypeDataStream, ble.TypeDataStreamEnable, 0); err != nil {
+	if err := writeUARTMessage(sock, ble.TypeDataStream, ble.TypeDataStreamEnable, 0); err != nil {
 		s.log.Warnf("failed to disable data stream on shutdown: %v", err)
 	} else {
 		s.log.Infof("Disabled nRF data stream on shutdown")
@@ -137,8 +138,8 @@ func (s *Service) ShutdownNRF52() {
 
 // RestartAdvertisingWithoutWhitelist sends command to restart advertising without whitelist
 func (s *Service) RestartAdvertisingWithoutWhitelist() error {
-	if err := writeUARTMessage(s.usock, ble.TypeBLECommand, ble.SubType(ble.BLECommandAdvRestartNoWhitelist), 0); err != nil {
-		return fmt.Errorf("failed to send advertising restart command: %v", err)
+	if err := writeUARTMessage(s.GetUSock(), ble.TypeBLECommand, ble.SubType(ble.BLECommandAdvRestartNoWhitelist), 0); err != nil {
+		return fmt.Errorf("failed to send advertising restart command: %w", err)
 	}
 	s.log.Debugf("Sent command to restart advertising without whitelist")
 	return nil

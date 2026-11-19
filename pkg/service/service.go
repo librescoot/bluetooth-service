@@ -221,7 +221,9 @@ func (s *Service) reopenUSockAtBaud(baud int) error {
 	device := s.serialDevice
 	handler := s.usockHandler
 	errHandler := s.usockErrHandler
+	// Don't publish a closing descriptor to writers during the baud change.
 	old := s.usock
+	s.usock = nil
 	s.mu.Unlock()
 
 	if old != nil {
@@ -252,10 +254,10 @@ func (s *Service) SetUSock(sock *usock.USOCK) {
 	s.usock = sock
 }
 
-// GetUSock returns the current USOCK connection for sending messages.
+// GetUSock returns the current USOCK connection, or nil while it is closed or being reopened.
 func (s *Service) GetUSock() usockWriter {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.usock
 }
 
@@ -303,9 +305,11 @@ func (s *Service) GetFirmwareUpdater() firmwareUpdaterInterface {
 func (s *Service) CloseUSock() error {
 	s.invalidateNRFTimeRequest()
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.usock != nil {
-		return s.usock.Close()
+	sock := s.usock
+	s.usock = nil
+	s.mu.Unlock()
+	if sock != nil {
+		return sock.Close()
 	}
 	return nil
 }
@@ -526,11 +530,18 @@ func (s *Service) StopSubscriptions() {
 	s.log.Infof("Redis subscriptions stopped")
 }
 
-// RestartSubscriptions stops existing subscriptions and starts new ones
+// RestartSubscriptions stops existing subscriptions and starts a fresh state sync.
 func (s *Service) RestartSubscriptions() {
 	s.restartMu.Lock()
 	defer s.restartMu.Unlock()
 	s.StopSubscriptions()
+
+	// Wait for the old watchers before clearing their cached values.
+	s.mu.Lock()
+	s.lastMileage = ""
+	s.lastVehicleState = ""
+	s.mu.Unlock()
+
 	s.SubscribeToRedisChannels()
 }
 
@@ -545,12 +556,6 @@ func (s *Service) RestartSubscriptions() {
 // subscriptions — StartWithSync re-emits every field.
 func (s *Service) resyncStateToNRF(reason string) {
 	s.log.Infof("Re-pushing state to nRF after %s", reason)
-
-	s.mu.Lock()
-	s.lastMileage = ""
-	s.lastVehicleState = ""
-	s.mu.Unlock()
-
 	s.RestartSubscriptions()
 }
 
@@ -574,12 +579,6 @@ func (s *Service) resyncAfterNRFReset() {
 	s.resyncMu.Unlock()
 
 	s.log.Infof("nRF reset: resyncing state to firmware")
-
-	s.mu.Lock()
-	s.lastMileage = ""
-	s.lastVehicleState = ""
-	s.mu.Unlock()
-
 	s.RestartSubscriptions()
 
 	if err := s.InitializeNRF52(); err != nil {

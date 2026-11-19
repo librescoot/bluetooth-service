@@ -37,7 +37,7 @@ func newHostSessionNonce() int32 {
 
 func writeHostSessionRequest(sock usockWriter, nonce int32) error {
 	if sock == nil {
-		return fmt.Errorf("USOCK connection is not initialized")
+		return errLinkUnavailable
 	}
 
 	messageType := ble.TypeBLEVersion

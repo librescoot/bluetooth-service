@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"os"
 	"sync"
 	"time"
 
@@ -178,6 +179,12 @@ func (u *USOCK) WriteWithFrameID(frameID byte, data []byte) error {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 
+	select {
+	case <-u.stopChan:
+		return fmt.Errorf("USOCK write: %w", os.ErrClosed)
+	default:
+	}
+
 	if len(data) > MaxPayloadLength {
 		return fmt.Errorf("payload size exceeds maximum length of %d bytes", MaxPayloadLength)
 	}
@@ -221,7 +228,7 @@ func (u *USOCK) WriteWithFrameID(frameID byte, data []byte) error {
 	}
 
 	if _, err := u.port.Write(completeFrame); err != nil {
-		return fmt.Errorf("failed to write frame: %v", err)
+		return fmt.Errorf("failed to write frame: %w", err)
 	}
 
 	return nil

@@ -533,7 +533,7 @@ func (s *Service) handleBLEDebugMessage(msgType ble.MessageType, absSubTypeKey u
 					s.log.Errorf("Failed to write/publish nrf-reset-reason to Redis: %v", err)
 				}
 				// Send ACK back to nRF
-				if err := writeUARTMessage(s.usock, ble.TypeBLEDebug, ble.TypeBLEDebugResetAck, 0); err != nil {
+				if err := writeUARTMessage(s.GetUSock(), ble.TypeBLEDebug, ble.TypeBLEDebugResetAck, 0); err != nil {
 					s.log.Errorf("Failed to send Reset ACK to nRF: %v", err)
 				} else {
 					s.log.Debugf("Sent Reset ACK to nRF")

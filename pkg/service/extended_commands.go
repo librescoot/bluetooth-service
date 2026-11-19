@@ -112,7 +112,7 @@ func (s *Service) waitExtendedResponseInterval() {
 }
 
 func (s *Service) writeExtendedResponse(response string) {
-	if err := writeUARTMessageString(s.usock, ble.TypeExtended, ble.TypeExtendedResponse, response); err != nil {
+	if err := writeUARTMessageString(s.GetUSock(), ble.TypeExtended, ble.TypeExtendedResponse, response); err != nil {
 		s.log.Errorf("Failed to send extended response: %v", err)
 	} else {
 		s.log.Infof("Sent extended response category: %s", extendedMessageCategory(response))
@@ -874,7 +874,7 @@ func (s *Service) handleLTCCommand(cmd string) {
 	}
 
 	s.ltcBLEPending = true
-	if err := writeUARTMessage(s.usock, ble.TypeLTCControl, subType, value); err != nil {
+	if err := writeUARTMessage(s.GetUSock(), ble.TypeLTCControl, subType, value); err != nil {
 		s.ltcBLEPending = false
 		s.log.Errorf("Failed to send LTC command to nRF: %v", err)
 		s.sendExtendedResponse("ltc:error:send failed")
@@ -961,7 +961,7 @@ func (s *Service) handleBLEForget() {
 
 	go func() {
 		time.Sleep(bleForgetAckGrace)
-		if err := writeUARTMessage(s.usock, ble.TypeBLECommand, ble.SubType(ble.BLECommandDeleteBond), 0); err != nil {
+		if err := writeUARTMessage(s.GetUSock(), ble.TypeBLECommand, ble.SubType(ble.BLECommandDeleteBond), 0); err != nil {
 			s.log.Errorf("Failed to send delete-bond to nRF: %v", err)
 			return
 		}
